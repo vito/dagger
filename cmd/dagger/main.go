@@ -26,6 +26,7 @@ func init() {
 	rootCmd.AddCommand(
 		doCmd,
 		generateCmd,
+		clientGenCmd,
 		devCmd,
 		versionCmd,
 	)
