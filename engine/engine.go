@@ -39,6 +39,7 @@ type Config struct {
 	ConfigPath string
 	// If true, just load extension metadata rather than compiling and stitching them in
 	SkipInstall bool
+	Progress    chan *bkclient.SolveStatus
 }
 
 type Context struct {
@@ -126,7 +127,13 @@ func Start(ctx context.Context, startOpts *Config, fn StartCallback) error {
 	startOpts.LocalDirs[workdirID] = startOpts.Workdir
 	solveOpts.LocalDirs = startOpts.LocalDirs
 
-	ch := make(chan *bkclient.SolveStatus)
+	var ch chan *bkclient.SolveStatus
+	if startOpts.Progress != nil {
+		ch = startOpts.Progress
+	} else {
+		ch = make(chan *bkclient.SolveStatus)
+	}
+
 	eg, ctx := errgroup.WithContext(ctx)
 	eg.Go(func() error {
 		var err error
@@ -194,13 +201,15 @@ func Start(ctx context.Context, startOpts *Config, fn StartCallback) error {
 		}, ch)
 		return err
 	})
-	eg.Go(func() error {
-		warn, err := progressui.DisplaySolveStatus(context.TODO(), "", nil, os.Stderr, ch)
-		for _, w := range warn {
-			fmt.Fprintf(os.Stderr, "=> %s\n", w.Short)
-		}
-		return err
-	})
+	if startOpts.Progress == nil {
+		eg.Go(func() error {
+			warn, err := progressui.DisplaySolveStatus(context.TODO(), "", nil, os.Stderr, ch)
+			for _, w := range warn {
+				fmt.Fprintf(os.Stderr, "=> %s\n", w.Short)
+			}
+			return err
+		})
+	}
 	if err := eg.Wait(); err != nil {
 		return err
 	}
