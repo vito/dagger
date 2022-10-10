@@ -22,7 +22,7 @@ require (
 	github.com/rs/zerolog v1.28.0
 	github.com/spf13/cobra v1.5.0
 	github.com/stretchr/testify v1.8.0
-	github.com/tonistiigi/fsutil v0.0.0-20220930225714-4638ad635be5
+	github.com/tonistiigi/fsutil v0.0.0-20220115021204-b19f7f9cb274
 	github.com/vektah/gqlparser/v2 v2.5.1
 	go.opentelemetry.io/otel v1.10.0
 	go.opentelemetry.io/otel/exporters/jaeger v1.4.1
@@ -80,7 +80,6 @@ require (
 	github.com/mattn/go-isatty v0.0.14 // indirect
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
 	github.com/moby/locker v1.0.1 // indirect
-	github.com/moby/patternmatcher v0.5.0 // indirect
 	github.com/moby/sys/signal v0.7.0 // indirect
 	github.com/morikuni/aec v1.0.0 // indirect
 	github.com/oklog/ulid v1.3.1 // indirect
@@ -113,5 +112,3 @@ require (
 )
 
 replace github.com/docker/docker => github.com/docker/docker v20.10.3-0.20220414164044-61404de7df1a+incompatible
-
-replace github.com/moby/buildkit => github.com/moby/buildkit v0.10.1-0.20221007224755-f394afc591a5
