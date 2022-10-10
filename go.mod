@@ -15,7 +15,7 @@ require (
 	github.com/graphql-go/handler v0.2.3
 	github.com/iancoleman/strcase v0.2.0
 	github.com/mitchellh/go-homedir v1.1.0
-	github.com/moby/buildkit v0.10.1-0.20221007224755-f394afc591a5
+	github.com/moby/buildkit v0.10.4
 	github.com/netlify/open-api/v2 v2.12.0
 	github.com/opencontainers/image-spec v1.0.3-0.20220303224323-02efb9a75ee1
 	github.com/pkg/errors v0.9.1
@@ -112,4 +112,6 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace github.com/docker/docker => github.com/docker/docker v20.10.3-0.20221006005007-99aa9bb766b5+incompatible
+replace github.com/docker/docker => github.com/docker/docker v20.10.3-0.20220414164044-61404de7df1a+incompatible
+
+replace github.com/moby/buildkit => github.com/moby/buildkit v0.10.1-0.20221007224755-f394afc591a5
