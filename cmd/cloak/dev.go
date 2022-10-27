@@ -20,8 +20,9 @@ var devCmd = &cobra.Command{
 
 func Dev(cmd *cobra.Command, args []string) {
 	startOpts := &engine.Config{
-		Workdir:    workdir,
-		ConfigPath: configPath,
+		Workdir:       workdir,
+		ConfigPath:    configPath,
+		DisableHostRW: disableHostRW,
 		// TODO(dolanor): add option to configure it from flag?
 		LogOutput: io.Discard,
 	}
