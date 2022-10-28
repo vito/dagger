@@ -11,8 +11,8 @@ import (
 	"path"
 	"runtime"
 
-	"dagger.io/dagger"
 	"github.com/dagger/dagger/codegen/generator"
+	"github.com/dagger/dagger/internal/sdk/dagger"
 	"github.com/google/go-cmp/cmp"
 	"github.com/magefile/mage/mg" // mg contains helpful utility functions, like Deps
 )

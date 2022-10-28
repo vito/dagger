@@ -3,7 +3,8 @@ package testutil
 import (
 	"context"
 
-	"dagger.io/dagger"
+	"github.com/dagger/dagger/engine"
+	"github.com/dagger/dagger/internal/sdk/dagger"
 )
 
 type QueryOptions struct {
@@ -11,7 +12,7 @@ type QueryOptions struct {
 	Operation string
 }
 
-func Query(query string, res any, opts *QueryOptions, clientOpts ...dagger.ClientOpt) error {
+func Query(query string, res any, opts *QueryOptions, optionalCfg ...*engine.Config) error {
 	ctx := context.Background()
 
 	if opts == nil {
@@ -21,7 +22,7 @@ func Query(query string, res any, opts *QueryOptions, clientOpts ...dagger.Clien
 		opts.Variables = make(map[string]any)
 	}
 
-	c, err := dagger.Connect(ctx, clientOpts...)
+	c, err := dagger.Connect(ctx, optionalCfg...)
 	if err != nil {
 		return err
 	}

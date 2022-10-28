@@ -6,7 +6,8 @@ import (
 	"path"
 	"testing"
 
-	"dagger.io/dagger"
+	"github.com/dagger/dagger/engine"
+	"github.com/dagger/dagger/internal/sdk/dagger"
 	"github.com/stretchr/testify/require"
 )
 
@@ -18,7 +19,9 @@ func TestHostWorkdir(t *testing.T) {
 	require.NoError(t, err)
 
 	ctx := context.Background()
-	c, err := dagger.Connect(ctx, dagger.WithWorkdir(dir))
+	c, err := dagger.Connect(ctx, &engine.Config{
+		Workdir: dir,
+	})
 	require.NoError(t, err)
 	defer c.Close()
 
@@ -58,7 +61,9 @@ func TestHostDirectoryRelative(t *testing.T) {
 	require.NoError(t, os.WriteFile(path.Join(dir, "some-dir", "sub-file"), []byte("goodbye"), 0600))
 
 	ctx := context.Background()
-	c, err := dagger.Connect(ctx, dagger.WithWorkdir(dir))
+	c, err := dagger.Connect(ctx, &engine.Config{
+		Workdir: dir,
+	})
 	require.NoError(t, err)
 	defer c.Close()
 

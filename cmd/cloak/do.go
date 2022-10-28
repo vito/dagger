@@ -8,7 +8,8 @@ import (
 	"os"
 	"strings"
 
-	"dagger.io/dagger"
+	"github.com/dagger/dagger/engine"
+	"github.com/dagger/dagger/internal/sdk/dagger"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
@@ -58,12 +59,10 @@ func Do(cmd *cobra.Command, args []string) {
 }
 
 func doQuery(ctx context.Context, query, op string, vars map[string]string) ([]byte, error) {
-	opts := []dagger.ClientOpt{
-		dagger.WithWorkdir(workdir),
-		dagger.WithConfigPath(configPath),
-	}
-
-	c, err := dagger.Connect(ctx, opts...)
+	c, err := dagger.Connect(ctx, &engine.Config{
+		Workdir:    workdir,
+		ConfigPath: configPath,
+	})
 	if err != nil {
 		return nil, err
 	}

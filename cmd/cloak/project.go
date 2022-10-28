@@ -7,8 +7,9 @@ import (
 	"io"
 	"os"
 
-	"dagger.io/dagger"
 	"github.com/dagger/dagger/core/schema"
+	"github.com/dagger/dagger/engine"
+	"github.com/dagger/dagger/internal/sdk/dagger"
 	"github.com/dagger/dagger/project"
 	"github.com/spf13/cobra"
 )
@@ -89,11 +90,11 @@ var addGitCmd = &cobra.Command{
 			return err
 		}
 
-		cl, err := dagger.Connect(ctx,
-			dagger.WithWorkdir(workdir),
-			dagger.WithConfigPath(configPath),
-			dagger.WithNoExtensions(),
-		)
+		cl, err := dagger.Connect(ctx, &engine.Config{
+			Workdir:      workdir,
+			ConfigPath:   configPath,
+			NoExtensions: true,
+		})
 		if err != nil {
 			return err
 		}

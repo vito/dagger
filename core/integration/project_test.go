@@ -2,9 +2,11 @@ package core
 
 import (
 	"context"
+	"os"
 	"testing"
 
-	"dagger.io/dagger"
+	"github.com/dagger/dagger/engine"
+	"github.com/dagger/dagger/internal/sdk/dagger"
 	"github.com/stretchr/testify/require"
 )
 
@@ -12,8 +14,11 @@ func TestExtensionMount(t *testing.T) {
 	ctx := context.Background()
 	c, err := dagger.Connect(
 		ctx,
-		dagger.WithWorkdir("../../"),
-		dagger.WithConfigPath("testdata/extension/dagger.json"),
+		&engine.Config{
+			Workdir:    "testdata/extension",
+			ConfigPath: "testdata/extension/dagger.json",
+			LogOutput:  os.Stderr,
+		},
 	)
 	require.NoError(t, err)
 	defer c.Close()
@@ -78,8 +83,11 @@ func TestCodeToSchema(t *testing.T) {
 	ctx := context.Background()
 	c, err := dagger.Connect(
 		ctx,
-		dagger.WithWorkdir("../../"),
-		dagger.WithConfigPath("testdata/codetoschema/dagger.json"),
+		&engine.Config{
+			Workdir:    "testdata/codetoschema",
+			ConfigPath: "testdata/codetoschema/dagger.json",
+			LogOutput:  os.Stderr,
+		},
 	)
 	require.NoError(t, err)
 	defer c.Close()

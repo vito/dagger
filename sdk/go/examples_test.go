@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"dagger.io/dagger"
+	"github.com/dagger/dagger/internal/sdk/dagger"
 )
 
 func ExampleContainer() {

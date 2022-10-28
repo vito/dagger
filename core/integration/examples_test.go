@@ -6,7 +6,8 @@ import (
 	"os"
 	"testing"
 
-	"dagger.io/dagger"
+	"github.com/dagger/dagger/engine"
+	"github.com/dagger/dagger/internal/sdk/dagger"
 	"github.com/stretchr/testify/require"
 )
 
@@ -14,9 +15,11 @@ func TestExtensionAlpine(t *testing.T) {
 	ctx := context.Background()
 	c, err := dagger.Connect(
 		ctx,
-		dagger.WithWorkdir("../../"),
-		dagger.WithConfigPath("../../examples/alpine/dagger.json"),
-		dagger.WithLogOutput(os.Stderr),
+		&engine.Config{
+			Workdir:    "../../examples/alpine",
+			ConfigPath: "../../examples/alpine/dagger.json",
+			LogOutput:  os.Stderr,
+		},
 	)
 	require.NoError(t, err)
 	defer c.Close()
@@ -62,8 +65,11 @@ func TestExtensionNetlify(t *testing.T) {
 			ctx := context.Background()
 			c, err := dagger.Connect(
 				ctx,
-				dagger.WithWorkdir("../../"),
-				dagger.WithConfigPath(fmt.Sprintf("../../examples/netlify/%s/dagger.json", lang)),
+				&engine.Config{
+					Workdir:    fmt.Sprintf("../../examples/netlify/%s", lang),
+					ConfigPath: fmt.Sprintf("../../examples/netlify/%s/dagger.json", lang),
+					LogOutput:  os.Stderr,
+				},
 			)
 			require.NoError(t, err)
 			defer c.Close()
@@ -119,8 +125,11 @@ func TestExtensionYarn(t *testing.T) {
 	ctx := context.Background()
 	c, err := dagger.Connect(
 		ctx,
-		dagger.WithWorkdir("../../"),
-		dagger.WithConfigPath("../../examples/yarn/dagger.json"),
+		&engine.Config{
+			Workdir:    "../../",
+			ConfigPath: "../../examples/yarn/dagger.json",
+			LogOutput:  os.Stderr,
+		},
 	)
 	require.NoError(t, err)
 	defer c.Close()

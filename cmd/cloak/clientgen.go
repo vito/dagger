@@ -12,8 +12,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"dagger.io/dagger"
 	"github.com/dagger/dagger/codegen/generator"
+	"github.com/dagger/dagger/engine"
+	"github.com/dagger/dagger/internal/sdk/dagger"
 )
 
 var clientGenCmd = &cobra.Command{
@@ -29,11 +30,11 @@ func init() {
 func ClientGen(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
 
-	c, err := dagger.Connect(ctx,
-		dagger.WithWorkdir(workdir),
-		dagger.WithConfigPath(configPath),
-		dagger.WithNoExtensions(),
-	)
+	c, err := dagger.Connect(ctx, &engine.Config{
+		Workdir:      workdir,
+		ConfigPath:   configPath,
+		NoExtensions: true,
+	})
 	if err != nil {
 		return err
 	}
