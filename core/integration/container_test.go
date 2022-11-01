@@ -1,11 +1,10 @@
 package core
 
 import (
-	"archive/tar"
 	"context"
-	"errors"
-	"io"
+	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -2493,7 +2492,16 @@ func TestContainerExport(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, ok)
 
-		checkOCI(t, imagePath)
+		log.Println("LOADING", imagePath, tarEntries(t, imagePath))
+		load := exec.Command("docker", "load", "-i", imagePath)
+		load.Stdout = os.Stdout
+		load.Stderr = os.Stderr
+		require.NoError(t, load.Run())
+
+		entries := tarEntries(t, imagePath)
+		require.Contains(t, entries, "oci-layout")
+		require.Contains(t, entries, "index.json")
+		require.Contains(t, entries, "manifest.json")
 	})
 
 	t.Run("to workdir", func(t *testing.T) {
@@ -2501,7 +2509,10 @@ func TestContainerExport(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, ok)
 
-		checkOCI(t, filepath.Join(wd, "image.tar"))
+		entries := tarEntries(t, filepath.Join(wd, "image.tar"))
+		require.Contains(t, entries, "oci-layout")
+		require.Contains(t, entries, "index.json")
+		require.Contains(t, entries, "manifest.json")
 	})
 
 	t.Run("to outer dir", func(t *testing.T) {
@@ -2511,25 +2522,41 @@ func TestContainerExport(t *testing.T) {
 	})
 }
 
-func checkOCI(t *testing.T, path string) {
-	f, err := os.Open(path)
+func TestContainerMultiPlatformExport(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	c, err := dagger.Connect(ctx, dagger.WithLogOutput(os.Stdout))
 	require.NoError(t, err)
+	defer c.Close()
 
-	entries := []string{}
-	tr := tar.NewReader(f)
-	for {
-		hdr, err := tr.Next()
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				break
-			}
-			require.NoError(t, err)
-		}
+	startRegistry(ctx, c, t)
 
-		entries = append(entries, hdr.Name)
+	variants := make([]dagger.ContainerID, 0, len(platformToUname))
+	for platform := range platformToUname {
+		ctr := c.Container(dagger.ContainerOpts{Platform: platform}).
+			From("alpine:3.16.2").
+			Exec(dagger.ContainerExecOpts{
+				Args: []string{"uname", "-m"},
+			})
+
+		id, err := ctr.ID(ctx)
+		require.NoError(t, err)
+		variants = append(variants, id)
 	}
 
+	dest := filepath.Join(t.TempDir(), "image.tar")
+
+	ok, err := c.Container().Export(ctx, dest, dagger.ContainerExportOpts{
+		PlatformVariants: variants,
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	entries := tarEntries(t, dest)
 	require.Contains(t, entries, "oci-layout")
-	require.Contains(t, entries, "manifest.json")
 	require.Contains(t, entries, "index.json")
+
+	// multi-platform images don't contain a manifest.json
+	require.NotContains(t, entries, "manifest.json")
 }
