@@ -6,7 +6,7 @@ go 1.18
 
 require (
 	dagger.io/dagger v0.3.0-alpha.4
-	github.com/containerd/containerd v1.6.9
+	github.com/containerd/containerd v1.6.10
 	github.com/dagger/graphql v0.0.0-20221102000338-24d5e47d3b72
 	github.com/dagger/graphql-go-tools v0.0.0-20221102001222-e68b44170936
 	github.com/docker/distribution v2.8.1+incompatible
@@ -14,7 +14,6 @@ require (
 	github.com/gofrs/flock v0.8.1
 	github.com/gogo/protobuf v1.3.2
 	github.com/google/go-cmp v0.5.9
-	github.com/graphql-go/handler v0.2.3
 	github.com/magefile/mage v1.14.0
 	github.com/mitchellh/go-homedir v1.1.0
 	github.com/moby/buildkit v0.10.5
@@ -71,7 +70,6 @@ require (
 	github.com/gogo/googleapis v1.4.1 // indirect
 	github.com/golang/protobuf v1.5.2 // indirect
 	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510 // indirect
-	github.com/graphql-go/graphql v0.8.0 // indirect
 	github.com/grpc-ecosystem/go-grpc-middleware v1.3.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.11.2 // indirect
 	github.com/iancoleman/strcase v0.2.0 // indirect
