@@ -655,6 +655,16 @@ class Directory(Type):
         _ctx = self._select("loadProject", _args)
         return Project(_ctx)
 
+    def stat(self, path: str) -> "FileInfo":
+        """Retrieve information for a path in the directory. Use '.' to stat the
+        directory itself.
+        """
+        _args = [
+            Arg("path", path),
+        ]
+        _ctx = self._select("stat", _args)
+        return FileInfo(_ctx)
+
     def with_directory(
         self,
         path: str,
@@ -809,6 +819,116 @@ class File(Type):
         """
         _args: list[Arg] = []
         _ctx = self._select("size", _args)
+        return _ctx.execute_sync(int)
+
+
+class FileInfo(Type):
+    def dev_major(self) -> int:
+        """Returns
+        -------
+        int
+            The `Int` scalar type represents non-fractional signed whole
+            numeric values. Int can represent values between -(2^31) and 2^31
+            - 1.
+        """
+        _args: list[Arg] = []
+        _ctx = self._select("devMajor", _args)
+        return _ctx.execute_sync(int)
+
+    def dev_minor(self) -> int:
+        """Returns
+        -------
+        int
+            The `Int` scalar type represents non-fractional signed whole
+            numeric values. Int can represent values between -(2^31) and 2^31
+            - 1.
+        """
+        _args: list[Arg] = []
+        _ctx = self._select("devMinor", _args)
+        return _ctx.execute_sync(int)
+
+    def gid(self) -> int:
+        """Returns
+        -------
+        int
+            The `Int` scalar type represents non-fractional signed whole
+            numeric values. Int can represent values between -(2^31) and 2^31
+            - 1.
+        """
+        _args: list[Arg] = []
+        _ctx = self._select("gid", _args)
+        return _ctx.execute_sync(int)
+
+    def link(self) -> str | None:
+        """Returns
+        -------
+        str | None
+            The `String` scalar type represents textual data, represented as
+            UTF-8 character sequences. The String type is most often used by
+            GraphQL to represent free-form human-readable text.
+        """
+        _args: list[Arg] = []
+        _ctx = self._select("link", _args)
+        return _ctx.execute_sync(str | None)
+
+    def mod_time(self) -> int:
+        """Returns
+        -------
+        int
+            The `Int` scalar type represents non-fractional signed whole
+            numeric values. Int can represent values between -(2^31) and 2^31
+            - 1.
+        """
+        _args: list[Arg] = []
+        _ctx = self._select("modTime", _args)
+        return _ctx.execute_sync(int)
+
+    def mode(self) -> int:
+        """Returns
+        -------
+        int
+            The `Int` scalar type represents non-fractional signed whole
+            numeric values. Int can represent values between -(2^31) and 2^31
+            - 1.
+        """
+        _args: list[Arg] = []
+        _ctx = self._select("mode", _args)
+        return _ctx.execute_sync(int)
+
+    def path(self) -> str:
+        """Returns
+        -------
+        str
+            The `String` scalar type represents textual data, represented as
+            UTF-8 character sequences. The String type is most often used by
+            GraphQL to represent free-form human-readable text.
+        """
+        _args: list[Arg] = []
+        _ctx = self._select("path", _args)
+        return _ctx.execute_sync(str)
+
+    def size(self) -> int:
+        """Returns
+        -------
+        int
+            The `Int` scalar type represents non-fractional signed whole
+            numeric values. Int can represent values between -(2^31) and 2^31
+            - 1.
+        """
+        _args: list[Arg] = []
+        _ctx = self._select("size", _args)
+        return _ctx.execute_sync(int)
+
+    def uid(self) -> int:
+        """Returns
+        -------
+        int
+            The `Int` scalar type represents non-fractional signed whole
+            numeric values. Int can represent values between -(2^31) and 2^31
+            - 1.
+        """
+        _args: list[Arg] = []
+        _ctx = self._select("uid", _args)
         return _ctx.execute_sync(int)
 
 
@@ -1208,6 +1328,7 @@ __all__ = [
     "Directory",
     "EnvVariable",
     "File",
+    "FileInfo",
     "GitRef",
     "GitRepository",
     "Host",

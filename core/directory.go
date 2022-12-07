@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"fmt"
+	"os"
 	"path"
 	"reflect"
 	"strings"
@@ -12,12 +13,27 @@ import (
 	bkgw "github.com/moby/buildkit/frontend/gateway/client"
 	"github.com/moby/buildkit/solver/pb"
 	specs "github.com/opencontainers/image-spec/specs-go/v1"
-	fstypes "github.com/tonistiigi/fsutil/types"
 )
 
 // Directory is a content-addressed directory.
 type Directory struct {
 	ID DirectoryID `json:"id"`
+}
+
+type FileInfo struct {
+	Path     string
+	Mode     int
+	Uid      int
+	Gid      int
+	Size     int
+	ModTime  int
+	Link     string
+	DevMajor int
+	DevMinor int
+}
+
+func (s FileInfo) IsDir() bool {
+	return os.FileMode(s.Mode).IsDir()
 }
 
 // DirectoryID is an opaque value representing a content-addressed directory.
@@ -94,7 +110,7 @@ func NewDirectory(ctx context.Context, st llb.State, cwd string, platform specs.
 	return payload.ToDirectory()
 }
 
-func (dir *Directory) Stat(ctx context.Context, gw bkgw.Client, src string) (*fstypes.Stat, error) {
+func (dir *Directory) Stat(ctx context.Context, gw bkgw.Client, src string) (*FileInfo, error) {
 	payload, err := dir.ID.Decode()
 	if err != nil {
 		return nil, err
@@ -106,7 +122,7 @@ func (dir *Directory) Stat(ctx context.Context, gw bkgw.Client, src string) (*fs
 	if payload.LLB == nil {
 		if path.Clean(src) == "." {
 			// fake out a reasonable response
-			return &fstypes.Stat{Path: src}, nil
+			return &FileInfo{Path: src}, nil
 		}
 
 		return nil, fmt.Errorf("%s: no such file or directory", src)
@@ -131,7 +147,17 @@ func (dir *Directory) Stat(ctx context.Context, gw bkgw.Client, src string) (*fs
 		return nil, err
 	}
 
-	return stat, nil
+	return &FileInfo{
+		Path:     stat.Path,
+		Mode:     int(stat.Mode),
+		Uid:      int(stat.Uid),
+		Gid:      int(stat.Gid),
+		Size:     int(stat.Size_),
+		ModTime:  int(stat.ModTime),
+		Link:     stat.Linkname,
+		DevMajor: int(stat.Devmajor),
+		DevMinor: int(stat.Devminor),
+	}, nil
 }
 
 func (dir *Directory) Entries(ctx context.Context, gw bkgw.Client, src string) ([]string, error) {

@@ -43,6 +43,7 @@ func (s *directorySchema) Resolvers() router.Resolvers {
 			"diff":             router.ToResolver(s.diff),
 			"export":           router.ToResolver(s.export),
 			"dockerBuild":      router.ToResolver(s.dockerBuild),
+			"stat":             router.ToResolver(s.stat),
 		},
 	}
 }
@@ -174,4 +175,12 @@ func (s *directorySchema) dockerBuild(ctx *router.Context, parent *core.Director
 		return ctr, err
 	}
 	return ctr.Build(ctx, s.gw, parent, args.Dockerfile)
+}
+
+type statArgs struct {
+	Path string
+}
+
+func (s *directorySchema) stat(ctx *router.Context, parent *core.Directory, args statArgs) (*core.FileInfo, error) {
+	return parent.Stat(ctx, s.gw, args.Path)
 }

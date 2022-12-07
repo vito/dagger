@@ -51,4 +51,19 @@ type Directory {
 
   "Build a new Docker container from this directory"
   dockerBuild(dockerfile: String, platform: Platform): Container!
+
+  "Retrieve information for a path in the directory. Use '.' to stat the directory itself."
+  stat(path: String!): FileInfo!
+}
+
+type FileInfo {
+  path: String!
+  mode: Int!
+  uid: Int!
+  gid: Int!
+  size: Int!
+  modTime: Int!
+  link: String
+  devMajor: Int!
+  devMinor: Int!
 }

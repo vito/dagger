@@ -848,6 +848,17 @@ func (r *Directory) LoadProject(configPath string) *Project {
 	}
 }
 
+// Retrieve information for a path in the directory. Use '.' to stat the directory itself.
+func (r *Directory) Stat(path string) *FileInfo {
+	q := r.q.Select("stat")
+	q = q.Arg("path", path)
+
+	return &FileInfo{
+		q: q,
+		c: r.c,
+	}
+}
+
 // DirectoryWithDirectoryOpts contains options for Directory.WithDirectory
 type DirectoryWithDirectoryOpts struct {
 	Exclude []string
@@ -1022,6 +1033,83 @@ func (r *File) Secret() *Secret {
 // The size of the file, in bytes
 func (r *File) Size(ctx context.Context) (int, error) {
 	q := r.q.Select("size")
+
+	var response int
+	q = q.Bind(&response)
+	return response, q.Execute(ctx, r.c)
+}
+
+type FileInfo struct {
+	q *querybuilder.Selection
+	c graphql.Client
+}
+
+func (r *FileInfo) DevMajor(ctx context.Context) (int, error) {
+	q := r.q.Select("devMajor")
+
+	var response int
+	q = q.Bind(&response)
+	return response, q.Execute(ctx, r.c)
+}
+
+func (r *FileInfo) DevMinor(ctx context.Context) (int, error) {
+	q := r.q.Select("devMinor")
+
+	var response int
+	q = q.Bind(&response)
+	return response, q.Execute(ctx, r.c)
+}
+
+func (r *FileInfo) Gid(ctx context.Context) (int, error) {
+	q := r.q.Select("gid")
+
+	var response int
+	q = q.Bind(&response)
+	return response, q.Execute(ctx, r.c)
+}
+
+func (r *FileInfo) Link(ctx context.Context) (string, error) {
+	q := r.q.Select("link")
+
+	var response string
+	q = q.Bind(&response)
+	return response, q.Execute(ctx, r.c)
+}
+
+func (r *FileInfo) ModTime(ctx context.Context) (int, error) {
+	q := r.q.Select("modTime")
+
+	var response int
+	q = q.Bind(&response)
+	return response, q.Execute(ctx, r.c)
+}
+
+func (r *FileInfo) Mode(ctx context.Context) (int, error) {
+	q := r.q.Select("mode")
+
+	var response int
+	q = q.Bind(&response)
+	return response, q.Execute(ctx, r.c)
+}
+
+func (r *FileInfo) Path(ctx context.Context) (string, error) {
+	q := r.q.Select("path")
+
+	var response string
+	q = q.Bind(&response)
+	return response, q.Execute(ctx, r.c)
+}
+
+func (r *FileInfo) Size(ctx context.Context) (int, error) {
+	q := r.q.Select("size")
+
+	var response int
+	q = q.Bind(&response)
+	return response, q.Execute(ctx, r.c)
+}
+
+func (r *FileInfo) UID(ctx context.Context) (int, error) {
+	q := r.q.Select("uid")
 
 	var response int
 	q = q.Bind(&response)

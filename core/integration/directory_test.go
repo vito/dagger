@@ -318,6 +318,19 @@ func TestDirectoryWithFile(t *testing.T) {
 	require.Equal(t, "some-content", content)
 }
 
+func TestDirectoryStat(t *testing.T) {
+	ctx := context.Background()
+	c, err := dagger.Connect(ctx)
+	require.NoError(t, err)
+	defer c.Close()
+
+	info, err := c.Directory().
+		WithNewFile("some-file", "some-content").
+		Stat(ctx, "some-file")
+	require.NoError(t, err)
+	require.Equal(t, "some-file", info.Path)
+}
+
 func TestDirectoryWithoutDirectoryWithoutFile(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
