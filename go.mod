@@ -50,7 +50,7 @@ require (
 	golang.org/x/sync v0.1.0
 	golang.org/x/sys v0.5.0
 	golang.org/x/term v0.5.0
-	google.golang.org/grpc v1.52.3
+	google.golang.org/grpc v1.53.0
 	oss.terrastruct.com/d2 v0.1.5
 )
 
@@ -85,7 +85,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sts v1.16.4 // indirect
 	github.com/aws/smithy-go v1.11.2 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
-	github.com/cespare/xxhash/v2 v2.1.2 // indirect
+	github.com/cespare/xxhash/v2 v2.2.0 // indirect
 	github.com/containerd/go-cni v1.1.9-0.20230211172349-6603d5bd8941 // indirect
 	github.com/containerd/go-runc v1.0.0 // indirect
 	github.com/containerd/typeurl/v2 v2.1.0 // indirect
