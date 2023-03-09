@@ -279,7 +279,7 @@ func (r *Container) Exec(opts ...ContainerExecOpts) *Container {
 }
 
 // Exit code of the last executed command. Zero means success.
-// Null if no command has been executed.
+// Errors if no command has been executed.
 func (r *Container) ExitCode(ctx context.Context) (int, error) {
 	q := r.q.Select("exitCode")
 
@@ -513,7 +513,7 @@ func (r *Container) Rootfs() *Directory {
 }
 
 // The error stream of the last executed command.
-// Null if no command has been executed.
+// Errors if no command has been executed.
 func (r *Container) Stderr(ctx context.Context) (string, error) {
 	q := r.q.Select("stderr")
 
@@ -523,7 +523,7 @@ func (r *Container) Stderr(ctx context.Context) (string, error) {
 }
 
 // The output stream of the last executed command.
-// Null if no command has been executed.
+// Errors if no command has been executed.
 func (r *Container) Stdout(ctx context.Context) (string, error) {
 	q := r.q.Select("stdout")
 
@@ -634,6 +634,11 @@ type ContainerWithExecOpts struct {
 	// Do not use this option unless you trust the command being executed.
 	// The command being executed WILL BE GRANTED FULL ACCESS TO YOUR HOST FILESYSTEM.
 	ExperimentalPrivilegedNesting bool
+	// Execute the command with all root capabilities. This is similar to running a command
+	// with "sudo" or executing `docker run` with the `--privileged` flag. Containerization
+	// does not provide any security guarantees when using this option. It should only be used
+	// when absolutely necessary and only with trusted commands.
+	InsecureRootCapabilities bool
 }
 
 // Retrieves this container after executing the specified command inside it.
@@ -665,6 +670,13 @@ func (r *Container) WithExec(args []string, opts ...ContainerWithExecOpts) *Cont
 	for i := len(opts) - 1; i >= 0; i-- {
 		if !querybuilder.IsZeroValue(opts[i].ExperimentalPrivilegedNesting) {
 			q = q.Arg("experimentalPrivilegedNesting", opts[i].ExperimentalPrivilegedNesting)
+			break
+		}
+	}
+	// `insecureRootCapabilities` optional argument
+	for i := len(opts) - 1; i >= 0; i-- {
+		if !querybuilder.IsZeroValue(opts[i].InsecureRootCapabilities) {
+			q = q.Arg("insecureRootCapabilities", opts[i].InsecureRootCapabilities)
 			break
 		}
 	}

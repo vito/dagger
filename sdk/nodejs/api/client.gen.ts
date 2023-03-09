@@ -219,6 +219,14 @@ export type ContainerWithExecOpts = {
    * The command being executed WILL BE GRANTED FULL ACCESS TO YOUR HOST FILESYSTEM.
    */
   experimentalPrivilegedNesting?: boolean
+
+  /**
+   * Execute the command with all root capabilities. This is similar to running a command
+   * with "sudo" or executing `docker run` with the `--privileged` flag. Containerization
+   * does not provide any security guarantees when using this option. It should only be used
+   * when absolutely necessary and only with trusted commands.
+   */
+  insecureRootCapabilities?: boolean
 }
 
 export type ContainerWithExposedPortOpts = {
@@ -722,7 +730,7 @@ export class Container extends BaseClient {
 
   /**
    * Exit code of the last executed command. Zero means success.
-   * Null if no command has been executed.
+   * Errors if no command has been executed.
    */
   async exitCode(): Promise<number> {
     const response: Awaited<number> = await computeQuery(
@@ -1025,7 +1033,7 @@ export class Container extends BaseClient {
 
   /**
    * The error stream of the last executed command.
-   * Null if no command has been executed.
+   * Errors if no command has been executed.
    */
   async stderr(): Promise<string> {
     const response: Awaited<string> = await computeQuery(
@@ -1043,7 +1051,7 @@ export class Container extends BaseClient {
 
   /**
    * The output stream of the last executed command.
-   * Null if no command has been executed.
+   * Errors if no command has been executed.
    */
   async stdout(): Promise<string> {
     const response: Awaited<string> = await computeQuery(
@@ -1166,6 +1174,10 @@ export class Container extends BaseClient {
    *
    * Do not use this option unless you trust the command being executed.
    * The command being executed WILL BE GRANTED FULL ACCESS TO YOUR HOST FILESYSTEM.
+   * @param opts.insecureRootCapabilities Execute the command with all root capabilities. This is similar to running a command
+   * with "sudo" or executing `docker run` with the `--privileged` flag. Containerization
+   * does not provide any security guarantees when using this option. It should only be used
+   * when absolutely necessary and only with trusted commands.
    */
   withExec(args: string[], opts?: ContainerWithExecOpts): Container {
     return new Container({
