@@ -5,7 +5,9 @@ import (
 	"os"
 	"strings"
 
+	"dagger.io/dagger"
 	"github.com/containerd/containerd/content"
+	"github.com/containerd/containerd/leases"
 	"github.com/containerd/containerd/remotes/docker"
 	"github.com/dagger/dagger/internal/engine"
 	"github.com/moby/buildkit/cache/remotecache"
@@ -19,7 +21,7 @@ import (
 	"github.com/pkg/errors"
 )
 
-func StartDaggerCache(ctx context.Context, sm *session.Manager, cs content.Store, hosts docker.RegistryHosts) (remotecache.ResolveCacheExporterFunc, remotecache.ResolveCacheImporterFunc, <-chan struct{}, error) {
+func StartDaggerCache(ctx context.Context, sm *session.Manager, cs content.Store, lm leases.Manager, hosts docker.RegistryHosts) (remotecache.ResolveCacheExporterFunc, remotecache.ResolveCacheImporterFunc, <-chan struct{}, error) {
 	cacheType, attrs, err := cacheConfigFromEnv()
 	if err != nil {
 		return nil, nil, nil, err
@@ -28,7 +30,7 @@ func StartDaggerCache(ctx context.Context, sm *session.Manager, cs content.Store
 	doneCh := make(chan struct{}, 1)
 	var s3Manager *s3CacheManager
 	if cacheType == experimentalDaggerS3CacheType {
-		s3Manager, err = newS3CacheManager(ctx, attrs, doneCh)
+		s3Manager, err = newS3CacheManager(ctx, attrs, lm, doneCh)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -96,6 +98,21 @@ func resolveCacheImporterFunc(sm *session.Manager, cs content.Store, hosts docke
 		}
 		return impl, desc, nil
 	}
+}
+
+func StartCacheMountSynchronization(ctx context.Context, daggerClient *dagger.Client) (func(ctx context.Context) error, error) {
+	stop := func(ctx context.Context) error { return nil } // default to no-op
+	cacheType, attrs, err := cacheConfigFromEnv()
+	if err != nil {
+		return stop, err
+	}
+	switch cacheType {
+	case "experimental_dagger_s3":
+		stop, err = startS3CacheMountSync(ctx, attrs, daggerClient)
+	default:
+		bklog.G(ctx).Debugf("unsupported cache type %s, defaulting to no cache mount synchronization", cacheType)
+	}
+	return stop, err
 }
 
 func cacheConfigFromEnv() (string, map[string]string, error) {
