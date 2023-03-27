@@ -340,6 +340,7 @@ func devEngineContainer(c *dagger.Client, arches []string) []*dagger.Container {
 				"git", "openssh", "pigz", "xz",
 				// for CNI
 				"iptables", "ip6tables", "dnsmasq",
+				"dumb-init",
 			}).
 			WithFile("/usr/local/bin/runc", runcBin(c, arch), dagger.ContainerWithFileOpts{
 				Permissions: 0700,
@@ -358,7 +359,7 @@ func devEngineContainer(c *dagger.Client, arches []string) []*dagger.Container {
 				Contents:    engineEntrypoint,
 				Permissions: 755,
 			}).
-			WithEntrypoint([]string{"dagger-entrypoint.sh"}),
+			WithEntrypoint([]string{"dumb-init", "dagger-entrypoint.sh"}),
 		)
 	}
 
