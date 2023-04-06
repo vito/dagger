@@ -41,11 +41,11 @@ DAGGER_SESSION_PORT and DAGGER_SESSION_TOKEN will be convieniently injected auto
         -d @- \
         http://127.0.0.1:$DAGGER_SESSION_PORT/query'`,
 	Run:          Run,
-	Args:         cobra.MinimumNArgs(1),
 	SilenceUsage: true,
 }
 
 var waitDelay time.Duration
+var replayJournal string
 var useShinyNewTUI = os.Getenv("_EXPERIMENTAL_DAGGER_TUI") != ""
 
 func init() {
@@ -57,6 +57,13 @@ func init() {
 		"cleanup-timeout",
 		10*time.Second,
 		"max duration to wait between SIGTERM and SIGKILL on interrupt",
+	)
+
+	runCmd.Flags().StringVar(
+		&replayJournal,
+		"replay-journal",
+		"",
+		"replay a journal file instead of running a command (for debugging)",
 	)
 }
 
@@ -89,14 +96,28 @@ func run(ctx context.Context, args []string) error {
 	}
 	defer sessionL.Close()
 
-	journalR, journalW := journal.Pipe()
-
 	sessionPort := fmt.Sprintf("%d", sessionL.Addr().(*net.TCPAddr).Port)
 	os.Setenv("DAGGER_SESSION_PORT", sessionPort)
 	os.Setenv("DAGGER_SESSION_TOKEN", sessionToken.String())
 
 	ctx, quit := context.WithCancel(ctx)
 	defer quit()
+
+	journalR, journalW := journal.Pipe()
+	if replayJournal != "" {
+		journalR, err = journal.Open(replayJournal)
+		if err != nil {
+			return fmt.Errorf("open journal: %w", err)
+		}
+		model := tui.New(quit, journalR, "replay "+replayJournal)
+		program := tea.NewProgram(model, tea.WithAltScreen())
+		_, err := program.Run()
+		return err
+	}
+
+	if len(args) == 0 {
+		return fmt.Errorf("no command specified")
+	}
 
 	subCmd := exec.CommandContext(ctx, args[0], args[1:]...) // #nosec
 

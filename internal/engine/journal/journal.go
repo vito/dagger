@@ -13,6 +13,7 @@ type Writer interface {
 
 type Reader interface {
 	ReadEntry() (*Entry, bool)
+	Close() error
 }
 
 type Entry struct {
