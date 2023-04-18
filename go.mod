@@ -63,7 +63,7 @@ require (
 	github.com/aws/smithy-go v1.13.5
 	github.com/charmbracelet/lipgloss v0.6.0
 	github.com/go-git/go-git/v5 v5.5.2
-	github.com/google/go-github/v50 v50.1.0
+	github.com/google/go-github/v50 v50.2.0
 	github.com/jackpal/gateway v1.0.7
 	github.com/muesli/termenv v0.15.1
 	github.com/nxadm/tail v1.4.8
@@ -85,7 +85,7 @@ require (
 	github.com/Azure/azure-sdk-for-go/sdk/internal v1.0.0 // indirect
 	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v0.4.1 // indirect
 	github.com/AzureAD/microsoft-authentication-library-for-go v0.6.0 // indirect
-	github.com/ProtonMail/go-crypto v0.0.0-20221026131551-cf6655e29de4 // indirect
+	github.com/ProtonMail/go-crypto v0.0.0-20230217124315-7d5c6f04bbb8 // indirect
 	github.com/PuerkitoBio/goquery v1.8.1 // indirect
 	github.com/acomagu/bufpipe v1.0.3 // indirect
 	github.com/alecthomas/chroma v0.10.0 // indirect
