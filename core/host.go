@@ -34,10 +34,19 @@ type CopyFilter struct {
 	Include []string
 }
 
-func (host *Host) Directory(ctx context.Context, dirPath string, p pipeline.Path, platform specs.Platform, filter CopyFilter) (*Directory, error) {
+var hostDirs = newCacheMap[string, *Directory]()
+
+func (host *Host) Directory(ctx context.Context, gw bkgw.Client, dirPath string, p pipeline.Path, platform specs.Platform, filter CopyFilter) (*Directory, error) {
 	if host.DisableRW {
 		return nil, ErrHostRWDisabled
 	}
+
+	dir, initializer, found := hostDirs.GetOrInitialize(dirPath)
+	if found {
+		return dir, nil
+	}
+
+	defer initializer.Release()
 
 	var absPath string
 	var err error
@@ -97,7 +106,29 @@ func (host *Host) Directory(ctx context.Context, dirPath string, p pipeline.Path
 		llb.WithCustomNamef("copy %s", absPath),
 	)
 
-	return NewDirectory(ctx, st, "", p, platform, nil)
+	def, err := st.Marshal(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("marshal: %w", err)
+	}
+
+	ref, err := gwRef(ctx, gw, def.ToPB())
+	if err != nil {
+		return nil, fmt.Errorf("gw ref: %w", err)
+	}
+
+	st, err = ref.ToState()
+	if err != nil {
+		return nil, fmt.Errorf("to state: %w", err)
+	}
+
+	dir, err = NewDirectory(ctx, st, "", p, platform, nil)
+	if err != nil {
+		return nil, fmt.Errorf("new directory: %w", err)
+	}
+
+	initializer.Put(dir)
+
+	return dir, nil
 }
 
 func (host *Host) Socket(ctx context.Context, sockPath string) (*Socket, error) {
