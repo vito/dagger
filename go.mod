@@ -9,13 +9,14 @@ replace cloud.google.com/go => cloud.google.com/go v0.100.2
 
 require (
 	dagger.io/dagger v0.4.1
+	github.com/99designs/gqlgen v0.17.2 // indirect
 	github.com/armon/circbuf v0.0.0-20190214190532-5111143e8da2
 	github.com/aws/aws-sdk-go-v2/config v1.18.21 // indirect
 	github.com/aws/aws-sdk-go-v2/credentials v1.13.20 // indirect
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.31.3 // indirect
 	github.com/charmbracelet/bubbles v0.15.0
 	github.com/charmbracelet/bubbletea v0.23.2
-	github.com/containerd/containerd v1.7.0
+	github.com/containerd/containerd v1.7.1
 	github.com/containerd/fuse-overlayfs-snapshotter v1.0.2
 	github.com/containerd/stargz-snapshotter v0.14.3
 	github.com/containernetworking/cni v1.1.2
@@ -25,7 +26,6 @@ require (
 	github.com/docker/distribution v2.8.2+incompatible
 	github.com/google/go-containerregistry v0.14.0
 	github.com/google/uuid v1.3.0
-	github.com/99designs/gqlgen v0.17.2
 	github.com/iancoleman/strcase v0.2.0
 	// https://github.com/moby/buildkit/commit/3c3a6e9db3fd9f4893e7b8c453ed7698b12a7af0
 	github.com/moby/buildkit v0.11.0-rc3.0.20230515234028-3c3a6e9db3fd
@@ -118,7 +118,7 @@ require (
 	github.com/cloudflare/circl v1.3.3 // indirect
 	github.com/containerd/go-cni v1.1.9 // indirect
 	github.com/containerd/go-runc v1.0.1-0.20230316182144-f5d58d02d6c8 // indirect
-	github.com/containerd/typeurl/v2 v2.1.0 // indirect
+	github.com/containerd/typeurl/v2 v2.1.1 // indirect
 	github.com/cpuguy83/go-md2man/v2 v2.0.2 // indirect
 	github.com/cyphar/filepath-securejoin v0.2.3 // indirect
 	github.com/dimchansky/utfbom v1.1.1 // indirect
@@ -208,8 +208,8 @@ require (
 
 require (
 	github.com/Khan/genqlient v0.5.0 // indirect
-	github.com/Microsoft/go-winio v0.6.0 // indirect
-	github.com/Microsoft/hcsshim v0.10.0-rc.7 // indirect
+	github.com/Microsoft/go-winio v0.6.1 // indirect
+	github.com/Microsoft/hcsshim v0.10.0-rc.8 // indirect
 	github.com/adrg/xdg v0.4.0
 	github.com/agext/levenshtein v1.2.3 // indirect
 	github.com/cenkalti/backoff/v4 v4.2.0
@@ -219,7 +219,7 @@ require (
 	github.com/containerd/fifo v1.1.0 // indirect
 	github.com/containerd/nydus-snapshotter v0.8.0 // indirect
 	github.com/containerd/stargz-snapshotter/estargz v0.14.3 // indirect
-	github.com/containerd/ttrpc v1.2.1 // indirect
+	github.com/containerd/ttrpc v1.2.2 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/docker/cli v23.0.5+incompatible
 	github.com/docker/docker v23.0.5+incompatible
