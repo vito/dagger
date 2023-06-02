@@ -55,7 +55,7 @@ require (
 	golang.org/x/sys v0.8.0
 	golang.org/x/term v0.8.0
 	google.golang.org/grpc v1.55.0
-	oss.terrastruct.com/d2 v0.4.0
+	oss.terrastruct.com/d2 v0.4.2
 )
 
 require (
