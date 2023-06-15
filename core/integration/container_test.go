@@ -3266,15 +3266,15 @@ func TestContainerInsecureRootCapabilitesWithService(t *testing.T) {
 		}).
 		WithMountedCache("/tmp", c.CacheVolume("share-tmp")).
 		WithExposedPort(2375).
-		WithExec([]string{
+		Service([]string{
 			"dockerd",
 			"--host=tcp://0.0.0.0:2375",
 			"--tls=false",
-		}, dagger.ContainerWithExecOpts{
+		}, dagger.ContainerStartOpts{
 			InsecureRootCapabilities: true,
 		})
 
-	dockerHost, err := dockerd.Endpoint(ctx, dagger.ContainerEndpointOpts{
+	dockerHost, err := dockerd.Endpoint(ctx, dagger.ServiceEndpointOpts{
 		Scheme: "tcp",
 	})
 	require.NoError(t, err)

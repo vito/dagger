@@ -45,10 +45,10 @@ func (s *gitSchema) Dependencies() []router.ExecutableSchema {
 }
 
 type gitRepository struct {
-	URL         string            `json:"url"`
-	KeepGitDir  bool              `json:"keepGitDir"`
-	Pipeline    pipeline.Path     `json:"pipeline"`
-	ServiceHost *core.ContainerID `json:"serviceHost,omitempty"`
+	URL         string          `json:"url"`
+	KeepGitDir  bool            `json:"keepGitDir"`
+	Pipeline    pipeline.Path   `json:"pipeline"`
+	ServiceHost *core.ServiceID `json:"serviceHost,omitempty"`
 }
 
 type gitRef struct {
@@ -57,9 +57,9 @@ type gitRef struct {
 }
 
 type gitArgs struct {
-	URL                     string            `json:"url"`
-	KeepGitDir              bool              `json:"keepGitDir"`
-	ExperimentalServiceHost *core.ContainerID `json:"experimentalServiceHost"`
+	URL                     string          `json:"url"`
+	KeepGitDir              bool            `json:"keepGitDir"`
+	ExperimentalServiceHost *core.ServiceID `json:"experimentalServiceHost"`
 }
 
 func (s *gitSchema) git(ctx *router.Context, parent *core.Query, args gitArgs) (gitRepository, error) {
