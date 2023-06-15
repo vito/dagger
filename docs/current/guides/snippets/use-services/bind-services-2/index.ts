@@ -9,8 +9,8 @@ connect(
     .from("python")
     .withDirectory("/srv", client.directory().withNewFile("index.html", "Hello, world!"))
     .withWorkdir("/srv")
-    .withExec(["python", "-m", "http.server", "8080"])
     .withExposedPort(8080)
+    .service(["python", "-m", "http.server", "8080"])
 
     // create client container with service binding
     // access HTTP service, write to file and retrieve contents
