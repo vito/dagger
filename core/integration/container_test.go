@@ -3270,7 +3270,7 @@ func TestContainerInsecureRootCapabilitesWithService(t *testing.T) {
 			"dockerd",
 			"--host=tcp://0.0.0.0:2375",
 			"--tls=false",
-		}, dagger.ContainerStartOpts{
+		}, dagger.ContainerServiceOpts{
 			InsecureRootCapabilities: true,
 		})
 
