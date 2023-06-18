@@ -60,17 +60,17 @@ func digestInto(value any, dest io.Writer) (err error) {
 	}
 
 	switch rt.Kind() {
-	case reflect.Map:
-		if err := digestMapInto(rt, rv, dest); err != nil {
-			return fmt.Errorf("digest map: %w", err)
-		}
 	case reflect.Struct:
 		if err := digestStructInto(rt, rv, dest); err != nil {
 			return fmt.Errorf("digest struct: %w", err)
 		}
 	case reflect.Slice, reflect.Array:
-		if err := digestSliceInto(rt, rv, dest); err != nil {
+		if err := digestSliceInto(rv, dest); err != nil {
 			return fmt.Errorf("digest slice/array: %w", err)
+		}
+	case reflect.Map:
+		if err := digestMapInto(rv, dest); err != nil {
+			return fmt.Errorf("digest map: %w", err)
 		}
 	case reflect.String,
 		reflect.Bool,
@@ -99,7 +99,7 @@ func digestStructInto(rt reflect.Type, rv reflect.Value, dest io.Writer) error {
 	return nil
 }
 
-func digestSliceInto(rt reflect.Type, rv reflect.Value, dest io.Writer) error {
+func digestSliceInto(rv reflect.Value, dest io.Writer) error {
 	for i := 0; i < rv.Len(); i++ {
 		fmt.Fprintln(dest, i)
 		if err := digestInto(rv.Index(i).Interface(), dest); err != nil {
@@ -110,7 +110,7 @@ func digestSliceInto(rt reflect.Type, rv reflect.Value, dest io.Writer) error {
 	return nil
 }
 
-func digestMapInto(rt reflect.Type, rv reflect.Value, dest io.Writer) error {
+func digestMapInto(rv reflect.Value, dest io.Writer) error {
 	keys := rv.MapKeys()
 	sort.Slice(keys, func(i, j int) bool {
 		return keys[i].String() < keys[j].String()
