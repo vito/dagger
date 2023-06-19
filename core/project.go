@@ -356,7 +356,7 @@ func (p *Project) getResolver(ctx context.Context, gw bkgw.Client, r *router.Rou
 			return nil, err
 		}
 
-		st := fsState.Run(
+		runOpts := []llb.RunOption{
 			llb.Args([]string{entrypointPath}),
 			llb.Dir("/src"),
 			llb.AddEnv("_DAGGER_ENABLE_NESTING", ""),
@@ -368,7 +368,17 @@ func (p *Project) getResolver(ctx context.Context, gw bkgw.Client, r *router.Rou
 			llb.AddMount("/.dagger_meta_mount", llb.Scratch(), llb.Tmpfs()),
 			llb.AddMount(inputMountPath, input, llb.Readonly),
 			llb.AddMount(tmpMountPath, llb.Scratch(), llb.Tmpfs()),
-		)
+		}
+
+		if len(p.Directory.Services) > 0 {
+			o, err := p.Directory.Services.RunOpt()
+			if err != nil {
+				return nil, err
+			}
+			runOpts = append(runOpts, o)
+		}
+
+		st := fsState.Run(runOpts...)
 
 		if p.Config.SDK == "go" {
 			st.AddMount("/src", wdState, llb.Readonly) // TODO: not actually needed here, just makes go server code easier at moment
