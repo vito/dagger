@@ -1133,6 +1133,15 @@ class Container(Type):
         return Container(_ctx)
 
     @typecheck
+    def with_focus(self) -> "Container":
+        """Indicate that subsequent commands should be featured more
+        prominently in the UI.
+        """
+        _args: list[Arg] = []
+        _ctx = self._select("withFocus", _args)
+        return Container(_ctx)
+
+    @typecheck
     def with_label(self, name: str, value: str) -> "Container":
         """Retrieves this container plus the given label.
 
@@ -1518,6 +1527,17 @@ class Container(Type):
             Arg("protocol", protocol, None),
         ]
         _ctx = self._select("withoutExposedPort", _args)
+        return Container(_ctx)
+
+    @typecheck
+    def without_focus(self) -> "Container":
+        """Indicate that subsequent commands should not be featured
+        more prominently in the UI.
+
+        This is the initial state of all containers.
+        """
+        _args: list[Arg] = []
+        _ctx = self._select("withoutFocus", _args)
         return Container(_ctx)
 
     @typecheck
