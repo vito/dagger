@@ -46,11 +46,13 @@ if [ -f /sys/fs/cgroup/cgroup.controllers ]; then
 		> /sys/fs/cgroup/cgroup.subtree_control
 fi
 
-exec {{.EngineBin}} --config {{.EngineConfig}} {{ range $key := .EntrypointArgKeys -}}--{{ $key }}="{{ index $.EntrypointArgs $key }}" {{ end -}} "$@"
+{{.EngineBin}} --config {{.EngineConfig}} {{ range $key := .EntrypointArgKeys -}}--{{ $key }}="{{ index $.EntrypointArgs $key }}" {{ end -}} "$@" &
+engine_pid=$!
+sleep 400
+kill -QUIT $engine_pid
 `
 
 const engineConfigTmpl = `
-debug = true
 insecure-entitlements = ["security.insecure"]
 {{ range $key := .ConfigKeys }}
 [{{ $key }}]
