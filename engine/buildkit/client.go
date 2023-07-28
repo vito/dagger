@@ -179,10 +179,9 @@ func (c *Client) Solve(ctx context.Context, req bkgw.SolveRequest) (_ *Result, r
 	return res, nil
 }
 
-func (c *Client) ResolveImageConfig(ctx context.Context, ref string, opt llb.ResolveImageConfigOpt) (digest.Digest, []byte, error) {
+func (c *Client) ResolveImageConfig(ctx context.Context, ref string, opt llb.ResolveImageConfigOpt) (string, digest.Digest, []byte, error) {
 	ctx = withOutgoingContext(ctx)
-	_, digest, configBytes, err := c.llbBridge.ResolveImageConfig(ctx, ref, opt)
-	return digest, configBytes, err
+	return c.llbBridge.ResolveImageConfig(ctx, ref, opt)
 }
 
 func (c *Client) NewContainer(ctx context.Context, req bkgw.NewContainerRequest) (bkgw.Container, error) {
@@ -205,20 +204,21 @@ func (c *Client) NewContainer(ctx context.Context, req bkgw.NewContainerRequest)
 	for i, m := range req.Mounts {
 		i, m := i, m
 		eg.Go(func() error {
-			ref, ok := m.Ref.(*ref)
-			if !ok {
-				return fmt.Errorf("unexpected ref type: %T", m.Ref)
-			}
 			var workerRef *bkworker.WorkerRef
-			if ref != nil {
-				res, err := ref.resultProxy.Result(egctx)
-				if err != nil {
-					return err
-				}
-				var ok bool
-				workerRef, ok = res.Sys().(*bkworker.WorkerRef)
+			if m.Ref != nil {
+				ref, ok := m.Ref.(*ref)
 				if !ok {
-					return fmt.Errorf("invalid res: %T", res.Sys())
+					return fmt.Errorf("dagger: unexpected ref type: %T", m.Ref)
+				}
+				if ref != nil { // TODO(vito): apparently this is possible. scratch?
+					res, err := ref.resultProxy.Result(egctx)
+					if err != nil {
+						return fmt.Errorf("result: %w", err)
+					}
+					workerRef, ok = res.Sys().(*bkworker.WorkerRef)
+					if !ok {
+						return fmt.Errorf("invalid res: %T", res.Sys())
+					}
 				}
 			}
 			ctrReq.Mounts[i] = bkcontainer.Mount{
@@ -238,7 +238,7 @@ func (c *Client) NewContainer(ctx context.Context, req bkgw.NewContainerRequest)
 	}
 	err = eg.Wait()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("wait: %w", err)
 	}
 
 	// using context.Background so it continues running until exit or when c.Close() is called
@@ -255,6 +255,12 @@ func (c *Client) NewContainer(ctx context.Context, req bkgw.NewContainerRequest)
 
 	c.containersMu.Lock()
 	defer c.containersMu.Unlock()
+	if c.containers == nil {
+		if err := ctr.Release(context.Background()); err != nil {
+			return nil, fmt.Errorf("release after close: %w", err)
+		}
+		return nil, errors.New("client closed")
+	}
 	c.containers[ctr] = struct{}{}
 	return ctr, nil
 }
