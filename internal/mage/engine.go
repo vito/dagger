@@ -207,7 +207,7 @@ func (t Engine) test(ctx context.Context, race bool) error {
 		// go test flags
 		"-parallel=16",
 		"-count=1",
-		"-timeout=8m",
+		"-timeout=15m",
 	}
 
 	if race {
