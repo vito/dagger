@@ -211,7 +211,7 @@ func (t Engine) test(ctx context.Context, race bool) error {
 	}
 
 	if race {
-		args = append(args, "-race", "-timeout=1h")
+		args = append(args, "-race", "-timeout=8m")
 		cgoEnabledEnv = "1"
 	}
 
