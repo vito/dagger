@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"dagger.io/dagger"
@@ -30,13 +31,13 @@ func TestMain(m *testing.M) {
 }
 
 func connect(t *testing.T) (*dagger.Client, context.Context) {
-	tw := NewTWriter(t)
+	tw := newTWriter(t)
 	t.Cleanup(tw.Flush)
 	return connectWithLogOutput(t, tw)
 }
 
-func connectWithBufferedLogs(t *testing.T) (*dagger.Client, context.Context, *bytes.Buffer) {
-	tw := NewTWriter(t)
+func connectWithBufferedLogs(t *testing.T) (*dagger.Client, context.Context, *safeBuffer) {
+	tw := newTWriter(t)
 	t.Cleanup(tw.Flush)
 	output := &safeBuffer{}
 	c, ctx := connectWithLogOutput(t, io.MultiWriter(tw, output))
@@ -377,19 +378,19 @@ func (ctr DaggerCLIContainer) CallProjectInit() *DaggerCLIContainer {
 	return &ctr
 }
 
-// TWriter is a writer that writes to testing.T
-type TWriter struct {
+// tWriter is a writer that writes to testing.T
+type tWriter struct {
 	t   *testing.T
 	buf bytes.Buffer
 }
 
-// NewTWriter creates a new TWriter
-func NewTWriter(t *testing.T) *TWriter {
-	return &TWriter{t: t}
+// newTWriter creates a new TWriter
+func newTWriter(t *testing.T) *tWriter {
+	return &tWriter{t: t}
 }
 
 // Write writes data to the testing.T
-func (tw *TWriter) Write(p []byte) (n int, err error) {
+func (tw *tWriter) Write(p []byte) (n int, err error) {
 	if n, err = tw.buf.Write(p); err != nil {
 		return n, err
 	}
@@ -410,6 +411,23 @@ func (tw *TWriter) Write(p []byte) (n int, err error) {
 	return n, nil
 }
 
-func (tw *TWriter) Flush() {
+func (tw *tWriter) Flush() {
 	tw.t.Log(tw.buf.String())
+}
+
+type safeBuffer struct {
+	bu bytes.Buffer
+	mu sync.Mutex
+}
+
+func (s *safeBuffer) Write(p []byte) (n int, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.bu.Write(p)
+}
+
+func (s *safeBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.bu.String()
 }
