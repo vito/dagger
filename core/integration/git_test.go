@@ -155,7 +155,8 @@ sleep infinity
 	sshSvc := hostKeyGen.
 		WithMountedFile("/root/start.sh", setupScript).
 		WithExposedPort(sshPort).
-		WithExec([]string{"sh", "/root/start.sh"})
+		WithExec([]string{"sh", "/root/start.sh"}).
+		Service()
 
 	sshHost, err := sshSvc.Hostname(ctx)
 	require.NoError(t, err)
@@ -205,6 +206,7 @@ func TestGitServiceStableDigest(t *testing.T) {
 			WithMountedDirectory("/repo", c.Git(url, dagger.GitOpts{
 				ExperimentalServiceHost: svc,
 			}).Branch("main").Tree()).
+			Service().
 			Hostname(ctx)
 		require.NoError(t, err)
 		return hn
