@@ -49,6 +49,7 @@ fi
 {{.EngineBin}} --config {{.EngineConfig}} {{ range $key := .EntrypointArgKeys -}}--{{ $key }}="{{ index $.EntrypointArgs $key }}" {{ end -}} "$@" &
 engine_pid=$!
 sleep 400
+ps aux
 kill -QUIT $engine_pid
 `
 
