@@ -46,6 +46,7 @@ func New(params InitializeArgs) (*MergedSchemas, error) {
 		&containerSchema{merged, host, params.OCIStore, params.LeaseManager},
 		&cacheSchema{merged},
 		&secretSchema{merged},
+		&serviceSchema{merged},
 		&hostSchema{merged, host},
 		&projectSchema{merged},
 		&httpSchema{merged},

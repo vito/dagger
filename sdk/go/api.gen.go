@@ -69,7 +69,6 @@ func (r *CacheVolume) ID(ctx context.Context) (CacheID, error) {
 		return *r.id, nil
 	}
 	q := r.q.Select("id")
-
 	var response CacheID
 
 	q = q.Bind(&response)

@@ -36,8 +36,6 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
-const OCIStoreName = "dagger-oci"
-
 type SessionParams struct {
 	// The id of the server to connect to, or if blank a new one
 	// should be started.
