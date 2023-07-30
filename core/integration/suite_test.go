@@ -391,6 +391,8 @@ func newTWriter(t *testing.T) *tWriter {
 
 // Write writes data to the testing.T
 func (tw *tWriter) Write(p []byte) (n int, err error) {
+	tw.t.Helper()
+
 	if n, err = tw.buf.Write(p); err != nil {
 		return n, err
 	}
