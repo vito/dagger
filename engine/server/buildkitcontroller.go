@@ -16,6 +16,7 @@ import (
 	apitypes "github.com/moby/buildkit/api/types"
 	"github.com/moby/buildkit/cache/remotecache"
 	bkclient "github.com/moby/buildkit/client"
+	"github.com/moby/buildkit/executor/oci"
 	"github.com/moby/buildkit/frontend"
 	bkgw "github.com/moby/buildkit/frontend/gateway/client"
 	"github.com/moby/buildkit/session"
@@ -63,6 +64,7 @@ type BuildkitControllerOpts struct {
 	Frontends              map[string]frontend.Frontend
 	UpstreamCacheExporters map[string]remotecache.ResolveCacheExporterFunc
 	UpstreamCacheImporters map[string]remotecache.ResolveCacheImporterFunc
+	DNSConfig              *oci.DNSConfig
 }
 
 // TODO: setup cache manager here instead of cmd/engine/main.go
@@ -157,6 +159,7 @@ func (e *BuildkitController) Solve(ctx context.Context, req *controlapi.SolveReq
 			PrivilegedExecEnabled: e.privilegedExecEnabled,
 			UpstreamCacheImports:  cacheImporterCfgs,
 			MainClientCaller:      caller,
+			DNSConfig:             e.DNSConfig,
 		})
 		if err != nil {
 			e.serverMu.Unlock()
