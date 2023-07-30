@@ -41,9 +41,6 @@ type ServiceID string
 // A content-addressed socket identifier.
 type SocketID string
 
-// Nothing. Used by SDK codegen to skip the return value.
-type Void string
-
 // Key value object that represents a build argument.
 type BuildArg struct {
 	// The build argument name.
@@ -75,6 +72,7 @@ func (r *CacheVolume) ID(ctx context.Context) (CacheID, error) {
 		return *r.id, nil
 	}
 	q := r.q.Select("id")
+
 	var response CacheID
 
 	q = q.Bind(&response)
@@ -165,6 +163,7 @@ func (r *Container) Build(context *Directory, opts ...ContainerBuildOpts) *Conta
 		}
 	}
 	q = q.Arg("context", context)
+
 	return &Container{
 		q: q,
 		c: r.c,
@@ -174,6 +173,7 @@ func (r *Container) Build(context *Directory, opts ...ContainerBuildOpts) *Conta
 // Retrieves default arguments for future commands.
 func (r *Container) DefaultArgs(ctx context.Context) ([]string, error) {
 	q := r.q.Select("defaultArgs")
+
 	var response []string
 
 	q = q.Bind(&response)
@@ -186,6 +186,7 @@ func (r *Container) DefaultArgs(ctx context.Context) ([]string, error) {
 func (r *Container) Directory(path string) *Directory {
 	q := r.q.Select("directory")
 	q = q.Arg("path", path)
+
 	return &Directory{
 		q: q,
 		c: r.c,
@@ -195,6 +196,7 @@ func (r *Container) Directory(path string) *Directory {
 // Retrieves entrypoint to be prepended to the arguments of all commands.
 func (r *Container) Entrypoint(ctx context.Context) ([]string, error) {
 	q := r.q.Select("entrypoint")
+
 	var response []string
 
 	q = q.Bind(&response)
@@ -208,6 +210,7 @@ func (r *Container) EnvVariable(ctx context.Context, name string) (string, error
 	}
 	q := r.q.Select("envVariable")
 	q = q.Arg("name", name)
+
 	var response string
 
 	q = q.Bind(&response)
@@ -217,6 +220,7 @@ func (r *Container) EnvVariable(ctx context.Context, name string) (string, error
 // Retrieves the list of environment variables passed to commands.
 func (r *Container) EnvVariables(ctx context.Context) ([]EnvVariable, error) {
 	q := r.q.Select("envVariables")
+
 	q = q.Select("name value")
 
 	type envVariables struct {
@@ -236,6 +240,7 @@ func (r *Container) EnvVariables(ctx context.Context) ([]EnvVariable, error) {
 	var response []envVariables
 
 	q = q.Bind(&response)
+
 	err := q.Execute(ctx, r.c)
 	if err != nil {
 		return nil, err
@@ -285,6 +290,7 @@ func (r *Container) Export(ctx context.Context, path string, opts ...ContainerEx
 		}
 	}
 	q = q.Arg("path", path)
+
 	var response bool
 
 	q = q.Bind(&response)
@@ -299,6 +305,7 @@ func (r *Container) Export(ctx context.Context, path string, opts ...ContainerEx
 // Currently experimental; set _EXPERIMENTAL_DAGGER_SERVICES_DNS=0 to disable.
 func (r *Container) ExposedPorts(ctx context.Context) ([]Port, error) {
 	q := r.q.Select("exposedPorts")
+
 	q = q.Select("description port protocol")
 
 	type exposedPorts struct {
@@ -319,6 +326,7 @@ func (r *Container) ExposedPorts(ctx context.Context) ([]Port, error) {
 	var response []exposedPorts
 
 	q = q.Bind(&response)
+
 	err := q.Execute(ctx, r.c)
 	if err != nil {
 		return nil, err
@@ -333,6 +341,7 @@ func (r *Container) ExposedPorts(ctx context.Context) ([]Port, error) {
 func (r *Container) File(path string) *File {
 	q := r.q.Select("file")
 	q = q.Arg("path", path)
+
 	return &File{
 		q: q,
 		c: r.c,
@@ -343,6 +352,7 @@ func (r *Container) File(path string) *File {
 func (r *Container) From(address string) *Container {
 	q := r.q.Select("from")
 	q = q.Arg("address", address)
+
 	return &Container{
 		q: q,
 		c: r.c,
@@ -355,6 +365,7 @@ func (r *Container) ID(ctx context.Context) (ContainerID, error) {
 		return *r.id, nil
 	}
 	q := r.q.Select("id")
+
 	var response ContainerID
 
 	q = q.Bind(&response)
@@ -386,6 +397,7 @@ func (r *Container) ImageRef(ctx context.Context) (string, error) {
 		return *r.imageRef, nil
 	}
 	q := r.q.Select("imageRef")
+
 	var response string
 
 	q = q.Bind(&response)
@@ -412,6 +424,7 @@ func (r *Container) Import(source *File, opts ...ContainerImportOpts) *Container
 		}
 	}
 	q = q.Arg("source", source)
+
 	return &Container{
 		q: q,
 		c: r.c,
@@ -425,6 +438,7 @@ func (r *Container) Label(ctx context.Context, name string) (string, error) {
 	}
 	q := r.q.Select("label")
 	q = q.Arg("name", name)
+
 	var response string
 
 	q = q.Bind(&response)
@@ -434,6 +448,7 @@ func (r *Container) Label(ctx context.Context, name string) (string, error) {
 // Retrieves the list of labels passed to container.
 func (r *Container) Labels(ctx context.Context) ([]Label, error) {
 	q := r.q.Select("labels")
+
 	q = q.Select("name value")
 
 	type labels struct {
@@ -453,6 +468,7 @@ func (r *Container) Labels(ctx context.Context) ([]Label, error) {
 	var response []labels
 
 	q = q.Bind(&response)
+
 	err := q.Execute(ctx, r.c)
 	if err != nil {
 		return nil, err
@@ -464,6 +480,7 @@ func (r *Container) Labels(ctx context.Context) ([]Label, error) {
 // Retrieves the list of paths where a directory is mounted.
 func (r *Container) Mounts(ctx context.Context) ([]string, error) {
 	q := r.q.Select("mounts")
+
 	var response []string
 
 	q = q.Bind(&response)
@@ -492,6 +509,7 @@ func (r *Container) Pipeline(name string, opts ...ContainerPipelineOpts) *Contai
 		}
 	}
 	q = q.Arg("name", name)
+
 	return &Container{
 		q: q,
 		c: r.c,
@@ -504,6 +522,7 @@ func (r *Container) Platform(ctx context.Context) (Platform, error) {
 		return *r.platform, nil
 	}
 	q := r.q.Select("platform")
+
 	var response Platform
 
 	q = q.Bind(&response)
@@ -551,6 +570,7 @@ func (r *Container) Publish(ctx context.Context, address string, opts ...Contain
 		}
 	}
 	q = q.Arg("address", address)
+
 	var response string
 
 	q = q.Bind(&response)
@@ -560,6 +580,7 @@ func (r *Container) Publish(ctx context.Context, address string, opts ...Contain
 // Retrieves this container's root filesystem. Mounts are not included.
 func (r *Container) Rootfs() *Directory {
 	q := r.q.Select("rootfs")
+
 	return &Directory{
 		q: q,
 		c: r.c,
@@ -569,6 +590,7 @@ func (r *Container) Rootfs() *Directory {
 // Retrieves a service that will run the container.
 func (r *Container) Service() *Service {
 	q := r.q.Select("service")
+
 	return &Service{
 		q: q,
 		c: r.c,
@@ -583,6 +605,7 @@ func (r *Container) Stderr(ctx context.Context) (string, error) {
 		return *r.stderr, nil
 	}
 	q := r.q.Select("stderr")
+
 	var response string
 
 	q = q.Bind(&response)
@@ -597,6 +620,7 @@ func (r *Container) Stdout(ctx context.Context) (string, error) {
 		return *r.stdout, nil
 	}
 	q := r.q.Select("stdout")
+
 	var response string
 
 	q = q.Bind(&response)
@@ -608,6 +632,7 @@ func (r *Container) Stdout(ctx context.Context) (string, error) {
 // It doesn't run the default command if no exec has been set.
 func (r *Container) Sync(ctx context.Context) (*Container, error) {
 	q := r.q.Select("sync")
+
 	return r, q.Execute(ctx, r.c)
 }
 
@@ -617,6 +642,7 @@ func (r *Container) User(ctx context.Context) (string, error) {
 		return *r.user, nil
 	}
 	q := r.q.Select("user")
+
 	var response string
 
 	q = q.Bind(&response)
@@ -638,6 +664,7 @@ func (r *Container) WithDefaultArgs(opts ...ContainerWithDefaultArgsOpts) *Conta
 			q = q.Arg("args", opts[i].Args)
 		}
 	}
+
 	return &Container{
 		q: q,
 		c: r.c,
@@ -677,6 +704,7 @@ func (r *Container) WithDirectory(path string, directory *Directory, opts ...Con
 	}
 	q = q.Arg("path", path)
 	q = q.Arg("directory", directory)
+
 	return &Container{
 		q: q,
 		c: r.c,
@@ -687,6 +715,7 @@ func (r *Container) WithDirectory(path string, directory *Directory, opts ...Con
 func (r *Container) WithEntrypoint(args []string) *Container {
 	q := r.q.Select("withEntrypoint")
 	q = q.Arg("args", args)
+
 	return &Container{
 		q: q,
 		c: r.c,
@@ -711,6 +740,7 @@ func (r *Container) WithEnvVariable(name string, value string, opts ...Container
 	}
 	q = q.Arg("name", name)
 	q = q.Arg("value", value)
+
 	return &Container{
 		q: q,
 		c: r.c,
@@ -769,6 +799,7 @@ func (r *Container) WithExec(args []string, opts ...ContainerWithExecOpts) *Cont
 		}
 	}
 	q = q.Arg("args", args)
+
 	return &Container{
 		q: q,
 		c: r.c,
@@ -803,6 +834,7 @@ func (r *Container) WithExposedPort(port int, opts ...ContainerWithExposedPortOp
 		}
 	}
 	q = q.Arg("port", port)
+
 	return &Container{
 		q: q,
 		c: r.c,
@@ -838,6 +870,7 @@ func (r *Container) WithFile(path string, source *File, opts ...ContainerWithFil
 	}
 	q = q.Arg("path", path)
 	q = q.Arg("source", source)
+
 	return &Container{
 		q: q,
 		c: r.c,
@@ -848,6 +881,7 @@ func (r *Container) WithFile(path string, source *File, opts ...ContainerWithFil
 // the UI.
 func (r *Container) WithFocus() *Container {
 	q := r.q.Select("withFocus")
+
 	return &Container{
 		q: q,
 		c: r.c,
@@ -859,6 +893,7 @@ func (r *Container) WithLabel(name string, value string) *Container {
 	q := r.q.Select("withLabel")
 	q = q.Arg("name", name)
 	q = q.Arg("value", value)
+
 	return &Container{
 		q: q,
 		c: r.c,
@@ -902,6 +937,7 @@ func (r *Container) WithMountedCache(path string, cache *CacheVolume, opts ...Co
 	}
 	q = q.Arg("path", path)
 	q = q.Arg("cache", cache)
+
 	return &Container{
 		q: q,
 		c: r.c,
@@ -929,6 +965,7 @@ func (r *Container) WithMountedDirectory(path string, source *Directory, opts ..
 	}
 	q = q.Arg("path", path)
 	q = q.Arg("source", source)
+
 	return &Container{
 		q: q,
 		c: r.c,
@@ -956,6 +993,7 @@ func (r *Container) WithMountedFile(path string, source *File, opts ...Container
 	}
 	q = q.Arg("path", path)
 	q = q.Arg("source", source)
+
 	return &Container{
 		q: q,
 		c: r.c,
@@ -983,6 +1021,7 @@ func (r *Container) WithMountedSecret(path string, source *Secret, opts ...Conta
 	}
 	q = q.Arg("path", path)
 	q = q.Arg("source", source)
+
 	return &Container{
 		q: q,
 		c: r.c,
@@ -993,6 +1032,7 @@ func (r *Container) WithMountedSecret(path string, source *Secret, opts ...Conta
 func (r *Container) WithMountedTemp(path string) *Container {
 	q := r.q.Select("withMountedTemp")
 	q = q.Arg("path", path)
+
 	return &Container{
 		q: q,
 		c: r.c,
@@ -1033,6 +1073,7 @@ func (r *Container) WithNewFile(path string, opts ...ContainerWithNewFileOpts) *
 		}
 	}
 	q = q.Arg("path", path)
+
 	return &Container{
 		q: q,
 		c: r.c,
@@ -1045,6 +1086,7 @@ func (r *Container) WithRegistryAuth(address string, username string, secret *Se
 	q = q.Arg("address", address)
 	q = q.Arg("username", username)
 	q = q.Arg("secret", secret)
+
 	return &Container{
 		q: q,
 		c: r.c,
@@ -1055,6 +1097,7 @@ func (r *Container) WithRegistryAuth(address string, username string, secret *Se
 func (r *Container) WithRootfs(directory *Directory) *Container {
 	q := r.q.Select("withRootfs")
 	q = q.Arg("directory", directory)
+
 	return &Container{
 		q: q,
 		c: r.c,
@@ -1066,6 +1109,7 @@ func (r *Container) WithSecretVariable(name string, secret *Secret) *Container {
 	q := r.q.Select("withSecretVariable")
 	q = q.Arg("name", name)
 	q = q.Arg("secret", secret)
+
 	return &Container{
 		q: q,
 		c: r.c,
@@ -1086,6 +1130,7 @@ func (r *Container) WithServiceBinding(alias string, service *Service) *Containe
 	q := r.q.Select("withServiceBinding")
 	q = q.Arg("alias", alias)
 	q = q.Arg("service", service)
+
 	return &Container{
 		q: q,
 		c: r.c,
@@ -1113,6 +1158,7 @@ func (r *Container) WithUnixSocket(path string, source *Socket, opts ...Containe
 	}
 	q = q.Arg("path", path)
 	q = q.Arg("source", source)
+
 	return &Container{
 		q: q,
 		c: r.c,
@@ -1123,6 +1169,7 @@ func (r *Container) WithUnixSocket(path string, source *Socket, opts ...Containe
 func (r *Container) WithUser(name string) *Container {
 	q := r.q.Select("withUser")
 	q = q.Arg("name", name)
+
 	return &Container{
 		q: q,
 		c: r.c,
@@ -1133,6 +1180,7 @@ func (r *Container) WithUser(name string) *Container {
 func (r *Container) WithWorkdir(path string) *Container {
 	q := r.q.Select("withWorkdir")
 	q = q.Arg("path", path)
+
 	return &Container{
 		q: q,
 		c: r.c,
@@ -1143,6 +1191,7 @@ func (r *Container) WithWorkdir(path string) *Container {
 func (r *Container) WithoutEnvVariable(name string) *Container {
 	q := r.q.Select("withoutEnvVariable")
 	q = q.Arg("name", name)
+
 	return &Container{
 		q: q,
 		c: r.c,
@@ -1167,6 +1216,7 @@ func (r *Container) WithoutExposedPort(port int, opts ...ContainerWithoutExposed
 		}
 	}
 	q = q.Arg("port", port)
+
 	return &Container{
 		q: q,
 		c: r.c,
@@ -1179,6 +1229,7 @@ func (r *Container) WithoutExposedPort(port int, opts ...ContainerWithoutExposed
 // This is the initial state of all containers.
 func (r *Container) WithoutFocus() *Container {
 	q := r.q.Select("withoutFocus")
+
 	return &Container{
 		q: q,
 		c: r.c,
@@ -1189,6 +1240,7 @@ func (r *Container) WithoutFocus() *Container {
 func (r *Container) WithoutLabel(name string) *Container {
 	q := r.q.Select("withoutLabel")
 	q = q.Arg("name", name)
+
 	return &Container{
 		q: q,
 		c: r.c,
@@ -1199,6 +1251,7 @@ func (r *Container) WithoutLabel(name string) *Container {
 func (r *Container) WithoutMount(path string) *Container {
 	q := r.q.Select("withoutMount")
 	q = q.Arg("path", path)
+
 	return &Container{
 		q: q,
 		c: r.c,
@@ -1209,6 +1262,7 @@ func (r *Container) WithoutMount(path string) *Container {
 func (r *Container) WithoutRegistryAuth(address string) *Container {
 	q := r.q.Select("withoutRegistryAuth")
 	q = q.Arg("address", address)
+
 	return &Container{
 		q: q,
 		c: r.c,
@@ -1219,6 +1273,7 @@ func (r *Container) WithoutRegistryAuth(address string) *Container {
 func (r *Container) WithoutUnixSocket(path string) *Container {
 	q := r.q.Select("withoutUnixSocket")
 	q = q.Arg("path", path)
+
 	return &Container{
 		q: q,
 		c: r.c,
@@ -1231,6 +1286,7 @@ func (r *Container) Workdir(ctx context.Context) (string, error) {
 		return *r.workdir, nil
 	}
 	q := r.q.Select("workdir")
+
 	var response string
 
 	q = q.Bind(&response)
@@ -1259,6 +1315,7 @@ func (r *Directory) With(f WithDirectoryFunc) *Directory {
 func (r *Directory) Diff(other *Directory) *Directory {
 	q := r.q.Select("diff")
 	q = q.Arg("other", other)
+
 	return &Directory{
 		q: q,
 		c: r.c,
@@ -1269,6 +1326,7 @@ func (r *Directory) Diff(other *Directory) *Directory {
 func (r *Directory) Directory(path string) *Directory {
 	q := r.q.Select("directory")
 	q = q.Arg("path", path)
+
 	return &Directory{
 		q: q,
 		c: r.c,
@@ -1318,6 +1376,7 @@ func (r *Directory) DockerBuild(opts ...DirectoryDockerBuildOpts) *Container {
 			q = q.Arg("secrets", opts[i].Secrets)
 		}
 	}
+
 	return &Container{
 		q: q,
 		c: r.c,
@@ -1339,6 +1398,7 @@ func (r *Directory) Entries(ctx context.Context, opts ...DirectoryEntriesOpts) (
 			q = q.Arg("path", opts[i].Path)
 		}
 	}
+
 	var response []string
 
 	q = q.Bind(&response)
@@ -1352,6 +1412,7 @@ func (r *Directory) Export(ctx context.Context, path string) (bool, error) {
 	}
 	q := r.q.Select("export")
 	q = q.Arg("path", path)
+
 	var response bool
 
 	q = q.Bind(&response)
@@ -1362,6 +1423,7 @@ func (r *Directory) Export(ctx context.Context, path string) (bool, error) {
 func (r *Directory) File(path string) *File {
 	q := r.q.Select("file")
 	q = q.Arg("path", path)
+
 	return &File{
 		q: q,
 		c: r.c,
@@ -1374,6 +1436,7 @@ func (r *Directory) ID(ctx context.Context) (DirectoryID, error) {
 		return *r.id, nil
 	}
 	q := r.q.Select("id")
+
 	var response DirectoryID
 
 	q = q.Bind(&response)
@@ -1421,6 +1484,7 @@ func (r *Directory) Pipeline(name string, opts ...DirectoryPipelineOpts) *Direct
 		}
 	}
 	q = q.Arg("name", name)
+
 	return &Directory{
 		q: q,
 		c: r.c,
@@ -1430,6 +1494,7 @@ func (r *Directory) Pipeline(name string, opts ...DirectoryPipelineOpts) *Direct
 // Force evaluation in the engine.
 func (r *Directory) Sync(ctx context.Context) (*Directory, error) {
 	q := r.q.Select("sync")
+
 	return r, q.Execute(ctx, r.c)
 }
 
@@ -1456,6 +1521,7 @@ func (r *Directory) WithDirectory(path string, directory *Directory, opts ...Dir
 	}
 	q = q.Arg("path", path)
 	q = q.Arg("directory", directory)
+
 	return &Directory{
 		q: q,
 		c: r.c,
@@ -1481,6 +1547,7 @@ func (r *Directory) WithFile(path string, source *File, opts ...DirectoryWithFil
 	}
 	q = q.Arg("path", path)
 	q = q.Arg("source", source)
+
 	return &Directory{
 		q: q,
 		c: r.c,
@@ -1505,6 +1572,7 @@ func (r *Directory) WithNewDirectory(path string, opts ...DirectoryWithNewDirect
 		}
 	}
 	q = q.Arg("path", path)
+
 	return &Directory{
 		q: q,
 		c: r.c,
@@ -1530,6 +1598,7 @@ func (r *Directory) WithNewFile(path string, contents string, opts ...DirectoryW
 	}
 	q = q.Arg("path", path)
 	q = q.Arg("contents", contents)
+
 	return &Directory{
 		q: q,
 		c: r.c,
@@ -1540,6 +1609,7 @@ func (r *Directory) WithNewFile(path string, contents string, opts ...DirectoryW
 func (r *Directory) WithTimestamps(timestamp int) *Directory {
 	q := r.q.Select("withTimestamps")
 	q = q.Arg("timestamp", timestamp)
+
 	return &Directory{
 		q: q,
 		c: r.c,
@@ -1550,6 +1620,7 @@ func (r *Directory) WithTimestamps(timestamp int) *Directory {
 func (r *Directory) WithoutDirectory(path string) *Directory {
 	q := r.q.Select("withoutDirectory")
 	q = q.Arg("path", path)
+
 	return &Directory{
 		q: q,
 		c: r.c,
@@ -1560,6 +1631,7 @@ func (r *Directory) WithoutDirectory(path string) *Directory {
 func (r *Directory) WithoutFile(path string) *Directory {
 	q := r.q.Select("withoutFile")
 	q = q.Arg("path", path)
+
 	return &Directory{
 		q: q,
 		c: r.c,
@@ -1581,6 +1653,7 @@ func (r *EnvVariable) Name(ctx context.Context) (string, error) {
 		return *r.name, nil
 	}
 	q := r.q.Select("name")
+
 	var response string
 
 	q = q.Bind(&response)
@@ -1593,6 +1666,7 @@ func (r *EnvVariable) Value(ctx context.Context) (string, error) {
 		return *r.value, nil
 	}
 	q := r.q.Select("value")
+
 	var response string
 
 	q = q.Bind(&response)
@@ -1625,6 +1699,7 @@ func (r *File) Contents(ctx context.Context) (string, error) {
 		return *r.contents, nil
 	}
 	q := r.q.Select("contents")
+
 	var response string
 
 	q = q.Bind(&response)
@@ -1651,6 +1726,7 @@ func (r *File) Export(ctx context.Context, path string, opts ...FileExportOpts) 
 		}
 	}
 	q = q.Arg("path", path)
+
 	var response bool
 
 	q = q.Bind(&response)
@@ -1663,6 +1739,7 @@ func (r *File) ID(ctx context.Context) (FileID, error) {
 		return *r.id, nil
 	}
 	q := r.q.Select("id")
+
 	var response FileID
 
 	q = q.Bind(&response)
@@ -1694,6 +1771,7 @@ func (r *File) Size(ctx context.Context) (int, error) {
 		return *r.size, nil
 	}
 	q := r.q.Select("size")
+
 	var response int
 
 	q = q.Bind(&response)
@@ -1703,6 +1781,7 @@ func (r *File) Size(ctx context.Context) (int, error) {
 // Force evaluation in the engine.
 func (r *File) Sync(ctx context.Context) (*File, error) {
 	q := r.q.Select("sync")
+
 	return r, q.Execute(ctx, r.c)
 }
 
@@ -1710,6 +1789,7 @@ func (r *File) Sync(ctx context.Context) (*File, error) {
 func (r *File) WithTimestamps(timestamp int) *File {
 	q := r.q.Select("withTimestamps")
 	q = q.Arg("timestamp", timestamp)
+
 	return &File{
 		q: q,
 		c: r.c,
@@ -1742,6 +1822,7 @@ func (r *GitRef) Tree(opts ...GitRefTreeOpts) *Directory {
 			q = q.Arg("sshAuthSocket", opts[i].SSHAuthSocket)
 		}
 	}
+
 	return &Directory{
 		q: q,
 		c: r.c,
@@ -1758,6 +1839,7 @@ type GitRepository struct {
 func (r *GitRepository) Branch(name string) *GitRef {
 	q := r.q.Select("branch")
 	q = q.Arg("name", name)
+
 	return &GitRef{
 		q: q,
 		c: r.c,
@@ -1768,6 +1850,7 @@ func (r *GitRepository) Branch(name string) *GitRef {
 func (r *GitRepository) Commit(id string) *GitRef {
 	q := r.q.Select("commit")
 	q = q.Arg("id", id)
+
 	return &GitRef{
 		q: q,
 		c: r.c,
@@ -1778,6 +1861,7 @@ func (r *GitRepository) Commit(id string) *GitRef {
 func (r *GitRepository) Tag(name string) *GitRef {
 	q := r.q.Select("tag")
 	q = q.Arg("name", name)
+
 	return &GitRef{
 		q: q,
 		c: r.c,
@@ -1812,6 +1896,7 @@ func (r *Host) Directory(path string, opts ...HostDirectoryOpts) *Directory {
 		}
 	}
 	q = q.Arg("path", path)
+
 	return &Directory{
 		q: q,
 		c: r.c,
@@ -1822,7 +1907,32 @@ func (r *Host) Directory(path string, opts ...HostDirectoryOpts) *Directory {
 func (r *Host) File(path string) *File {
 	q := r.q.Select("file")
 	q = q.Arg("path", path)
+
 	return &File{
+		q: q,
+		c: r.c,
+	}
+}
+
+// HostReverseProxyOpts contains options for Host.ReverseProxy
+type HostReverseProxyOpts struct {
+	// Traffic protocol. Defaults to TCP.
+	Protocol NetworkProtocol
+}
+
+// Creates a proxy forwarding traffic via the host to a specified address.
+func (r *Host) ReverseProxy(upstreamAddress string, servicePort int, opts ...HostReverseProxyOpts) *Service {
+	q := r.q.Select("reverseProxy")
+	for i := len(opts) - 1; i >= 0; i-- {
+		// `protocol` optional argument
+		if !querybuilder.IsZeroValue(opts[i].Protocol) {
+			q = q.Arg("protocol", opts[i].Protocol)
+		}
+	}
+	q = q.Arg("upstreamAddress", upstreamAddress)
+	q = q.Arg("servicePort", servicePort)
+
+	return &Service{
 		q: q,
 		c: r.c,
 	}
@@ -1834,6 +1944,7 @@ func (r *Host) SetSecretFile(name string, path string) *Secret {
 	q := r.q.Select("setSecretFile")
 	q = q.Arg("name", name)
 	q = q.Arg("path", path)
+
 	return &Secret{
 		q: q,
 		c: r.c,
@@ -1844,6 +1955,7 @@ func (r *Host) SetSecretFile(name string, path string) *Secret {
 func (r *Host) UnixSocket(path string) *Socket {
 	q := r.q.Select("unixSocket")
 	q = q.Arg("path", path)
+
 	return &Socket{
 		q: q,
 		c: r.c,
@@ -1865,6 +1977,7 @@ func (r *Label) Name(ctx context.Context) (string, error) {
 		return *r.name, nil
 	}
 	q := r.q.Select("name")
+
 	var response string
 
 	q = q.Bind(&response)
@@ -1877,6 +1990,7 @@ func (r *Label) Value(ctx context.Context) (string, error) {
 		return *r.value, nil
 	}
 	q := r.q.Select("value")
+
 	var response string
 
 	q = q.Bind(&response)
@@ -1899,6 +2013,7 @@ func (r *Port) Description(ctx context.Context) (string, error) {
 		return *r.description, nil
 	}
 	q := r.q.Select("description")
+
 	var response string
 
 	q = q.Bind(&response)
@@ -1911,6 +2026,7 @@ func (r *Port) Port(ctx context.Context) (int, error) {
 		return *r.port, nil
 	}
 	q := r.q.Select("port")
+
 	var response int
 
 	q = q.Bind(&response)
@@ -1923,6 +2039,7 @@ func (r *Port) Protocol(ctx context.Context) (NetworkProtocol, error) {
 		return *r.protocol, nil
 	}
 	q := r.q.Select("protocol")
+
 	var response NetworkProtocol
 
 	q = q.Bind(&response)
@@ -1949,6 +2066,7 @@ func (r *Project) With(f WithProjectFunc) *Project {
 // Commands provided by this project
 func (r *Project) Commands(ctx context.Context) ([]ProjectCommand, error) {
 	q := r.q.Select("commands")
+
 	q = q.Select("description id name resultType")
 
 	type commands struct {
@@ -1970,6 +2088,7 @@ func (r *Project) Commands(ctx context.Context) ([]ProjectCommand, error) {
 	var response []commands
 
 	q = q.Bind(&response)
+
 	err := q.Execute(ctx, r.c)
 	if err != nil {
 		return nil, err
@@ -1984,6 +2103,7 @@ func (r *Project) ID(ctx context.Context) (ProjectID, error) {
 		return *r.id, nil
 	}
 	q := r.q.Select("id")
+
 	var response ProjectID
 
 	q = q.Bind(&response)
@@ -2014,6 +2134,7 @@ func (r *Project) Load(source *Directory, configPath string) *Project {
 	q := r.q.Select("load")
 	q = q.Arg("source", source)
 	q = q.Arg("configPath", configPath)
+
 	return &Project{
 		q: q,
 		c: r.c,
@@ -2026,6 +2147,7 @@ func (r *Project) Name(ctx context.Context) (string, error) {
 		return *r.name, nil
 	}
 	q := r.q.Select("name")
+
 	var response string
 
 	q = q.Bind(&response)
@@ -2049,6 +2171,7 @@ func (r *ProjectCommand) Description(ctx context.Context) (string, error) {
 		return *r.description, nil
 	}
 	q := r.q.Select("description")
+
 	var response string
 
 	q = q.Bind(&response)
@@ -2058,6 +2181,7 @@ func (r *ProjectCommand) Description(ctx context.Context) (string, error) {
 // Flags accepted by this command.
 func (r *ProjectCommand) Flags(ctx context.Context) ([]ProjectCommandFlag, error) {
 	q := r.q.Select("flags")
+
 	q = q.Select("description name")
 
 	type flags struct {
@@ -2077,6 +2201,7 @@ func (r *ProjectCommand) Flags(ctx context.Context) ([]ProjectCommandFlag, error
 	var response []flags
 
 	q = q.Bind(&response)
+
 	err := q.Execute(ctx, r.c)
 	if err != nil {
 		return nil, err
@@ -2091,6 +2216,7 @@ func (r *ProjectCommand) ID(ctx context.Context) (ProjectCommandID, error) {
 		return *r.id, nil
 	}
 	q := r.q.Select("id")
+
 	var response ProjectCommandID
 
 	q = q.Bind(&response)
@@ -2122,6 +2248,7 @@ func (r *ProjectCommand) Name(ctx context.Context) (string, error) {
 		return *r.name, nil
 	}
 	q := r.q.Select("name")
+
 	var response string
 
 	q = q.Bind(&response)
@@ -2134,6 +2261,7 @@ func (r *ProjectCommand) ResultType(ctx context.Context) (string, error) {
 		return *r.resultType, nil
 	}
 	q := r.q.Select("resultType")
+
 	var response string
 
 	q = q.Bind(&response)
@@ -2143,6 +2271,7 @@ func (r *ProjectCommand) ResultType(ctx context.Context) (string, error) {
 // Subcommands, if any, that this command provides.
 func (r *ProjectCommand) Subcommands(ctx context.Context) ([]ProjectCommand, error) {
 	q := r.q.Select("subcommands")
+
 	q = q.Select("description id name resultType")
 
 	type subcommands struct {
@@ -2164,6 +2293,7 @@ func (r *ProjectCommand) Subcommands(ctx context.Context) ([]ProjectCommand, err
 	var response []subcommands
 
 	q = q.Bind(&response)
+
 	err := q.Execute(ctx, r.c)
 	if err != nil {
 		return nil, err
@@ -2187,6 +2317,7 @@ func (r *ProjectCommandFlag) Description(ctx context.Context) (string, error) {
 		return *r.description, nil
 	}
 	q := r.q.Select("description")
+
 	var response string
 
 	q = q.Bind(&response)
@@ -2199,6 +2330,7 @@ func (r *ProjectCommandFlag) Name(ctx context.Context) (string, error) {
 		return *r.name, nil
 	}
 	q := r.q.Select("name")
+
 	var response string
 
 	q = q.Bind(&response)
@@ -2218,6 +2350,7 @@ func (r *Client) With(f WithClientFunc) *Client {
 func (r *Client) CacheVolume(key string) *CacheVolume {
 	q := r.q.Select("cacheVolume")
 	q = q.Arg("key", key)
+
 	return &CacheVolume{
 		q: q,
 		c: r.c,
@@ -2248,6 +2381,7 @@ func (r *Client) Container(opts ...ContainerOpts) *Container {
 			q = q.Arg("platform", opts[i].Platform)
 		}
 	}
+
 	return &Container{
 		q: q,
 		c: r.c,
@@ -2257,6 +2391,7 @@ func (r *Client) Container(opts ...ContainerOpts) *Container {
 // The default platform of the builder.
 func (r *Client) DefaultPlatform(ctx context.Context) (Platform, error) {
 	q := r.q.Select("defaultPlatform")
+
 	var response Platform
 
 	q = q.Bind(&response)
@@ -2277,6 +2412,7 @@ func (r *Client) Directory(opts ...DirectoryOpts) *Directory {
 			q = q.Arg("id", opts[i].ID)
 		}
 	}
+
 	return &Directory{
 		q: q,
 		c: r.c,
@@ -2287,6 +2423,7 @@ func (r *Client) Directory(opts ...DirectoryOpts) *Directory {
 func (r *Client) File(id FileID) *File {
 	q := r.q.Select("file")
 	q = q.Arg("id", id)
+
 	return &File{
 		q: q,
 		c: r.c,
@@ -2315,6 +2452,7 @@ func (r *Client) Git(url string, opts ...GitOpts) *GitRepository {
 		}
 	}
 	q = q.Arg("url", url)
+
 	return &GitRepository{
 		q: q,
 		c: r.c,
@@ -2324,6 +2462,7 @@ func (r *Client) Git(url string, opts ...GitOpts) *GitRepository {
 // Queries the host environment.
 func (r *Client) Host() *Host {
 	q := r.q.Select("host")
+
 	return &Host{
 		q: q,
 		c: r.c,
@@ -2346,6 +2485,7 @@ func (r *Client) HTTP(url string, opts ...HTTPOpts) *File {
 		}
 	}
 	q = q.Arg("url", url)
+
 	return &File{
 		q: q,
 		c: r.c,
@@ -2374,6 +2514,7 @@ func (r *Client) Pipeline(name string, opts ...PipelineOpts) *Client {
 		}
 	}
 	q = q.Arg("name", name)
+
 	return &Client{
 		q: q,
 		c: r.c,
@@ -2394,6 +2535,7 @@ func (r *Client) Project(opts ...ProjectOpts) *Project {
 			q = q.Arg("id", opts[i].ID)
 		}
 	}
+
 	return &Project{
 		q: q,
 		c: r.c,
@@ -2414,6 +2556,7 @@ func (r *Client) ProjectCommand(opts ...ProjectCommandOpts) *ProjectCommand {
 			q = q.Arg("id", opts[i].ID)
 		}
 	}
+
 	return &ProjectCommand{
 		q: q,
 		c: r.c,
@@ -2424,6 +2567,7 @@ func (r *Client) ProjectCommand(opts ...ProjectCommandOpts) *ProjectCommand {
 func (r *Client) Secret(id SecretID) *Secret {
 	q := r.q.Select("secret")
 	q = q.Arg("id", id)
+
 	return &Secret{
 		q: q,
 		c: r.c,
@@ -2434,6 +2578,7 @@ func (r *Client) Secret(id SecretID) *Secret {
 func (r *Client) Service(id ServiceID) *Service {
 	q := r.q.Select("service")
 	q = q.Arg("id", id)
+
 	return &Service{
 		q: q,
 		c: r.c,
@@ -2446,6 +2591,7 @@ func (r *Client) SetSecret(name string, plaintext string) *Secret {
 	q := r.q.Select("setSecret")
 	q = q.Arg("name", name)
 	q = q.Arg("plaintext", plaintext)
+
 	return &Secret{
 		q: q,
 		c: r.c,
@@ -2466,6 +2612,7 @@ func (r *Client) Socket(opts ...SocketOpts) *Socket {
 			q = q.Arg("id", opts[i].ID)
 		}
 	}
+
 	return &Socket{
 		q: q,
 		c: r.c,
@@ -2487,6 +2634,7 @@ func (r *Secret) ID(ctx context.Context) (SecretID, error) {
 		return *r.id, nil
 	}
 	q := r.q.Select("id")
+
 	var response SecretID
 
 	q = q.Bind(&response)
@@ -2518,6 +2666,7 @@ func (r *Secret) Plaintext(ctx context.Context) (string, error) {
 		return *r.plaintext, nil
 	}
 	q := r.q.Select("plaintext")
+
 	var response string
 
 	q = q.Bind(&response)
@@ -2531,6 +2680,16 @@ type Service struct {
 	endpoint *string
 	hostname *string
 	id       *ServiceID
+	start    *ServiceID
+	stop     *ServiceID
+}
+type WithServiceFunc func(r *Service) *Service
+
+// With calls the provided function with current Service.
+//
+// This is useful for reusability and readability by not breaking the calling chain.
+func (r *Service) With(f WithServiceFunc) *Service {
+	return f(r)
 }
 
 // ServiceEndpointOpts contains options for Service.Endpoint
@@ -2563,6 +2722,7 @@ func (r *Service) Endpoint(ctx context.Context, opts ...ServiceEndpointOpts) (st
 			q = q.Arg("scheme", opts[i].Scheme)
 		}
 	}
+
 	var response string
 
 	q = q.Bind(&response)
@@ -2577,6 +2737,7 @@ func (r *Service) Hostname(ctx context.Context) (string, error) {
 		return *r.hostname, nil
 	}
 	q := r.q.Select("hostname")
+
 	var response string
 
 	q = q.Bind(&response)
@@ -2589,6 +2750,7 @@ func (r *Service) ID(ctx context.Context) (ServiceID, error) {
 		return *r.id, nil
 	}
 	q := r.q.Select("id")
+
 	var response ServiceID
 
 	q = q.Bind(&response)
@@ -2614,24 +2776,60 @@ func (r *Service) XXX_GraphQLID(ctx context.Context) (string, error) {
 	return string(id), nil
 }
 
+// ServiceProxyOpts contains options for Service.Proxy
+type ServiceProxyOpts struct {
+	// Service port to send traffic. Defaults to first exposed port.
+	ServicePort int
+	// Traffic protocol. Defaults to TCP.
+	Protocol NetworkProtocol
+}
+
+// Defines a proxy to forward traffic from a host IP:Port to this service.
+func (r *Service) Proxy(hostListenAddress string, opts ...ServiceProxyOpts) *Service {
+	q := r.q.Select("proxy")
+	for i := len(opts) - 1; i >= 0; i-- {
+		// `servicePort` optional argument
+		if !querybuilder.IsZeroValue(opts[i].ServicePort) {
+			q = q.Arg("servicePort", opts[i].ServicePort)
+		}
+		// `protocol` optional argument
+		if !querybuilder.IsZeroValue(opts[i].Protocol) {
+			q = q.Arg("protocol", opts[i].Protocol)
+		}
+	}
+	q = q.Arg("hostListenAddress", hostListenAddress)
+
+	return &Service{
+		q: q,
+		c: r.c,
+	}
+}
+
 // Start the service and wait for its health checks to succeed.
 //
 // Services bound to a Container do not need to be manually started.
-func (r *Service) Start(ctx context.Context) error {
+func (r *Service) Start(ctx context.Context) (*Service, error) {
 	q := r.q.Select("start")
-	var response Void
 
-	q = q.Bind(&response)
-	return q.Execute(ctx, r.c)
+	return r, q.Execute(ctx, r.c)
 }
 
 // Stop the service.
-func (r *Service) Stop(ctx context.Context) error {
+func (r *Service) Stop(ctx context.Context) (*Service, error) {
 	q := r.q.Select("stop")
-	var response Void
 
-	q = q.Bind(&response)
-	return q.Execute(ctx, r.c)
+	return r, q.Execute(ctx, r.c)
+}
+
+// Accesses a Unix socket in the service.
+func (r *Service) UnixSocket(path string) *Socket {
+	q := r.q.Select("unixSocket")
+	q = q.Arg("path", path)
+
+	return &Socket{
+		q: q,
+		c: r.c,
+	}
 }
 
 type Socket struct {
@@ -2647,6 +2845,7 @@ func (r *Socket) ID(ctx context.Context) (SocketID, error) {
 		return *r.id, nil
 	}
 	q := r.q.Select("id")
+
 	var response SocketID
 
 	q = q.Bind(&response)

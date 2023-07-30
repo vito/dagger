@@ -520,6 +520,13 @@ export type HostDirectoryOpts = {
   include?: string[]
 }
 
+export type HostReverseProxyOpts = {
+  /**
+   * Traffic protocol. Defaults to TCP.
+   */
+  protocol?: NetworkProtocol
+}
+
 /**
  * The `ID` scalar type represents a unique identifier, often used to refetch an object or as key for a cache. The ID type appears in a JSON response as a String; however, it is not intended to be human-readable. When expected as an input type, any string (such as `"4"`) or integer (such as `4`) input value will be accepted as an ID.
  */
@@ -653,6 +660,18 @@ export type ServiceEndpointOpts = {
   scheme?: string
 }
 
+export type ServiceProxyOpts = {
+  /**
+   * Service port to send traffic. Defaults to first exposed port.
+   */
+  servicePort?: number
+
+  /**
+   * Traffic protocol. Defaults to TCP.
+   */
+  protocol?: NetworkProtocol
+}
+
 /**
  * A unique service identifier.
  */
@@ -662,11 +681,6 @@ export type ServiceID = string & { __ServiceID: never }
  * A content-addressed socket identifier.
  */
 export type SocketID = string & { __SocketID: never }
-
-/**
- * Nothing. Used by SDK codegen to skip the return value.
- */
-export type Void = string & { __Void: never }
 
 export type __TypeEnumValuesOpts = {
   includeDeprecated?: boolean
@@ -2521,6 +2535,30 @@ export class Host extends BaseClient {
   }
 
   /**
+   * Creates a proxy forwarding traffic via the host to a specified address.
+   * @param upstreamAddress Backend server host:port for traffic forwarding.
+   * @param servicePort Listening port for incoming connections.
+   * @param opts.protocol Traffic protocol. Defaults to TCP.
+   */
+  reverseProxy(
+    upstreamAddress: string,
+    servicePort: number,
+    opts?: HostReverseProxyOpts
+  ): Service {
+    return new Service({
+      queryTree: [
+        ...this._queryTree,
+        {
+          operation: "reverseProxy",
+          args: { upstreamAddress, servicePort, ...opts },
+        },
+      ],
+      host: this.clientHost,
+      sessionToken: this.sessionToken,
+    })
+  }
+
+  /**
    * Sets a secret given a user-defined name and the file path on the host, and returns the secret.
    * The file is limited to a size of 512000 bytes.
    * @param name The user defined name for this secret.
@@ -3268,12 +3306,32 @@ export class Service extends BaseClient {
   }
 
   /**
+   * Defines a proxy to forward traffic from a host IP:Port to this service.
+   * @param hostListenAddress Host IP:Port for proxy binding. Port 0 implies any available port.
+   * @param opts.servicePort Service port to send traffic. Defaults to first exposed port.
+   * @param opts.protocol Traffic protocol. Defaults to TCP.
+   */
+  proxy(hostListenAddress: string, opts?: ServiceProxyOpts): Service {
+    return new Service({
+      queryTree: [
+        ...this._queryTree,
+        {
+          operation: "proxy",
+          args: { hostListenAddress, ...opts },
+        },
+      ],
+      host: this.clientHost,
+      sessionToken: this.sessionToken,
+    })
+  }
+
+  /**
    * Start the service and wait for its health checks to succeed.
    *
    * Services bound to a Container do not need to be manually started.
    */
-  async start(): Promise<Void> {
-    const response: Awaited<Void> = await computeQuery(
+  async start(): Promise<Service> {
+    await computeQuery(
       [
         ...this._queryTree,
         {
@@ -3283,14 +3341,14 @@ export class Service extends BaseClient {
       this.client
     )
 
-    return response
+    return this
   }
 
   /**
    * Stop the service.
    */
-  async stop(): Promise<Void> {
-    const response: Awaited<Void> = await computeQuery(
+  async stop(): Promise<Service> {
+    await computeQuery(
       [
         ...this._queryTree,
         {
@@ -3300,7 +3358,34 @@ export class Service extends BaseClient {
       this.client
     )
 
-    return response
+    return this
+  }
+
+  /**
+   * Accesses a Unix socket in the service.
+   * @param path Location of the Unix socket (e.g., "/var/run/docker.sock").
+   */
+  unixSocket(path: string): Socket {
+    return new Socket({
+      queryTree: [
+        ...this._queryTree,
+        {
+          operation: "unixSocket",
+          args: { path },
+        },
+      ],
+      host: this.clientHost,
+      sessionToken: this.sessionToken,
+    })
+  }
+
+  /**
+   * Call the provided function with current Service.
+   *
+   * This is useful for reusability and readability by not breaking the calling chain.
+   */
+  with(arg: (param: Service) => Service) {
+    return arg(this)
   }
 }
 

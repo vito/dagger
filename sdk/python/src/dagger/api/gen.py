@@ -51,10 +51,6 @@ class SocketID(Scalar):
     """A content-addressed socket identifier."""
 
 
-class Void(Scalar):
-    """Nothing. Used by SDK codegen to skip the return value."""
-
-
 class CacheSharingMode(Enum):
     """Sharing mode of the cache volume."""
 
@@ -2245,6 +2241,34 @@ class Host(Type):
         return File(_ctx)
 
     @typecheck
+    def reverse_proxy(
+        self,
+        upstream_address: str,
+        service_port: int,
+        *,
+        protocol: Optional[NetworkProtocol] = None,
+    ) -> "Service":
+        """Creates a proxy forwarding traffic via the host to a specified
+        address.
+
+        Parameters
+        ----------
+        upstream_address:
+            Backend server host:port for traffic forwarding.
+        service_port:
+            Listening port for incoming connections.
+        protocol:
+            Traffic protocol. Defaults to TCP.
+        """
+        _args = [
+            Arg("upstreamAddress", upstream_address),
+            Arg("servicePort", service_port),
+            Arg("protocol", protocol, None),
+        ]
+        _ctx = self._select("reverseProxy", _args)
+        return Service(_ctx)
+
+    @typecheck
     def set_secret_file(self, name: str, path: str) -> "Secret":
         """Sets a secret given a user-defined name and the file path on the host,
         and returns the secret.
@@ -3128,15 +3152,38 @@ class Service(Type):
         return "service"
 
     @typecheck
-    async def start(self) -> Void:
+    def proxy(
+        self,
+        host_listen_address: str,
+        *,
+        service_port: Optional[int] = None,
+        protocol: Optional[NetworkProtocol] = None,
+    ) -> "Service":
+        """Defines a proxy to forward traffic from a host IP:Port to this
+        service.
+
+        Parameters
+        ----------
+        host_listen_address:
+            Host IP:Port for proxy binding. Port 0 implies any available port.
+        service_port:
+            Service port to send traffic. Defaults to first exposed port.
+        protocol:
+            Traffic protocol. Defaults to TCP.
+        """
+        _args = [
+            Arg("hostListenAddress", host_listen_address),
+            Arg("servicePort", service_port, None),
+            Arg("protocol", protocol, None),
+        ]
+        _ctx = self._select("proxy", _args)
+        return Service(_ctx)
+
+    @typecheck
+    async def start(self) -> "Service":
         """Start the service and wait for its health checks to succeed.
 
         Services bound to a Container do not need to be manually started.
-
-        Returns
-        -------
-        Void
-            Nothing. Used by SDK codegen to skip the return value.
 
         Raises
         ------
@@ -3147,16 +3194,13 @@ class Service(Type):
         """
         _args: list[Arg] = []
         _ctx = self._select("start", _args)
-        return await _ctx.execute(Void)
+        _id = await _ctx.execute(ServiceID)
+        _ctx = self._root_select("service", [Arg("id", _id)])
+        return Service(_ctx)
 
     @typecheck
-    async def stop(self) -> Void:
+    async def stop(self) -> "Service":
         """Stop the service.
-
-        Returns
-        -------
-        Void
-            Nothing. Used by SDK codegen to skip the return value.
 
         Raises
         ------
@@ -3167,7 +3211,31 @@ class Service(Type):
         """
         _args: list[Arg] = []
         _ctx = self._select("stop", _args)
-        return await _ctx.execute(Void)
+        _id = await _ctx.execute(ServiceID)
+        _ctx = self._root_select("service", [Arg("id", _id)])
+        return Service(_ctx)
+
+    @typecheck
+    def unix_socket(self, path: str) -> "Socket":
+        """Accesses a Unix socket in the service.
+
+        Parameters
+        ----------
+        path:
+            Location of the Unix socket (e.g., "/var/run/docker.sock").
+        """
+        _args = [
+            Arg("path", path),
+        ]
+        _ctx = self._select("unixSocket", _args)
+        return Socket(_ctx)
+
+    def with_(self, cb: Callable[["Service"], "Service"]) -> "Service":
+        """Call the provided callable with current Service.
+
+        This is useful for reusability and readability by not breaking the calling chain.
+        """
+        return cb(self)
 
 
 class Socket(Type):
@@ -3238,5 +3306,4 @@ __all__ = [
     "ServiceID",
     "Socket",
     "SocketID",
-    "Void",
 ]

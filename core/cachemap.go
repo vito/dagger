@@ -21,6 +21,24 @@ func newCacheMap[K comparable, T any]() *cacheMap[K, T] {
 	}
 }
 
+func (m *cacheMap[K, T]) Get(key K) (val T, found bool) {
+	m.l.Lock()
+	if c, ok := m.calls[key]; ok {
+		m.l.Unlock()
+		c.wg.Wait()
+		return c.val, c.err == nil
+	}
+	return
+}
+
+func (m *cacheMap[K, T]) Set(key K, val T) {
+	m.l.Lock()
+	m.calls[key] = &cache[T]{
+		val: val,
+	}
+	m.l.Unlock()
+}
+
 func (m *cacheMap[K, T]) GetOrInitialize(key K, fn func() (T, error)) (T, error) {
 	m.l.Lock()
 	if c, ok := m.calls[key]; ok {
