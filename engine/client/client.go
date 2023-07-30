@@ -21,6 +21,7 @@ import (
 	"github.com/cenkalti/backoff/v4"
 	"github.com/dagger/dagger/core/pipeline"
 	"github.com/dagger/dagger/engine"
+	"github.com/dagger/dagger/engine/session"
 	"github.com/dagger/dagger/telemetry"
 	"github.com/docker/cli/cli/config"
 	"github.com/google/uuid"
@@ -232,6 +233,9 @@ func Connect(ctx context.Context, params Params) (_ *Client, _ context.Context, 
 
 	// registry auth
 	bkSession.Allow(authprovider.NewDockerAuthProvider(config.LoadDefaultConfigFile(os.Stderr)))
+
+	// host=>container networking
+	bkSession.Allow(session.NewProxyListenerAttachable())
 
 	// connect to the server, registering our session attachables and starting the server if not
 	// already started
