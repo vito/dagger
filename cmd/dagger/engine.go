@@ -151,6 +151,10 @@ func inlineTUI(
 	tape.ShowInternal(debug)
 	tape.Focus(focus)
 
+	if debug {
+		tape.MessageLevel(progrock.MessageLevel_DEBUG)
+	}
+
 	progW, engineErr := progrockTee(tape)
 	if engineErr != nil {
 		return engineErr
