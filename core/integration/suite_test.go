@@ -44,10 +44,11 @@ func connectWithBufferedLogs(t *testing.T) (*dagger.Client, context.Context, *sa
 	return c, ctx, output
 }
 
-func connectWithLogOutput(t require.TestingT, logOutput io.Writer) (*dagger.Client, context.Context) {
+func connectWithLogOutput(t *testing.T, logOutput io.Writer) (*dagger.Client, context.Context) {
 	ctx := context.Background()
 	client, err := dagger.Connect(ctx, dagger.WithLogOutput(logOutput))
 	require.NoError(t, err)
+	t.Cleanup(func() { client.Close() })
 	return client, ctx
 }
 
