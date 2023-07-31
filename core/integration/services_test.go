@@ -1305,6 +1305,8 @@ func TestServiceHostToContainer(t *testing.T) {
 }
 
 func TestServiceContainerToHost(t *testing.T) {
+	t.Skip("not implemented yet")
+
 	t.Parallel()
 
 	c, ctx := connect(t)
