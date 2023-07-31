@@ -1431,6 +1431,8 @@ github.com/vito/progrock v0.8.2-0.20230730201904-4246ea1cfc6d h1:VCgVBBdElsaRAB0
 github.com/vito/progrock v0.8.2-0.20230730201904-4246ea1cfc6d/go.mod h1:1KTQP8B56h0didAAY+/kmhGjp423TSBrNUrgUWYo9ec=
 github.com/vito/progrock v0.8.2-0.20230730203136-1b3fff62a239 h1:tVK5FjKJA3SEc3qf8+Zdhsm0DL8bN4au4TyCjqtQARY=
 github.com/vito/progrock v0.8.2-0.20230730203136-1b3fff62a239/go.mod h1:1KTQP8B56h0didAAY+/kmhGjp423TSBrNUrgUWYo9ec=
+github.com/vito/progrock v0.8.2-0.20230731004442-acdabc74b27f h1:TTQfi/uAUgAxvcVsx/KaFRNOgT6hIVObwf65kAY4wGY=
+github.com/vito/progrock v0.8.2-0.20230731004442-acdabc74b27f/go.mod h1:1KTQP8B56h0didAAY+/kmhGjp423TSBrNUrgUWYo9ec=
 github.com/vito/vt100 v0.1.2 h1:gRhKJ/shHTRfMHg+Wc5ExHJzV6HHZqyQIAL52x4EUmA=
 github.com/vito/vt100 v0.1.2/go.mod h1:ByMBsZZEP04RrkT9q/UxvZOjECM8Xc/MRLZ7GLrAUXs=
 github.com/vmware/govmomi v0.20.3/go.mod h1:URlwyTFZX72RmxtxuaFL2Uj3fD1JTvZdx59bHWk6aFU=
