@@ -537,18 +537,8 @@ func (svc *Service) mounts(ctx context.Context, bk *buildkit.Client) ([]bkgw.Mou
 			return nil, fmt.Errorf("unsupported socket: only unix paths are implemented")
 		}
 
-		socket, err := ctrSocket.SocketID.ToSocket()
-		if err != nil {
-			return nil, err
-		}
-
-		llbID, err := bk.SocketLLBID(socket.HostPath, socket.ClientHostname)
-		if err != nil {
-			return nil, err
-		}
-
 		opt := &pb.SSHOpt{
-			ID: llbID,
+			ID: ctrSocket.SocketID.String(),
 		}
 
 		if ctrSocket.Owner != nil {

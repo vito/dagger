@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -30,15 +31,21 @@ import (
 	"github.com/moby/buildkit/util/imageutil"
 	"github.com/moby/buildkit/util/leaseutil"
 	"github.com/moby/buildkit/util/throttle"
+	"github.com/moby/buildkit/util/tracing/transform"
 	bkworker "github.com/moby/buildkit/worker"
+	"github.com/sirupsen/logrus"
+	"go.opentelemetry.io/otel/sdk/trace"
 	tracev1 "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
-// TODO: just hit a panic in BuildkitController.Serve but client just sat blocked, fix that
 type BuildkitController struct {
 	BuildkitControllerOpts
+	*tracev1.UnimplementedTraceServiceServer // needed for grpc service register to not complain
+
 	llbSolver             *llbsolver.Solver
 	genericSolver         *solver.Solver
 	cacheManager          solver.CacheManager
@@ -47,7 +54,7 @@ type BuildkitController struct {
 
 	// server id -> server
 	servers  map[string]*DaggerServer
-	serverMu sync.Mutex
+	serverMu sync.RWMutex
 
 	throttledGC func()
 	gcmu        sync.Mutex
@@ -62,12 +69,12 @@ type BuildkitControllerOpts struct {
 	Entitlements           []string
 	EngineName             string
 	Frontends              map[string]frontend.Frontend
+	TraceCollector         trace.SpanExporter
 	UpstreamCacheExporters map[string]remotecache.ResolveCacheExporterFunc
 	UpstreamCacheImporters map[string]remotecache.ResolveCacheImporterFunc
 	DNSConfig              *oci.DNSConfig
 }
 
-// TODO: setup cache manager here instead of cmd/engine/main.go
 func NewBuildkitController(opts BuildkitControllerOpts) (*BuildkitController, error) {
 	w, err := opts.WorkerController.GetDefault()
 	if err != nil {
@@ -116,32 +123,98 @@ func NewBuildkitController(opts BuildkitControllerOpts) (*BuildkitController, er
 	return e, nil
 }
 
-func (e *BuildkitController) Solve(ctx context.Context, req *controlapi.SolveRequest) (*controlapi.SolveResponse, error) {
+func (e *BuildkitController) LogMetrics(l *logrus.Entry) *logrus.Entry {
+	e.serverMu.RLock()
+	defer e.serverMu.RUnlock()
+	l = l.WithField("dagger-server-count", len(e.servers))
+	for _, s := range e.servers {
+		l = s.LogMetrics(l)
+	}
+	return l
+}
+
+func (e *BuildkitController) Session(stream controlapi.Control_SessionServer) (rerr error) {
+	defer func() {
+		// a panic would indicate a bug, but we don't want to take down the entire server
+		if err := recover(); err != nil {
+			bklog.G(context.Background()).WithError(fmt.Errorf("%v", err)).Errorf("panic in session call")
+			rerr = fmt.Errorf("panic in session call, please report a bug: %v %s", err, string(debug.Stack()))
+		}
+	}()
+
+	ctx, cancel := context.WithCancel(stream.Context())
+	defer cancel()
+
 	opts, err := engine.ClientMetadataFromContext(ctx)
 	if err != nil {
-		return nil, err
+		bklog.G(ctx).WithError(err).Errorf("failed to get client metadata for session call")
+		return fmt.Errorf("failed to get client metadata for session call: %w", err)
+	}
+	ctx = bklog.WithLogger(ctx, bklog.G(ctx).
+		WithField("client_id", opts.ClientID).
+		WithField("client_hostname", opts.ClientHostname).
+		WithField("server_id", opts.ServerID))
+	bklog.G(ctx).WithField("register_client", opts.RegisterClient).Trace("handling session call")
+	defer func() {
+		bklog.G(ctx).WithError(rerr).Debugf("session call done")
+	}()
+
+	conn, closeCh, hijackmd := grpchijack.Hijack(stream)
+	defer conn.Close()
+	go func() {
+		<-closeCh
+		cancel()
+	}()
+
+	if !opts.RegisterClient {
+		e.serverMu.Lock()
+		srv, ok := e.servers[opts.ServerID]
+		if !ok {
+			e.serverMu.Unlock()
+			return fmt.Errorf("server %q not found", opts.ServerID)
+		}
+		err := srv.bkClient.VerifyClient(opts.ClientID, opts.ClientSecretToken)
+		if err != nil {
+			e.serverMu.Unlock()
+			return fmt.Errorf("failed to verify client: %w", err)
+		}
+		e.serverMu.Unlock()
+		bklog.G(ctx).Debugf("forwarding client to server")
+		return srv.ServeClientConn(ctx, opts, conn)
 	}
 
-	getCallerCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	caller, err := e.SessionManager.Get(getCallerCtx, opts.ClientID, false)
-	if err != nil {
-		return nil, err
-	}
+	bklog.G(ctx).Debugf("registering client")
+
+	eg, egctx := errgroup.WithContext(ctx)
+	eg.Go(func() error {
+		bklog.G(ctx).Trace("session manager handling conn")
+		err := e.SessionManager.HandleConn(egctx, conn, hijackmd)
+		bklog.G(ctx).WithError(err).Trace("session manager handle conn done")
+		return err
+	})
 
 	e.serverMu.Lock()
-	rtr, ok := e.servers[opts.ServerID]
+	srv, ok := e.servers[opts.ServerID]
 	if !ok {
-		bklog.G(ctx).Debugf("creating new server %q for client %s", opts.ServerID, opts.ClientID)
+		bklog.G(ctx).Debugf("initializing new server")
+
+		getSessionCtx, getSessionCancel := context.WithTimeout(ctx, 10*time.Second)
+		defer getSessionCancel()
+		caller, err := e.SessionManager.Get(getSessionCtx, opts.ClientID, false)
+		if err != nil {
+			e.serverMu.Unlock()
+			return err
+		}
+
 		secretStore := core.NewSecretStore()
 		authProvider := auth.NewRegistryAuthProvider()
 
 		var cacheImporterCfgs []bkgw.CacheOptionsEntry
-		for _, cacheImportCfg := range req.Cache.Imports {
+		for _, cacheImportCfg := range opts.UpstreamCacheConfig {
 			_, ok := e.UpstreamCacheImporters[cacheImportCfg.Type]
 			if !ok {
 				e.serverMu.Unlock()
-				return nil, fmt.Errorf("unknown cache importer type %q", cacheImportCfg.Type)
+				return fmt.Errorf("unknown cache importer type %q", cacheImportCfg.Type)
 			}
 			cacheImporterCfgs = append(cacheImporterCfgs, bkgw.CacheOptionsEntry{
 				Type:  cacheImportCfg.Type,
@@ -163,33 +236,79 @@ func (e *BuildkitController) Solve(ctx context.Context, req *controlapi.SolveReq
 		})
 		if err != nil {
 			e.serverMu.Unlock()
-			return nil, err
+			return err
 		}
 		secretStore.SetBuildkitClient(bkClient)
 
 		labels := opts.Labels
 		labels = append(labels, pipeline.EngineLabel(e.EngineName))
-		rtr, err = NewDaggerServer(ctx, bkClient, e.worker, caller, opts.ServerID, secretStore, authProvider, labels)
+
+		srv, err = NewDaggerServer(ctx, bkClient, e.worker, caller, opts.ServerID, secretStore, authProvider, labels)
 		if err != nil {
 			e.serverMu.Unlock()
-			return nil, err
+			return err
 		}
-		e.servers[opts.ServerID] = rtr
+		e.servers[opts.ServerID] = srv
 
 		// delete the server after the initial client who created it exits
 		defer func() {
+			bklog.G(ctx).Trace("removing server")
 			e.serverMu.Lock()
-			rtr.Close()
+			srv.Close()
 			delete(e.servers, opts.ServerID)
 			e.serverMu.Unlock()
 
 			if err := bkClient.Close(); err != nil {
 				bklog.G(ctx).WithError(err).Errorf("failed to close buildkit client for server %s", opts.ServerID)
 			}
+			bklog.G(ctx).Trace("closed buildkit client")
 
-			// TODO: synchronous? or put this in a goroutine?
 			time.AfterFunc(time.Second, e.throttledGC)
+			bklog.G(ctx).Trace("server removed")
 		}()
+	}
+
+	err = srv.bkClient.RegisterClient(opts.ClientID, opts.ClientHostname, opts.ClientSecretToken)
+	if err != nil {
+		e.serverMu.Unlock()
+		return fmt.Errorf("failed to register client: %w", err)
+	}
+	e.serverMu.Unlock()
+
+	eg.Go(func() error {
+		bklog.G(ctx).Trace("waiting for server")
+		err := srv.Wait(egctx)
+		bklog.G(ctx).WithError(err).Trace("server done")
+		return err
+	})
+	err = eg.Wait()
+	if errors.Is(err, context.Canceled) {
+		err = nil
+	}
+	return err
+}
+
+// Solve is currently only used for triggering upstream remote cache exports on a dagger server
+func (e *BuildkitController) Solve(ctx context.Context, req *controlapi.SolveRequest) (*controlapi.SolveResponse, error) {
+	opts, err := engine.ClientMetadataFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ctx = bklog.WithLogger(ctx, bklog.G(ctx).
+		WithField("client_id", opts.ClientID).
+		WithField("client_hostname", opts.ClientHostname).
+		WithField("server_id", opts.ServerID))
+
+	e.serverMu.Lock()
+	srv, ok := e.servers[opts.ServerID]
+	if !ok {
+		e.serverMu.Unlock()
+		return nil, fmt.Errorf("unknown server id %q", opts.ServerID)
+	}
+	err = srv.bkClient.VerifyClient(opts.ClientID, opts.ClientSecretToken)
+	if err != nil {
+		e.serverMu.Unlock()
+		return nil, fmt.Errorf("failed to register client: %w", err)
 	}
 	e.serverMu.Unlock()
 
@@ -206,88 +325,14 @@ func (e *BuildkitController) Solve(ctx context.Context, req *controlapi.SolveReq
 	if len(cacheExporterFuncs) > 0 {
 		// run cache export instead
 		bklog.G(ctx).Debugf("running cache export for client %s", opts.ClientID)
-		err := rtr.bkClient.UpstreamCacheExport(ctx, cacheExporterFuncs)
+		err := srv.bkClient.UpstreamCacheExport(ctx, cacheExporterFuncs)
 		if err != nil {
 			bklog.G(ctx).WithError(err).Errorf("error running cache export for client %s", opts.ClientID)
 			return &controlapi.SolveResponse{}, err
 		}
 		bklog.G(ctx).Debugf("done running cache export for client %s", opts.ClientID)
-		return &controlapi.SolveResponse{}, nil
-	}
-
-	rtr.bkClient.RegisterClient(opts.ClientID, opts.ClientHostname)
-	defer rtr.bkClient.DeregisterClientHostname(opts.ClientHostname)
-	err = rtr.Wait(ctx)
-	if errors.Is(err, context.Canceled) {
-		err = nil
-	}
-	if err != nil {
-		return nil, err
 	}
 	return &controlapi.SolveResponse{}, nil
-}
-
-func (e *BuildkitController) Session(stream controlapi.Control_SessionServer) (rerr error) {
-	lg := bklog.G(stream.Context())
-
-	// TODO: should think through case where evil client lies about its ID
-	// maybe maintain a map of secret session token -> client ID and verify against that or something
-	// Also, may be good idea to have one secret token per client rather than shared across multiple
-	opts, err := engine.SessionAPIOptsFromContext(stream.Context())
-	if err != nil {
-		lg.WithError(err).Error("failed to get session api opts")
-		return fmt.Errorf("failed to get session api opts: %w", err)
-	}
-
-	lg = lg.
-		WithField("client_id", opts.ClientID).
-		WithField("client_hostname", opts.ClientHostname).
-		WithField("server_id", opts.ServerID).
-		WithField("buildkit_attachable", opts.BuildkitAttachable)
-	lg.Debug("session starting")
-	defer lg.WithError(rerr).Debug("session finished")
-
-	conn, closeCh, md := grpchijack.Hijack(stream)
-	defer conn.Close()
-
-	// TODO:
-	lg.Debug("session hijacked")
-
-	ctx, cancel := context.WithCancel(stream.Context())
-	go func() {
-		<-closeCh
-		cancel()
-	}()
-
-	if opts.BuildkitAttachable {
-		// TODO:
-		lg.Debug("passing through to buildkit session manager")
-		// pass through to buildkit's session manager for handling the attachables
-		err = e.SessionManager.HandleConn(ctx, conn, md)
-		if err != nil {
-			err = fmt.Errorf("session manager failed to handle conn: %w", err)
-		}
-	} else {
-		// TODO:
-		lg.Debug("passing through to graphql api")
-
-		e.serverMu.Lock()
-		rtr, ok := e.servers[opts.ServerID]
-		if !ok {
-			e.serverMu.Unlock()
-			return fmt.Errorf("server %q not found", opts.ServerID)
-		}
-		e.serverMu.Unlock()
-
-		// default to connecting to the graphql api
-		// TODO: make sure this unblocks and has reasonable error if server is closed, I don't think either are true rn
-		err = rtr.ServeClientConn(ctx, opts.ClientMetadata, conn)
-		if err != nil {
-			err = fmt.Errorf("server failed to serve client conn: %w", err)
-		}
-	}
-
-	return err
 }
 
 func (e *BuildkitController) DiskUsage(ctx context.Context, r *controlapi.DiskUsageRequest) (*controlapi.DiskUsageResponse, error) {
@@ -319,17 +364,15 @@ func (e *BuildkitController) DiskUsage(ctx context.Context, r *controlapi.DiskUs
 func (e *BuildkitController) Prune(req *controlapi.PruneRequest, stream controlapi.Control_PruneServer) error {
 	eg, ctx := errgroup.WithContext(stream.Context())
 
-	e.serverMu.Lock()
+	e.serverMu.RLock()
 	if len(e.servers) == 0 {
-		e.serverMu.Unlock()
 		imageutil.CancelCacheLeases()
 	}
-	e.serverMu.Unlock()
+	e.serverMu.RUnlock()
 
 	didPrune := false
 	defer func() {
 		if didPrune {
-			// TODO: we could fix this one off interface definition now...
 			if e, ok := e.cacheManager.(interface {
 				ReleaseUnreferenced(context.Context) error
 			}); ok {
@@ -402,19 +445,32 @@ func (e *BuildkitController) ListWorkers(ctx context.Context, r *controlapi.List
 	return resp, nil
 }
 
+func (e *BuildkitController) Export(ctx context.Context, req *tracev1.ExportTraceServiceRequest) (*tracev1.ExportTraceServiceResponse, error) {
+	if e.TraceCollector == nil {
+		return nil, status.Errorf(codes.Unavailable, "trace collector not configured")
+	}
+	err := e.TraceCollector.ExportSpans(ctx, transform.Spans(req.GetResourceSpans()))
+	if err != nil {
+		return nil, err
+	}
+	return &tracev1.ExportTraceServiceResponse{}, nil
+}
+
 func (e *BuildkitController) Register(server *grpc.Server) {
 	controlapi.RegisterControlServer(server, e)
-	// TODO: needed?
-	// tracev1.RegisterTraceServiceServer(server, e)
-	// e.gatewayForwarder.Register(server)
+	tracev1.RegisterTraceServiceServer(server, e)
 }
 
 func (e *BuildkitController) Close() error {
-	// TODO: ensure all servers are closed
-	return e.WorkerController.Close()
+	err := e.WorkerController.Close()
+	e.serverMu.RLock()
+	defer e.serverMu.RUnlock()
+	for _, s := range e.servers {
+		s.Close()
+	}
+	return err
 }
 
-// TODO: just inline this so we have less fields?
 func (e *BuildkitController) gc() {
 	e.gcmu.Lock()
 	defer e.gcmu.Unlock()
@@ -450,11 +506,6 @@ func (e *BuildkitController) gc() {
 func (e *BuildkitController) Status(req *controlapi.StatusRequest, stream controlapi.Control_StatusServer) error {
 	// we send status updates over progrock session attachables instead
 	return fmt.Errorf("status not implemented")
-}
-
-func (e *BuildkitController) Export(ctx context.Context, req *tracev1.ExportTraceServiceRequest) (*tracev1.ExportTraceServiceResponse, error) {
-	// TODO: not sure if we ever use this
-	return nil, fmt.Errorf("export not implemented")
 }
 
 func (e *BuildkitController) ListenBuildHistory(req *controlapi.BuildHistoryRequest, srv controlapi.Control_ListenBuildHistoryServer) error {

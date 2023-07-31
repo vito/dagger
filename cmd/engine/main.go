@@ -297,11 +297,6 @@ func main() { //nolint:gocyclo
 		}
 		cfg.Root = root
 
-		go logMetrics(context.Background(), cfg.Root)
-		if cfg.Trace {
-			go logTraceMetrics(context.Background())
-		}
-
 		if err := os.MkdirAll(root, 0o700); err != nil {
 			return errors.Wrapf(err, "failed to create %s", root)
 		}
@@ -329,6 +324,11 @@ func main() { //nolint:gocyclo
 		defer controller.Close()
 
 		controller.Register(server)
+
+		go logMetrics(context.Background(), cfg.Root, controller)
+		if cfg.Trace {
+			go logTraceMetrics(context.Background())
+		}
 
 		ents := c.GlobalStringSlice("allow-insecure-entitlement")
 		if len(ents) > 0 {
@@ -703,7 +703,6 @@ func serverCredentials(cfg config.TLSConfig) (*tls.Config, error) {
 	return tlsConf, nil
 }
 
-// TODO: change name of newController
 func newController(ctx context.Context, c *cli.Context, cfg *config.Config) (*server.BuildkitController, cache.Manager, error) {
 	sessionManager, err := session.NewManager()
 	if err != nil {
@@ -797,9 +796,10 @@ func newController(ctx context.Context, c *cli.Context, cfg *config.Config) (*se
 		CacheManager:           cacheManager,
 		ContentStore:           w.ContentStore(),
 		LeaseManager:           w.LeaseManager(),
-		Frontends:              frontends,
 		Entitlements:           cfg.Entitlements,
 		EngineName:             engineName,
+		Frontends:              frontends,
+		TraceCollector:         tc,
 		UpstreamCacheExporters: remoteCacheExporterFuncs,
 		UpstreamCacheImporters: remoteCacheImporterFuncs,
 		DNSConfig:              getDNSConfig(cfg.DNS),

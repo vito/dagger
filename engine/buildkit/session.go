@@ -2,8 +2,6 @@ package buildkit
 
 import (
 	"context"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -31,7 +29,6 @@ func (c *Client) newSession(ctx context.Context) (*bksession.Session, error) {
 		return nil, err
 	}
 
-	// TODO: enforce that callers are granted access to the given resources.
 	sess.Allow(secretsprovider.NewSecretProvider(c.SecretStore))
 	sess.Allow(&socketProxy{c})
 	sess.Allow(&authProxy{c})
@@ -52,7 +49,6 @@ func (c *Client) newSession(ctx context.Context) (*bksession.Session, error) {
 				if errors.Is(err, context.Canceled) || errors.Is(err, io.EOF) {
 					lg.Debug("session conn ended")
 				} else {
-					// TODO: cancel the whole buildkit client
 					lg.Error("failed to handle session conn")
 				}
 			}
@@ -62,13 +58,15 @@ func (c *Client) newSession(ctx context.Context) (*bksession.Session, error) {
 	go func() {
 		defer clientConn.Close()
 		defer sess.Close()
+		// this ctx is okay because it's from the "main client" caller, so if it's canceled
+		// then we want to shutdown anyways
 		err := sess.Run(ctx, dialer)
 		if err != nil {
 			lg := bklog.G(ctx).WithError(err)
 			if errors.Is(err, context.Canceled) || errors.Is(err, io.EOF) {
 				lg.Debug("client session in dagger frontend ended")
 			} else {
-				lg.Fatal("failed to run dagger frontend session")
+				lg.Error("failed to run dagger frontend session")
 			}
 		}
 	}()
@@ -104,32 +102,7 @@ type exportLocalDirData struct {
 
 type socketData struct {
 	session bksession.Caller
-	path    string
-}
-
-func (c *Client) getSocketDataFromID(ctx context.Context, id string) (*socketData, error) {
-	jsonBytes, err := base64.URLEncoding.DecodeString(id)
-	if err != nil {
-		return nil, fmt.Errorf("invalid socket id: %q", id)
-	}
-	var opts hostSocketOpts
-	if err := json.Unmarshal(jsonBytes, &opts); err != nil {
-		return nil, fmt.Errorf("invalid socket id: %q", id)
-	}
-	data := &socketData{
-		path: opts.HostPath,
-	}
-	clientID, err := c.getClientIDByHostname(opts.ClientHostname)
-	if err != nil {
-		// TODO:
-		return nil, fmt.Errorf("failed to get client hostname for socket: %w: %s", err, string(jsonBytes))
-	}
-	sess, err := c.SessionManager.Get(ctx, clientID, false)
-	if err != nil {
-		return nil, err
-	}
-	data.session = sess
-	return data, nil
+	id      string
 }
 
 // TODO: just split this method out into one for each resource type, never need multiple at once, cleanup with above method too
@@ -141,6 +114,7 @@ func (c *Client) getSessionResourceData(stream grpc.ServerStream) (context.Conte
 	}
 	md := metadata.Join(incomingMD, outgoingMD)
 
+	// TODO: use same approach as client metdata for the rest of this stuff
 	getVal := func(key string) (string, error) {
 		vals, ok := md[key]
 		if !ok || len(vals) == 0 {
@@ -155,12 +129,9 @@ func (c *Client) getSessionResourceData(stream grpc.ServerStream) (context.Conte
 
 	sessData := &sessionStreamResourceData{}
 
-	requesterClientID, err := getVal(engine.ClientIDMetaKey)
-	if err != nil {
-		return nil, nil, err
-	}
-	if requesterClientID != "" {
-		sessData.requesterClientID = requesterClientID
+	clientMetadata, ok := engine.OptionalClientMetadataFromContext(stream.Context())
+	if ok {
+		sessData.requesterClientID = clientMetadata.ClientID
 	}
 
 	localDirImportDirName, err := getVal(engine.LocalDirImportDirNameMetaKey)
@@ -222,12 +193,12 @@ func (c *Client) getSessionResourceData(stream grpc.ServerStream) (context.Conte
 		return nil, nil, err
 	}
 	if socketID != "" {
-		data, err := c.getSocketDataFromID(stream.Context(), socketID)
-		if err != nil {
-			return nil, nil, err
+		// NOTE: currently just always assuming socket refers to main client, will need updates if/when
+		// we support passing sockets to/from nested clients
+		sessData.socketData = &socketData{
+			session: c.MainClientCaller,
+			id:      socketID,
 		}
-		sessData.socketData = data
-		// TODO: validation that requester has access
 		ctx = metadata.NewIncomingContext(ctx, md) // TODO: needed too?
 		ctx = metadata.NewOutgoingContext(ctx, md)
 		return ctx, sessData, nil

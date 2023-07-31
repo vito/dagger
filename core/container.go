@@ -1150,16 +1150,8 @@ func (container *Container) WithExec(ctx context.Context, bk *buildkit.Client, p
 			return nil, fmt.Errorf("unsupported socket: only unix paths are implemented")
 		}
 
-		socket, err := ctrSocket.SocketID.ToSocket()
-		if err != nil {
-			return nil, fmt.Errorf("socket %s: %w", ctrSocket.UnixPath, err)
-		}
-		socketID, err := bk.SocketLLBID(socket.HostPath, socket.ClientHostname)
-		if err != nil {
-			return nil, fmt.Errorf("socket %s: %w", ctrSocket.UnixPath, err)
-		}
 		socketOpts := []llb.SSHOption{
-			llb.SSHID(socketID),
+			llb.SSHID(string(ctrSocket.SocketID)),
 			llb.SSHSocketTarget(ctrSocket.UnixPath),
 		}
 
@@ -1327,8 +1319,6 @@ func (container *Container) Publish(
 	forcedCompression ImageLayerCompression,
 	mediaTypes ImageMediaTypes,
 ) (string, error) {
-	// TODO: wrap in services, including merging platformVariants
-
 	if mediaTypes == "" {
 		// Modern registry implementations support oci types and docker daemons
 		// have been capable of pulling them since 2018:
@@ -1423,9 +1413,6 @@ func (container *Container) Export(
 	forcedCompression ImageLayerCompression,
 	mediaTypes ImageMediaTypes,
 ) error {
-	// TODO: de-dupe w/ Publish
-	// TODO: wrap in services, including merging platformVariants
-
 	if mediaTypes == "" {
 		// Modern registry implementations support oci types and docker daemons
 		// have been capable of pulling them since 2018:
@@ -1434,7 +1421,6 @@ func (container *Container) Export(
 		mediaTypes = OCIMediaTypes
 	}
 
-	// TODO: the previous implementation did an extra marshal using the containers platform, not sure if needed
 	inputByPlatform := map[string]buildkit.PublishInput{}
 	id, err := container.ID()
 	if err != nil {

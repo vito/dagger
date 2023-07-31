@@ -170,11 +170,6 @@ func TestProjectCmdInit(t *testing.T) {
 	})
 }
 
-// TODO: check if the project tests are slower, they feel like they might be.
-// Possible fixes would be to fix needing to create new http server every client http conn,
-// or to not have nested clients go through the whole song and dance and instead serve pre-made
-// sessions over unix socks.
-// Addendum: if you look in the engine logs you see a TON of sessions being opened...
 func TestProjectCommandHierarchy(t *testing.T) {
 	t.Parallel()
 
@@ -298,10 +293,6 @@ func TestProjectHostExport(t *testing.T) {
 					require.NoError(t, err)
 				})
 
-				// TODO: add coverage (here or elsewhere) for when exported file is under some subdirs
-				// TODO: also, one where a single file is being exported but there's a ton of others in
-				// the state that have to be filtered out, including some with the same name but diff path
-				// TODO: also that might already exist, double check
 				t.Run("file export explicit output to parent dir", func(t *testing.T) {
 					t.Parallel()
 					c, ctx := connect(t)

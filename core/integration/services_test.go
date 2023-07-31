@@ -367,6 +367,7 @@ func TestContainerPortOCIConfig(t *testing.T) {
 func TestContainerExecServicesSimple(t *testing.T) {
 	t.Parallel()
 
+	t.Parallel()
 	c, ctx := connect(t)
 	defer c.Close()
 

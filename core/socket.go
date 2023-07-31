@@ -10,9 +10,6 @@ import (
 
 type Socket struct {
 	HostPath string `json:"host_path,omitempty"`
-	// TODO: explain more, best-effort semi-stable client identifier
-	// TODO: think through caching implications one more time, ensure not breaking change
-	ClientHostname string `json:"client_hostname,omitempty"`
 }
 
 type SocketID string
@@ -30,8 +27,7 @@ func (id SocketID) ToSocket() (*Socket, error) {
 
 func NewHostSocket(absPath, clientHostname string) *Socket {
 	return &Socket{
-		HostPath:       absPath,
-		ClientHostname: clientHostname,
+		HostPath: absPath,
 	}
 }
 

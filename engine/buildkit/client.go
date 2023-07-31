@@ -3,7 +3,6 @@ package buildkit
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,9 +11,9 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"runtime/debug"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/containerd/containerd/platforms"
 	"github.com/containerd/continuity/fs"
@@ -64,7 +63,10 @@ type Opts struct {
 	AuthProvider          *auth.RegistryAuthProvider
 	PrivilegedExecEnabled bool
 	UpstreamCacheImports  []bkgw.CacheOptionsEntry
-	// TODO: give precise definition
+	// MainClientCaller is the caller who initialized the server associated with this
+	// client. It is special in that when it shuts down, the client will be closed and
+	// that registry auth and sockets are currently only ever sourced from this caller,
+	// not any nested clients (may change in future).
 	MainClientCaller bksession.Caller
 	DNSConfig        *oci.DNSConfig
 }
@@ -78,13 +80,17 @@ type Client struct {
 	job       *bksolver.Job
 	llbBridge bkfrontend.FrontendLLBBridge
 
-	clientHostnameToID   map[string]string
-	clientHostnameToIDMu sync.RWMutex
+	clientMu              sync.RWMutex
+	clientIDToSecretToken map[string]string
 
 	refs         map[*ref]struct{}
 	refsMu       sync.Mutex
 	containers   map[bkgw.Container]struct{}
 	containersMu sync.Mutex
+
+	closeCtx context.Context
+	cancel   context.CancelFunc
+	closeMu  sync.RWMutex
 
 	dialer *net.Dialer
 }
@@ -92,11 +98,14 @@ type Client struct {
 type Result = solverresult.Result[*ref]
 
 func NewClient(ctx context.Context, opts Opts) (*Client, error) {
+	closeCtx, cancel := context.WithCancel(context.Background())
 	client := &Client{
-		Opts:               opts,
-		clientHostnameToID: make(map[string]string),
-		refs:               make(map[*ref]struct{}),
-		containers:         make(map[bkgw.Container]struct{}),
+		Opts:                  opts,
+		clientIDToSecretToken: make(map[string]string),
+		refs:                  make(map[*ref]struct{}),
+		containers:            make(map[bkgw.Container]struct{}),
+		closeCtx:              closeCtx,
+		cancel:                cancel,
 	}
 
 	session, err := client.newSession(ctx)
@@ -151,12 +160,20 @@ func NewClient(ctx context.Context, opts Opts) (*Client, error) {
 }
 
 func (c *Client) ID() string {
-	// TODO: ? if you change this, be sure to change the session ID provide to llbBridge methods too
 	return c.session.ID()
 }
 
-// TODO: Integ test for all cache being releasable at end of every integ test suite
 func (c *Client) Close() error {
+	c.closeMu.Lock()
+	defer c.closeMu.Unlock()
+	select {
+	case <-c.closeCtx.Done():
+		// already closed
+		return nil
+	default:
+	}
+	c.cancel()
+
 	c.job.Discard()
 	c.job.CloseProgress()
 
@@ -166,25 +183,57 @@ func (c *Client) Close() error {
 			rf.resultProxy.Release(context.Background())
 		}
 	}
-	c.refs = nil // TODO: make sure everything else handles this in case there's so other request happening for some reason and we don't get a panic. Or maybe just have a RWMutex for checks whether we have closed everywhere
+	c.refs = nil
 	c.refsMu.Unlock()
 
 	c.containersMu.Lock()
+	var containerReleaseGroup errgroup.Group
 	for ctr := range c.containers {
-		if ctr != nil {
-			// TODO: can this block a long time on accident? should we have a timeout?
-			ctr.Release(context.Background())
+		if ctr := ctr; ctr != nil {
+			containerReleaseGroup.Go(func() error {
+				// in theory this shouldn't block very long and just kill the container,
+				// but add a safeguard just in case
+				releaseCtx, cancelRelease := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancelRelease()
+				return ctr.Release(releaseCtx)
+			})
 		}
 	}
-	c.containers = nil // TODO: same as above about handling this
+	err := containerReleaseGroup.Wait()
+	if err != nil {
+		bklog.G(context.Background()).WithError(err).Error("failed to release containers")
+	}
+	c.containers = nil
 	c.containersMu.Unlock()
-
-	// TODO: ensure session is fully closed by goroutines started in client.newSession
 
 	return nil
 }
 
+func (c *Client) withClientCloseCancel(ctx context.Context) (context.Context, context.CancelFunc, error) {
+	c.closeMu.RLock()
+	defer c.closeMu.RUnlock()
+	select {
+	case <-c.closeCtx.Done():
+		return nil, nil, errors.New("client closed")
+	default:
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	go func() {
+		select {
+		case <-c.closeCtx.Done():
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	return ctx, cancel, nil
+}
+
 func (c *Client) Solve(ctx context.Context, req bkgw.SolveRequest) (_ *Result, rerr error) {
+	ctx, cancel, err := c.withClientCloseCancel(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer cancel()
 	ctx = withOutgoingContext(ctx)
 
 	// include any upstream cache imports, if any
@@ -198,6 +247,9 @@ func (c *Client) Solve(ctx context.Context, req bkgw.SolveRequest) (_ *Result, r
 		return newRef(rp, c), nil
 	})
 	if err != nil {
+		llbRes.EachRef(func(rp bksolver.ResultProxy) error {
+			return rp.Release(context.Background())
+		})
 		return nil, err
 	}
 
@@ -213,14 +265,24 @@ func (c *Client) Solve(ctx context.Context, req bkgw.SolveRequest) (_ *Result, r
 }
 
 func (c *Client) ResolveImageConfig(ctx context.Context, ref string, opt llb.ResolveImageConfigOpt) (string, digest.Digest, []byte, error) {
+	ctx, cancel, err := c.withClientCloseCancel(ctx)
+	if err != nil {
+		return "", "", nil, err
+	}
+	defer cancel()
 	ctx = withOutgoingContext(ctx)
 	return c.llbBridge.ResolveImageConfig(ctx, ref, opt)
 }
 
 func (c *Client) NewContainer(ctx context.Context, req bkgw.NewContainerRequest) (bkgw.Container, error) {
+	ctx, cancel, err := c.withClientCloseCancel(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer cancel()
 	ctx = withOutgoingContext(ctx)
 	ctrReq := bkcontainer.NewContainerRequest{
-		ContainerID: identity.NewID(), // TODO: give a meaningful name?
+		ContainerID: identity.NewID(),
 		NetMode:     req.NetMode,
 		Hostname:    req.Hostname,
 		Mounts:      make([]bkcontainer.Mount, len(req.Mounts)),
@@ -302,7 +364,6 @@ func (c *Client) NewContainer(ctx context.Context, req bkgw.NewContainerRequest)
 // This is useful for constructing a result for upstream remote caching.
 func (c *Client) CombinedResult(ctx context.Context) (*Result, error) {
 	c.refsMu.Lock()
-
 	mergeInputs := make([]llb.State, 0, len(c.refs))
 	for r := range c.refs {
 		state, err := r.ToState()
@@ -324,18 +385,22 @@ func (c *Client) CombinedResult(ctx context.Context) (*Result, error) {
 }
 
 func (c *Client) UpstreamCacheExport(ctx context.Context, cacheExportFuncs []ResolveCacheExporterFunc) error {
+	ctx, cancel, err := c.withClientCloseCancel(ctx)
+	if err != nil {
+		return err
+	}
+	defer cancel()
+
 	if len(cacheExportFuncs) == 0 {
 		return nil
 	}
-	// TODO: have caller embed bklog w/ preset fields for client
 	bklog.G(ctx).Debugf("exporting %d caches", len(cacheExportFuncs))
 
-	combinedResult, err := c.CombinedResult(ctx) // TODO: lock needed now for this method internally
+	combinedResult, err := c.CombinedResult(ctx)
 	if err != nil {
 		return err
 	}
 	// TODO: dedupe with similar conversions
-	bklog.G(ctx).Debugf("converting to cacheRes")
 	cacheRes, err := solverresult.ConvertResult(combinedResult, func(rf *ref) (bkcache.ImmutableRef, error) {
 		res, err := rf.Result(ctx)
 		if err != nil {
@@ -360,7 +425,7 @@ func (c *Client) UpstreamCacheExport(ctx context.Context, cacheExportFuncs []Res
 
 	sessionGroup := bksession.NewGroup(c.ID())
 	eg, ctx := errgroup.WithContext(ctx)
-	// TODO: send progrock statuses
+	// TODO: send progrock statuses for cache export progress
 	for _, exporterFunc := range cacheExportFuncs {
 		exporterFunc := exporterFunc
 		eg.Go(func() error {
@@ -423,29 +488,35 @@ func (c *Client) WriteStatusesTo(ctx context.Context, ch chan *bkclient.SolveSta
 	return c.job.Status(ctx, ch)
 }
 
-func (c *Client) RegisterClient(clientID, clientHostname string) {
-	c.clientHostnameToIDMu.Lock()
-	defer c.clientHostnameToIDMu.Unlock()
-	// TODO: error out if clientID already exists? How would a user accomplish that? They'd need to somehow connect to the same server id
-	c.clientHostnameToID[clientHostname] = clientID
-}
-
-func (c *Client) DeregisterClientHostname(clientHostname string) {
-	c.clientHostnameToIDMu.Lock()
-	defer c.clientHostnameToIDMu.Unlock()
-	delete(c.clientHostnameToID, clientHostname)
-}
-
-func (c *Client) getClientIDByHostname(clientHostname string) (string, error) {
-	c.clientHostnameToIDMu.RLock()
-	defer c.clientHostnameToIDMu.RUnlock()
-	clientID, ok := c.clientHostnameToID[clientHostname]
-	if !ok {
-		// TODO:
-		// return "", fmt.Errorf("client hostname %q not found", clientHostname)
-		return "", fmt.Errorf("client hostname %q not found: %s", clientHostname, string(debug.Stack()))
+func (c *Client) RegisterClient(clientID, clientHostname, secretToken string) error {
+	c.clientMu.Lock()
+	defer c.clientMu.Unlock()
+	existingToken, ok := c.clientIDToSecretToken[clientID]
+	if ok {
+		if existingToken != secretToken {
+			return fmt.Errorf("client ID %q already registered with different secret token", clientID)
+		}
+		return nil
 	}
-	return clientID, nil
+	c.clientIDToSecretToken[clientID] = secretToken
+	// NOTE: we purposely don't delete the secret token, it should never be reused and will be released
+	// from memory once the dagger server instance corresponding to this buildkit client shuts down.
+	// Deleting it would make it easier to create race conditions around using the client's session
+	// before it is fully closed.
+	return nil
+}
+
+func (c *Client) VerifyClient(clientID, secretToken string) error {
+	c.clientMu.RLock()
+	defer c.clientMu.RUnlock()
+	existingToken, ok := c.clientIDToSecretToken[clientID]
+	if !ok {
+		return fmt.Errorf("client ID %q not registered", clientID)
+	}
+	if existingToken != secretToken {
+		return fmt.Errorf("client ID %q registered with different secret token", clientID)
+	}
+	return nil
 }
 
 type LocalImportOpts struct {
@@ -464,9 +535,8 @@ func (c *Client) LocalImportLLB(ctx context.Context, srcPath string, opts ...llb
 		return llb.State{}, err
 	}
 
-	// TODO: double check that reading the client id from the context here is correct, and that it shouldn't
-	// instead be deser'd from the local name. I think it's okay provided we still do the local dir import
-	// synchronously in the caller of this.
+	// NOTE: this relies on the fact that the local source is evaluated synchronously in the caller, otherwise
+	// the caller client ID may not be correct.
 	name, err := EncodeIDHack(LocalImportOpts{
 		// For now, the requester is always the owner of the local dir
 		// when the dir is initially created in LLB (i.e. you can't request a
@@ -487,11 +557,53 @@ func (c *Client) LocalImportLLB(ctx context.Context, srcPath string, opts ...llb
 	return llb.Local(name, opts...), nil
 }
 
+func (c *Client) ReadCallerHostFile(ctx context.Context, path string) ([]byte, error) {
+	ctx, cancel, err := c.withClientCloseCancel(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer cancel()
+
+	clientMetadata, err := engine.ClientMetadataFromContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get requester session ID: %s", err)
+	}
+
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		md = metadata.MD{}
+	}
+	md[engine.LocalDirImportReadSingleFileMetaKey] = []string{path}
+	ctx = metadata.NewOutgoingContext(ctx, md)
+
+	clientCaller, err := c.SessionManager.Get(ctx, clientMetadata.ClientID, false)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get requester session: %s", err)
+	}
+	diffCopyClient, err := filesync.NewFileSyncClient(clientCaller.Conn()).DiffCopy(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create diff copy client: %s", err)
+	}
+	defer diffCopyClient.CloseSend()
+	msg := filesync.BytesMessage{}
+	err = diffCopyClient.RecvMsg(&msg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to receive file bytes message: %s", err)
+	}
+	return msg.Data, nil
+}
+
 func (c *Client) LocalDirExport(
 	ctx context.Context,
 	def *bksolverpb.Definition,
 	destPath string,
 ) error {
+	ctx, cancel, err := c.withClientCloseCancel(ctx)
+	if err != nil {
+		return err
+	}
+	defer cancel()
+
 	destPath = path.Clean(destPath)
 	if destPath == ".." || strings.HasPrefix(destPath, "../") {
 		return fmt.Errorf("path %q escapes workdir; use an absolute path instead", destPath)
@@ -558,6 +670,12 @@ func (c *Client) LocalFileExport(
 	filePath string,
 	allowParentDirPath bool,
 ) error {
+	ctx, cancel, err := c.withClientCloseCancel(ctx)
+	if err != nil {
+		return err
+	}
+	defer cancel()
+
 	destPath = path.Clean(destPath)
 	if destPath == ".." || strings.HasPrefix(destPath, "../") {
 		return fmt.Errorf("path %q escapes workdir; use an absolute path instead", destPath)
@@ -667,6 +785,12 @@ func (c *Client) PublishContainerImage(
 	inputByPlatform map[string]PublishInput,
 	opts map[string]string, // TODO: make this an actual type, this leaks too much untyped buildkit api
 ) (map[string]string, error) {
+	ctx, cancel, err := c.withClientCloseCancel(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer cancel()
+
 	combinedResult := &solverresult.Result[bkcache.ImmutableRef]{}
 	expPlatforms := &exptypes.Platforms{
 		Platforms: make([]exptypes.Platform, len(inputByPlatform)),
@@ -760,6 +884,12 @@ func (c *Client) ExportContainerImage(
 	destPath string,
 	opts map[string]string, // TODO: make this an actual type, this leaks too much untyped buildkit api
 ) (map[string]string, error) {
+	ctx, cancel, err := c.withClientCloseCancel(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer cancel()
+
 	destPath = path.Clean(destPath)
 	if destPath == ".." || strings.HasPrefix(destPath, "../") {
 		return nil, fmt.Errorf("path %q escapes workdir; use an absolute path instead", destPath)
@@ -850,8 +980,6 @@ func (c *Client) ExportContainerImage(
 	// TODO: This probably doesn't entirely work yet in the case where the combined result is still
 	// lazy and relies on other session resources to be evaluated. Fix that if merging before upstream
 	// fix in place.
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
 	sess, err := c.newFileSendServerProxySession(ctx, destPath)
 	if err != nil {
 		return nil, err
@@ -865,22 +993,6 @@ func (c *Client) ExportContainerImage(
 		descRef.Release()
 	}
 	return resp, nil
-}
-
-type hostSocketOpts struct {
-	HostPath       string `json:"host_path,omitempty"`
-	ClientHostname string `json:"client_hostname,omitempty"`
-}
-
-func (c *Client) SocketLLBID(hostPath, clientHostname string) (string, error) {
-	idBytes, err := json.Marshal(hostSocketOpts{
-		HostPath:       hostPath,
-		ClientHostname: clientHostname,
-	})
-	if err != nil {
-		return "", err
-	}
-	return base64.URLEncoding.EncodeToString(idBytes), nil
 }
 
 func (c *Client) ListenHostToContainer(
