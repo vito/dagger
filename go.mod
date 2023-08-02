@@ -62,6 +62,7 @@ require (
 	github.com/blang/semver v3.5.1+incompatible
 	github.com/charmbracelet/lipgloss v0.7.1
 	github.com/go-git/go-git/v5 v5.7.0
+	github.com/gogo/protobuf v1.3.2
 	github.com/google/go-github/v50 v50.2.0
 	github.com/hashicorp/go-multierror v1.1.1
 	github.com/icholy/replace v0.6.0
@@ -77,7 +78,7 @@ require (
 	github.com/prometheus/procfs v0.11.0
 	github.com/rs/zerolog v1.29.1
 	github.com/shurcooL/graphql v0.0.0-20220606043923-3cf50f8a0a29
-	github.com/vito/progrock v0.8.2-0.20230731004442-acdabc74b27f
+	github.com/vito/progrock v0.9.0
 	github.com/vito/vt100 v0.1.2
 	golang.org/x/exp v0.0.0-20230425010034-47ecfdc1ba53
 	golang.org/x/oauth2 v0.9.0
@@ -144,7 +145,6 @@ require (
 	github.com/go-kit/log v0.2.1 // indirect
 	github.com/go-logfmt/logfmt v0.5.1 // indirect
 	github.com/go-sourcemap/sourcemap v2.1.3+incompatible // indirect
-	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang-jwt/jwt/v4 v4.4.2 // indirect
 	github.com/golang/freetype v0.0.0-20170609003504-e2365dfdc4a0 // indirect
 	github.com/google/go-cmp v0.5.9 // indirect
