@@ -31,16 +31,6 @@ defmodule Dagger.Host do
   )
 
   (
-    @doc "Accesses an environment variable on the host.\n\n## Required Arguments\n\n* `name` - Name of the environment variable (e.g., \"PATH\")."
-    @spec env_variable(t(), String.t()) :: Dagger.HostVariable.t()
-    def env_variable(%__MODULE__{} = host, name) do
-      selection = select(host.selection, "envVariable")
-      selection = arg(selection, "name", name)
-      execute(selection, host.client)
-    end
-  )
-
-  (
     @doc "Accesses a file on the host.\n\n## Required Arguments\n\n* `path` - Location of the file to retrieve (e.g., \"README.md\")."
     @spec file(t(), String.t()) :: Dagger.File.t()
     def file(%__MODULE__{} = host, path) do
@@ -51,37 +41,42 @@ defmodule Dagger.Host do
   )
 
   (
+    @doc "Creates a proxy forwarding traffic via the host to a specified address.\n\n## Required Arguments\n\n* `upstream_address` - Backend server host:port for traffic forwarding.\n* `service_port` - Listening port for incoming connections.\n\n## Optional Arguments\n\n* `protocol` - Traffic protocol. Defaults to TCP."
+    @spec reverse_proxy(t(), String.t(), integer(), keyword()) :: Dagger.Service.t()
+    def reverse_proxy(%__MODULE__{} = host, upstream_address, service_port, optional_args \\ []) do
+      selection = select(host.selection, "reverseProxy")
+      selection = arg(selection, "upstreamAddress", upstream_address)
+      selection = arg(selection, "servicePort", service_port)
+
+      selection =
+        if is_nil(optional_args[:protocol]) do
+          selection
+        else
+          arg(selection, "protocol", optional_args[:protocol])
+        end
+
+      %Dagger.Service{selection: selection, client: host.client}
+    end
+  )
+
+  (
+    @doc "Sets a secret given a user-defined name and the file path on the host, and returns the secret.\nThe file is limited to a size of 512000 bytes.\n\n## Required Arguments\n\n* `name` - The user defined name for this secret.\n* `path` - Location of the file to set as a secret."
+    @spec set_secret_file(t(), String.t(), String.t()) :: Dagger.Secret.t()
+    def set_secret_file(%__MODULE__{} = host, name, path) do
+      selection = select(host.selection, "setSecretFile")
+      selection = arg(selection, "name", name)
+      selection = arg(selection, "path", path)
+      %Dagger.Secret{selection: selection, client: host.client}
+    end
+  )
+
+  (
     @doc "Accesses a Unix socket on the host.\n\n## Required Arguments\n\n* `path` - Location of the Unix socket (e.g., \"/var/run/docker.sock\")."
     @spec unix_socket(t(), String.t()) :: Dagger.Socket.t()
     def unix_socket(%__MODULE__{} = host, path) do
       selection = select(host.selection, "unixSocket")
       selection = arg(selection, "path", path)
       %Dagger.Socket{selection: selection, client: host.client}
-    end
-  )
-
-  (
-    @doc "Retrieves the current working directory on the host.\n\n\n\n## Optional Arguments\n\n* `exclude` - Exclude artifacts that match the given pattern (e.g., [\"node_modules/\", \".git*\"]).\n* `include` - Include only artifacts that match the given pattern (e.g., [\"app/\", \"package.*\"])."
-    @deprecated "Use `directory` with path set to '.' instead"
-    @spec workdir(t(), keyword()) :: Dagger.Directory.t()
-    def workdir(%__MODULE__{} = host, optional_args \\ []) do
-      selection = select(host.selection, "workdir")
-
-      selection =
-        if is_nil(optional_args[:exclude]) do
-          selection
-        else
-          arg(selection, "exclude", optional_args[:exclude])
-        end
-
-      selection =
-        if is_nil(optional_args[:include]) do
-          selection
-        else
-          arg(selection, "include", optional_args[:include])
-        end
-
-      %Dagger.Directory{selection: selection, client: host.client}
     end
   )
 end

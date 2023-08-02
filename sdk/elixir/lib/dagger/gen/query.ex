@@ -16,6 +16,16 @@ defmodule Dagger.Query do
   )
 
   (
+    @doc "Checks if the current Dagger Engine is compatible with an SDK's required version.\n\n## Required Arguments\n\n* `version` - The SDK's required version."
+    @spec check_version_compatibility(t(), String.t()) :: boolean()
+    def check_version_compatibility(%__MODULE__{} = query, version) do
+      selection = select(query.selection, "checkVersionCompatibility")
+      selection = arg(selection, "version", version)
+      execute(selection, query.client)
+    end
+  )
+
+  (
     @doc "Loads a container from ID.\n\nNull ID returns an empty container (scratch).\nOptional platform argument initializes new containers to execute and publish as that platform.\nPlatform defaults to that of the builder's host.\n\n\n\n## Optional Arguments\n\n* `id` - \n* `platform` -"
     @spec container(t(), keyword()) :: Dagger.Container.t()
     def container(%__MODULE__{} = query, optional_args \\ []) do
@@ -203,6 +213,16 @@ defmodule Dagger.Query do
       )
 
       %Dagger.Secret{selection: selection, client: query.client}
+    end
+  )
+
+  (
+    @doc "Loads a service from ID.\n\n## Required Arguments\n\n* `id` -"
+    @spec service(t(), Dagger.Service.t()) :: Dagger.Service.t()
+    def service(%__MODULE__{} = query, id) do
+      selection = select(query.selection, "service")
+      selection = arg(selection, "id", id)
+      %Dagger.Service{selection: selection, client: query.client}
     end
   )
 

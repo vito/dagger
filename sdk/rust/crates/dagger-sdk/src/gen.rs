@@ -103,6 +103,18 @@ impl Into<SecretId> for String {
     }
 }
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
+pub struct ServiceId(pub String);
+impl Into<ServiceId> for &str {
+    fn into(self) -> ServiceId {
+        ServiceId(self.to_string())
+    }
+}
+impl Into<ServiceId> for String {
+    fn into(self) -> ServiceId {
+        ServiceId(self.clone())
+    }
+}
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub struct SocketId(pub String);
 impl Into<SocketId> for &str {
     fn into(self) -> SocketId {
@@ -158,15 +170,6 @@ pub struct ContainerBuildOpts<'a> {
     /// Target build stage to build.
     #[builder(setter(into, strip_option), default)]
     pub target: Option<&'a str>,
-}
-#[derive(Builder, Debug, PartialEq)]
-pub struct ContainerEndpointOpts<'a> {
-    /// The exposed port number for the endpoint
-    #[builder(setter(into, strip_option), default)]
-    pub port: Option<isize>,
-    /// Return a URL with the given scheme, eg. http for http://
-    #[builder(setter(into, strip_option), default)]
-    pub scheme: Option<&'a str>,
 }
 #[derive(Builder, Debug, PartialEq)]
 pub struct ContainerExportOpts {
@@ -429,39 +432,6 @@ impl Container {
             graphql_client: self.graphql_client.clone(),
         };
     }
-    /// Retrieves an endpoint that clients can use to reach this container.
-    /// If no port is specified, the first exposed port is used. If none exist an error is returned.
-    /// If a scheme is specified, a URL is returned. Otherwise, a host:port pair is returned.
-    /// Currently experimental; set _EXPERIMENTAL_DAGGER_SERVICES_DNS=0 to disable.
-    ///
-    /// # Arguments
-    ///
-    /// * `opt` - optional argument, see inner type for documentation, use <func>_opts to use
-    pub async fn endpoint(&self) -> Result<String, DaggerError> {
-        let query = self.selection.select("endpoint");
-        query.execute(self.graphql_client.clone()).await
-    }
-    /// Retrieves an endpoint that clients can use to reach this container.
-    /// If no port is specified, the first exposed port is used. If none exist an error is returned.
-    /// If a scheme is specified, a URL is returned. Otherwise, a host:port pair is returned.
-    /// Currently experimental; set _EXPERIMENTAL_DAGGER_SERVICES_DNS=0 to disable.
-    ///
-    /// # Arguments
-    ///
-    /// * `opt` - optional argument, see inner type for documentation, use <func>_opts to use
-    pub async fn endpoint_opts<'a>(
-        &self,
-        opts: ContainerEndpointOpts<'a>,
-    ) -> Result<String, DaggerError> {
-        let mut query = self.selection.select("endpoint");
-        if let Some(port) = opts.port {
-            query = query.arg("port", port);
-        }
-        if let Some(scheme) = opts.scheme {
-            query = query.arg("scheme", scheme);
-        }
-        query.execute(self.graphql_client.clone()).await
-    }
     /// Retrieves entrypoint to be prepended to the arguments of all commands.
     pub async fn entrypoint(&self) -> Result<Vec<String>, DaggerError> {
         let query = self.selection.select("entrypoint");
@@ -569,12 +539,6 @@ impl Container {
             selection: query,
             graphql_client: self.graphql_client.clone(),
         };
-    }
-    /// Retrieves a hostname which can be used by clients to reach this container.
-    /// Currently experimental; set _EXPERIMENTAL_DAGGER_SERVICES_DNS=0 to disable.
-    pub async fn hostname(&self) -> Result<String, DaggerError> {
-        let query = self.selection.select("hostname");
-        query.execute(self.graphql_client.clone()).await
     }
     /// A unique identifier for this container.
     pub async fn id(&self) -> Result<ContainerId, DaggerError> {
@@ -735,6 +699,15 @@ impl Container {
     pub fn rootfs(&self) -> Directory {
         let query = self.selection.select("rootfs");
         return Directory {
+            proc: self.proc.clone(),
+            selection: query,
+            graphql_client: self.graphql_client.clone(),
+        };
+    }
+    /// Retrieves a service that will run the container.
+    pub fn service(&self) -> Service {
+        let query = self.selection.select("service");
+        return Service {
             proc: self.proc.clone(),
             selection: query,
             graphql_client: self.graphql_client.clone(),
@@ -1383,11 +1356,7 @@ impl Container {
     ///
     /// * `alias` - A name that can be used to reach the service from the container
     /// * `service` - Identifier of the service container
-    pub fn with_service_binding(
-        &self,
-        alias: impl Into<String>,
-        service: ContainerId,
-    ) -> Container {
+    pub fn with_service_binding(&self, alias: impl Into<String>, service: ServiceId) -> Container {
         let mut query = self.selection.select("withServiceBinding");
         query = query.arg("alias", alias.into());
         query = query.arg("service", service);
@@ -2254,6 +2223,12 @@ pub struct HostDirectoryOpts<'a> {
     #[builder(setter(into, strip_option), default)]
     pub include: Option<Vec<&'a str>>,
 }
+#[derive(Builder, Debug, PartialEq)]
+pub struct HostReverseProxyOpts {
+    /// Traffic protocol. Defaults to TCP.
+    #[builder(setter(into, strip_option), default)]
+    pub protocol: Option<NetworkProtocol>,
+}
 impl Host {
     /// Accesses a directory on the host.
     ///
@@ -2304,6 +2279,52 @@ impl Host {
         let mut query = self.selection.select("file");
         query = query.arg("path", path.into());
         return File {
+            proc: self.proc.clone(),
+            selection: query,
+            graphql_client: self.graphql_client.clone(),
+        };
+    }
+    /// Creates a proxy forwarding traffic via the host to a specified address.
+    ///
+    /// # Arguments
+    ///
+    /// * `upstream_address` - Backend server host:port for traffic forwarding.
+    /// * `service_port` - Listening port for incoming connections.
+    /// * `opt` - optional argument, see inner type for documentation, use <func>_opts to use
+    pub fn reverse_proxy(
+        &self,
+        upstream_address: impl Into<String>,
+        service_port: isize,
+    ) -> Service {
+        let mut query = self.selection.select("reverseProxy");
+        query = query.arg("upstreamAddress", upstream_address.into());
+        query = query.arg("servicePort", service_port);
+        return Service {
+            proc: self.proc.clone(),
+            selection: query,
+            graphql_client: self.graphql_client.clone(),
+        };
+    }
+    /// Creates a proxy forwarding traffic via the host to a specified address.
+    ///
+    /// # Arguments
+    ///
+    /// * `upstream_address` - Backend server host:port for traffic forwarding.
+    /// * `service_port` - Listening port for incoming connections.
+    /// * `opt` - optional argument, see inner type for documentation, use <func>_opts to use
+    pub fn reverse_proxy_opts(
+        &self,
+        upstream_address: impl Into<String>,
+        service_port: isize,
+        opts: HostReverseProxyOpts,
+    ) -> Service {
+        let mut query = self.selection.select("reverseProxy");
+        query = query.arg("upstreamAddress", upstream_address.into());
+        query = query.arg("servicePort", service_port);
+        if let Some(protocol) = opts.protocol {
+            query = query.arg_enum("protocol", protocol);
+        }
+        return Service {
             proc: self.proc.clone(),
             selection: query,
             graphql_client: self.graphql_client.clone(),
@@ -2506,7 +2527,7 @@ pub struct QueryDirectoryOpts {
 pub struct QueryGitOpts {
     /// A service which must be started before the repo is fetched.
     #[builder(setter(into, strip_option), default)]
-    pub experimental_service_host: Option<ContainerId>,
+    pub experimental_service_host: Option<ServiceId>,
     /// Set to true to keep .git directory.
     #[builder(setter(into, strip_option), default)]
     pub keep_git_dir: Option<bool>,
@@ -2515,7 +2536,7 @@ pub struct QueryGitOpts {
 pub struct QueryHttpOpts {
     /// A service which must be started before the URL is fetched.
     #[builder(setter(into, strip_option), default)]
-    pub experimental_service_host: Option<ContainerId>,
+    pub experimental_service_host: Option<ServiceId>,
 }
 #[derive(Builder, Debug, PartialEq)]
 pub struct QueryPipelineOpts<'a> {
@@ -2837,6 +2858,16 @@ impl Query {
             graphql_client: self.graphql_client.clone(),
         };
     }
+    /// Loads a service from ID.
+    pub fn service(&self, id: ServiceId) -> Service {
+        let mut query = self.selection.select("service");
+        query = query.arg("id", id);
+        return Service {
+            proc: self.proc.clone(),
+            selection: query,
+            graphql_client: self.graphql_client.clone(),
+        };
+    }
     /// Sets a secret given a user defined name to its plaintext and returns the secret.
     /// The plaintext value is limited to a size of 128000 bytes.
     ///
@@ -2900,6 +2931,141 @@ impl Secret {
     pub async fn plaintext(&self) -> Result<String, DaggerError> {
         let query = self.selection.select("plaintext");
         query.execute(self.graphql_client.clone()).await
+    }
+}
+#[derive(Clone)]
+pub struct Service {
+    pub proc: Option<Arc<Child>>,
+    pub selection: Selection,
+    pub graphql_client: DynGraphQLClient,
+}
+#[derive(Builder, Debug, PartialEq)]
+pub struct ServiceEndpointOpts<'a> {
+    /// The exposed port number for the endpoint
+    #[builder(setter(into, strip_option), default)]
+    pub port: Option<isize>,
+    /// Return a URL with the given scheme, eg. http for http://
+    #[builder(setter(into, strip_option), default)]
+    pub scheme: Option<&'a str>,
+}
+#[derive(Builder, Debug, PartialEq)]
+pub struct ServiceProxyOpts {
+    /// Traffic protocol. Defaults to TCP.
+    #[builder(setter(into, strip_option), default)]
+    pub protocol: Option<NetworkProtocol>,
+    /// Service port to send traffic. Defaults to first exposed port.
+    #[builder(setter(into, strip_option), default)]
+    pub service_port: Option<isize>,
+}
+impl Service {
+    /// Retrieves an endpoint that clients can use to reach this container.
+    /// If no port is specified, the first exposed port is used. If none exist an error is returned.
+    /// If a scheme is specified, a URL is returned. Otherwise, a host:port pair is returned.
+    /// Currently experimental; set _EXPERIMENTAL_DAGGER_SERVICES_DNS=0 to disable.
+    ///
+    /// # Arguments
+    ///
+    /// * `opt` - optional argument, see inner type for documentation, use <func>_opts to use
+    pub async fn endpoint(&self) -> Result<String, DaggerError> {
+        let query = self.selection.select("endpoint");
+        query.execute(self.graphql_client.clone()).await
+    }
+    /// Retrieves an endpoint that clients can use to reach this container.
+    /// If no port is specified, the first exposed port is used. If none exist an error is returned.
+    /// If a scheme is specified, a URL is returned. Otherwise, a host:port pair is returned.
+    /// Currently experimental; set _EXPERIMENTAL_DAGGER_SERVICES_DNS=0 to disable.
+    ///
+    /// # Arguments
+    ///
+    /// * `opt` - optional argument, see inner type for documentation, use <func>_opts to use
+    pub async fn endpoint_opts<'a>(
+        &self,
+        opts: ServiceEndpointOpts<'a>,
+    ) -> Result<String, DaggerError> {
+        let mut query = self.selection.select("endpoint");
+        if let Some(port) = opts.port {
+            query = query.arg("port", port);
+        }
+        if let Some(scheme) = opts.scheme {
+            query = query.arg("scheme", scheme);
+        }
+        query.execute(self.graphql_client.clone()).await
+    }
+    /// Retrieves a hostname which can be used by clients to reach this container.
+    /// Currently experimental; set _EXPERIMENTAL_DAGGER_SERVICES_DNS=0 to disable.
+    pub async fn hostname(&self) -> Result<String, DaggerError> {
+        let query = self.selection.select("hostname");
+        query.execute(self.graphql_client.clone()).await
+    }
+    /// A unique identifier for this service.
+    pub async fn id(&self) -> Result<ServiceId, DaggerError> {
+        let query = self.selection.select("id");
+        query.execute(self.graphql_client.clone()).await
+    }
+    /// Defines a proxy to forward traffic from a host IP:Port to this service.
+    ///
+    /// # Arguments
+    ///
+    /// * `host_listen_address` - Host IP:Port for proxy binding. Port 0 implies any available port.
+    /// * `opt` - optional argument, see inner type for documentation, use <func>_opts to use
+    pub fn proxy(&self, host_listen_address: impl Into<String>) -> Service {
+        let mut query = self.selection.select("proxy");
+        query = query.arg("hostListenAddress", host_listen_address.into());
+        return Service {
+            proc: self.proc.clone(),
+            selection: query,
+            graphql_client: self.graphql_client.clone(),
+        };
+    }
+    /// Defines a proxy to forward traffic from a host IP:Port to this service.
+    ///
+    /// # Arguments
+    ///
+    /// * `host_listen_address` - Host IP:Port for proxy binding. Port 0 implies any available port.
+    /// * `opt` - optional argument, see inner type for documentation, use <func>_opts to use
+    pub fn proxy_opts(
+        &self,
+        host_listen_address: impl Into<String>,
+        opts: ServiceProxyOpts,
+    ) -> Service {
+        let mut query = self.selection.select("proxy");
+        query = query.arg("hostListenAddress", host_listen_address.into());
+        if let Some(service_port) = opts.service_port {
+            query = query.arg("servicePort", service_port);
+        }
+        if let Some(protocol) = opts.protocol {
+            query = query.arg_enum("protocol", protocol);
+        }
+        return Service {
+            proc: self.proc.clone(),
+            selection: query,
+            graphql_client: self.graphql_client.clone(),
+        };
+    }
+    /// Start the service and wait for its health checks to succeed.
+    /// Services bound to a Container do not need to be manually started.
+    pub async fn start(&self) -> Result<ServiceId, DaggerError> {
+        let query = self.selection.select("start");
+        query.execute(self.graphql_client.clone()).await
+    }
+    /// Stop the service.
+    pub async fn stop(&self) -> Result<ServiceId, DaggerError> {
+        let query = self.selection.select("stop");
+        query.execute(self.graphql_client.clone()).await
+    }
+    /// Accesses a Unix socket in the service.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Location of the Unix socket (e.g., "/var/run/docker.sock").
+    pub fn unix_socket(&self, path: impl Into<String>) -> Socket {
+        let mut query = self.selection.select("unixSocket");
+        query = query.arg("path", path.into());
+        return Socket {
+            proc: self.proc.clone(),
+            selection: query,
+            graphql_client: self.graphql_client.clone(),
+        };
     }
 }
 #[derive(Clone)]

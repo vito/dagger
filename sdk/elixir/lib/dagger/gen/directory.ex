@@ -147,6 +147,15 @@ defmodule Dagger.Directory do
   )
 
   (
+    @doc "Force evaluation in the engine."
+    @spec sync(t()) :: Dagger.Directory.t()
+    def sync(%__MODULE__{} = directory) do
+      selection = select(directory.selection, "sync")
+      execute(selection, directory.client)
+    end
+  )
+
+  (
     @doc "Retrieves this directory plus a directory written at the given path.\n\n## Required Arguments\n\n* `path` - Location of the written directory (e.g., \"/src/\").\n* `directory` - Identifier of the directory to copy.\n\n## Optional Arguments\n\n* `exclude` - Exclude artifacts that match the given pattern (e.g., [\"node_modules/\", \".git*\"]).\n* `include` - Include only artifacts that match the given pattern (e.g., [\"app/\", \"package.*\"])."
     @spec with_directory(t(), String.t(), Dagger.Directory.t(), keyword()) :: Dagger.Directory.t()
     def with_directory(%__MODULE__{} = directory, path, directory, optional_args \\ []) do
