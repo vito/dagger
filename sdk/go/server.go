@@ -273,12 +273,12 @@ func goReflectTypeToGraphqlType(t reflect.Type, isInput bool) (*ast.Type, error)
 		if err != nil {
 			return nil, err
 		}
-		return ast.ListType(elementType, nil), nil
+		return ast.NonNullListType(elementType, nil), nil
 	case reflect.Struct:
 		// Handle types that implement the GraphQL serializer
 		// TODO: move this at the top so it works on scalars as well
 		marshaller := reflect.TypeOf((*querybuilder.GraphQLMarshaller)(nil)).Elem()
-		if t.Implements(marshaller) {
+		if reflect.PointerTo(t).Implements(marshaller) {
 			typ := reflect.New(t)
 			var typeName string
 			if isInput {
@@ -294,13 +294,20 @@ func goReflectTypeToGraphqlType(t reflect.Type, isInput bool) (*ast.Type, error)
 		if isInput {
 			return ast.NonNullNamedType(inputName(t.Name()), nil), nil
 		}
+
 		return ast.NonNullNamedType(t.Name(), nil), nil // TODO:(sipsma) doesn't handle anything from another package (besides the sdk)
 	case reflect.Pointer:
 		nonNullType, err := goReflectTypeToGraphqlType(t.Elem(), isInput)
 		if err != nil {
 			return nil, err
 		}
-		nonNullType.NonNull = false
+		// TODO(vito): don't consider struct pointers optional, assuming they are
+		// types like *dagger.Container.
+		//
+		// a better scheme might be to have folks put optional fields in an Opts
+		// struct to clear up this ambiguity and avoid having to use pointers
+		// everywhere.
+		nonNullType.NonNull = t.Elem().Kind() == reflect.Struct
 		return nonNullType, nil
 	default:
 		return nil, fmt.Errorf("unsupported type %s", t.Kind())
@@ -425,7 +432,9 @@ func convertInput(input any, desiredType reflect.Type, client *Client) (any, err
 		if err != nil {
 			return nil, err
 		}
-		return &x, nil
+		ptr := reflect.New(desiredType.Elem())
+		ptr.Elem().Set(reflect.ValueOf(x))
+		return ptr.Interface(), nil
 	case reflect.Slice:
 		returnObj := reflect.MakeSlice(desiredType, inputObj.Len(), inputObj.Len())
 		for i := 0; i < inputObj.Len(); i++ {

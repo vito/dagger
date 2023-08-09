@@ -113,19 +113,24 @@ func (r *Environment) WithFunction_(in any) *Environment {
 		if param.typ == reflect.TypeOf((*Context)(nil)).Elem() {
 			continue
 		}
-		astType, err := goReflectTypeToGraphqlType(param.typ, false)
+
+		astType, err := goReflectTypeToGraphqlType(param.typ, true)
 		if err != nil {
 			writeErrorf(err)
 		}
+
 		typeName := astType.Name()
 		isList := false
-		if !astType.NonNull {
+		isOptional := !astType.NonNull
+		if astType.NamedType == "" {
 			// must be a list
 			typeName = astType.Elem.Name()
 			isList = true
 		}
+
 		function = function.WithArg(param.name, typeName, isList, EnvironmentFunctionWithArgOpts{
 			Description: "TODO",
+			IsOptional:  isOptional,
 		})
 	}
 	for _, param := range fn.returns {
