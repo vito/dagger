@@ -8,6 +8,7 @@ import (
 
 	"github.com/dagger/dagger/core/pipeline"
 	"github.com/dagger/dagger/core/socket"
+	"github.com/dagger/dagger/engine"
 	"github.com/dagger/dagger/engine/buildkit"
 	"github.com/moby/buildkit/client/llb"
 	bkgw "github.com/moby/buildkit/frontend/gateway/client"
@@ -105,5 +106,9 @@ func (host *Host) File(
 }
 
 func (host *Host) Socket(ctx context.Context, sockPath string) (*socket.Socket, error) {
-	return socket.NewHostUnixSocket(sockPath), nil
+	clientMetadata, err := engine.ClientMetadataFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return socket.NewHostUnixSocket(clientMetadata.ClientID, sockPath), nil
 }

@@ -40,7 +40,7 @@ func (p SocketProvider) ForwardAgent(stream sshforward.SSH_ForwardAgentServer) e
 	if !p.EnableHostNetworkAccess {
 		return status.Errorf(codes.PermissionDenied, "host access is disabled")
 	}
-	opts, ok := metadata.FromIncomingContext(stream.Context()) // if no metadata continue with empty object
+	opts, ok := metadata.FromIncomingContext(stream.Context())
 	if !ok {
 		return status.Errorf(codes.InvalidArgument, "no metadata")
 	}

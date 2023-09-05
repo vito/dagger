@@ -1461,19 +1461,11 @@ func TestServiceContainerToHost(t *testing.T) {
 
 	c, ctx := connect(t)
 
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
+	prefix := identity.NewID()
 
-	t.Cleanup(func() { _ = l.Close() })
-
-	go http.Serve(l, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintln(w, r.URL.Query().Get("content"))
-	}))
-
-	_, portStr, err := net.SplitHostPort(l.Addr().String())
+	l, port, err := localService(prefix)
 	require.NoError(t, err)
-	port, err := strconv.Atoi(portStr)
-	require.NoError(t, err)
+	t.Cleanup(func() { l.Close() })
 
 	t.Run("simple", func(t *testing.T) {
 		t.Parallel()
@@ -1489,7 +1481,7 @@ func TestServiceContainerToHost(t *testing.T) {
 				WithExec([]string{"wget", "-O-", "http://www/?content=" + content}).
 				Stdout(ctx)
 			require.NoError(t, err)
-			require.Equal(t, content+"\n", out)
+			require.Equal(t, prefix+"-"+content+"\n", out)
 		}
 	})
 
@@ -1509,7 +1501,7 @@ func TestServiceContainerToHost(t *testing.T) {
 			WithExec([]string{"wget", "-O-", "http://" + hn + "/?content=hello"}).
 			Stdout(ctx)
 		require.NoError(t, err)
-		require.Equal(t, "hello\n", out)
+		require.Equal(t, prefix+"-hello\n", out)
 	})
 
 	t.Run("using endpoint", func(t *testing.T) {
@@ -1530,25 +1522,16 @@ func TestServiceContainerToHost(t *testing.T) {
 			WithExec([]string{"wget", "-O-", svcURL + "/?content=hello"}).
 			Stdout(ctx)
 		require.NoError(t, err)
-		require.Equal(t, "hello\n", out)
+		require.Equal(t, prefix+"-hello\n", out)
 	})
 
 	t.Run("multiple ports", func(t *testing.T) {
 		t.Parallel()
 
-		l2, err := net.Listen("tcp", "127.0.0.1:0")
+		prefix2 := identity.NewID()
+		l2, port2, err := localService(prefix2)
 		require.NoError(t, err)
-
-		defer l2.Close()
-
-		go http.Serve(l2, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			fmt.Fprintln(w, r.URL.Query().Get("content")+"-2")
-		}))
-
-		_, port2Str, err := net.SplitHostPort(l2.Addr().String())
-		require.NoError(t, err)
-		port2, err := strconv.Atoi(port2Str)
-		require.NoError(t, err)
+		t.Cleanup(func() { l2.Close() })
 
 		host := c.Host().Service([]dagger.PortForward{
 			{Frontend: 80, Backend: port},
@@ -1565,7 +1548,7 @@ func TestServiceContainerToHost(t *testing.T) {
 			`}).
 			Stdout(ctx)
 		require.NoError(t, err)
-		require.Equal(t, "hey hey-2", out)
+		require.Equal(t, prefix+"-hey"+" "+prefix2+"-hey", out)
 	})
 
 	t.Run("no ports given", func(t *testing.T) {
@@ -1574,6 +1557,51 @@ func TestServiceContainerToHost(t *testing.T) {
 		_, err := c.Host().Service(nil).ID(ctx)
 		require.Error(t, err)
 	})
+}
+
+func TestServiceContainerToHostNested(t *testing.T) {
+	t.Parallel()
+
+	c, ctx := connect(t)
+
+	nestingLimit := calculateNestingLimit(ctx, c, t)
+
+	thisRepoPath, err := filepath.Abs("../..")
+	require.NoError(t, err)
+
+	code := c.Host().Directory(thisRepoPath, dagger.HostDirectoryOpts{
+		Include: []string{"core/integration/testdata/nested-c2h/", "sdk/go/", "go.mod", "go.sum"},
+	})
+
+	prefix := identity.NewID()
+	l, port, err := localService(prefix)
+	require.NoError(t, err)
+	t.Cleanup(func() { l.Close() })
+
+	host := c.Host().Service([]dagger.PortForward{
+		{Frontend: 80, Backend: port},
+	})
+
+	expected := prefix + "-hello"
+	for i := nestingLimit - 1; i > 0; i-- {
+		expected = fmt.Sprintf("%d-%s", i, expected)
+	}
+
+	out, err := c.Container().
+		From("golang:1.20.6-alpine").
+		With(goCache(c)).
+		WithServiceBinding("www", host).
+		WithMountedDirectory("/src", code).
+		WithWorkdir("/src").
+		WithExec([]string{
+			"go", "run", "./core/integration/testdata/nested-c2h/",
+			strconv.Itoa(nestingLimit), "http://www/?content=hello",
+		}, dagger.ContainerWithExecOpts{
+			ExperimentalPrivilegedNesting: true,
+		}).
+		Stdout(ctx)
+	require.NoError(t, err)
+	require.Equal(t, expected, out)
 }
 
 func httpService(ctx context.Context, t *testing.T, c *dagger.Client, content string) (*dagger.Service, string) {
@@ -1681,4 +1709,28 @@ func calculateNestingLimit(ctx context.Context, c *dagger.Client, t *testing.T) 
 	}
 
 	return calculatedNestingLimit
+}
+
+// NB: duplicated with nested-c2h/main.go
+func localService(prefix string) (net.Listener, int, error) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return nil, 0, err
+	}
+
+	go http.Serve(l, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintln(w, prefix+"-"+r.URL.Query().Get("content"))
+	}))
+
+	_, portStr, err := net.SplitHostPort(l.Addr().String())
+	if err != nil {
+		return nil, 0, err
+	}
+
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	return l, port, nil
 }

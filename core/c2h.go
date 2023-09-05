@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/dagger/dagger/core/socket"
+	"github.com/dagger/dagger/engine"
 	"github.com/dagger/dagger/engine/buildkit"
 	"github.com/moby/buildkit/client/llb"
 	bkgw "github.com/moby/buildkit/frontend/gateway/client"
@@ -25,6 +26,11 @@ type c2hTunnel struct {
 }
 
 func (d *c2hTunnel) Tunnel(ctx context.Context) (err error) {
+	clientMetadata, err := engine.ClientMetadataFromContext(ctx)
+	if err != nil {
+		return err
+	}
+
 	rec := progrock.FromContext(ctx)
 
 	scratchDef, err := llb.Scratch().Marshal(ctx)
@@ -56,6 +62,7 @@ func (d *c2hTunnel) Tunnel(ctx context.Context) (err error) {
 		}
 
 		upstream := socket.NewHostIPSocket(
+			clientMetadata.ClientID,
 			port.Protocol.Network(),
 			fmt.Sprintf("%s:%d", d.upstreamHost, port.Backend),
 		)

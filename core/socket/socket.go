@@ -10,6 +10,9 @@ import (
 )
 
 type Socket struct {
+	// Client which is providing the socket.
+	ClientID string `json:"client_id,omitempty"`
+
 	// Unix
 	HostPath string `json:"host_path,omitempty"`
 
@@ -31,8 +34,10 @@ func (id ID) ToSocket() (*Socket, error) {
 	return &socket, nil
 }
 
-func NewHostUnixSocket(absPath string) *Socket {
+func NewHostUnixSocket(clientID, absPath string) *Socket {
 	return &Socket{
+		ClientID: clientID,
+
 		HostPath: absPath,
 	}
 }
@@ -41,8 +46,10 @@ func (socket *Socket) ID() (ID, error) {
 	return resourceid.Encode[ID](socket)
 }
 
-func NewHostIPSocket(proto string, addr string) *Socket {
+func NewHostIPSocket(clientID, proto string, addr string) *Socket {
 	return &Socket{
+		ClientID: clientID,
+
 		HostAddr:     addr,
 		HostProtocol: proto,
 	}
