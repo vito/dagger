@@ -59,6 +59,7 @@ require (
 )
 
 require (
+	capnproto.org/go/capnp/v3 v3.0.0-alpha-29
 	github.com/blang/semver v3.5.1+incompatible
 	github.com/charmbracelet/lipgloss v0.7.1
 	github.com/dave/jennifer v1.7.0
@@ -213,6 +214,7 @@ require (
 	gopkg.in/tomb.v1 v1.0.0-20141024135613-dd632973f1e7 // indirect
 	gopkg.in/warnings.v0 v0.1.2 // indirect
 	oss.terrastruct.com/util-go v0.0.0-20230320053557-dcb5aac7d972 // indirect
+	zenhack.net/go/util v0.0.0-20230414204917-531d38494cf5 // indirect
 )
 
 require (
