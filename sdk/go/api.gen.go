@@ -44,10 +44,10 @@ type Void string
 // Key value object that represents a build argument.
 type BuildArg struct {
 	// The build argument name.
-	Name string `json:"name"`
+	Name string `json:"name,omitempty"`
 
 	// The build argument value.
-	Value string `json:"value"`
+	Value string `json:"value,omitempty"`
 }
 
 // A definition of a field on a custom object defined in a Module.
@@ -55,101 +55,101 @@ type BuildArg struct {
 // object whose value is computed by invoking code (and can accept arguments).
 type FieldTypeDefInput struct {
 	// A doc string for the field, if any
-	Description string `json:"description"`
+	Description string `json:"description,omitempty"`
 
 	// The name of the field in the object
-	Name string `json:"name"`
+	Name string `json:"name,omitempty"`
 
 	// The type of the field
-	TypeDef *TypeDefInput `json:"typeDef"`
+	TypeDef *TypeDefInput `json:"typeDef,omitempty"`
 }
 
 type FunctionArgDef struct {
 	// A default value to use for this argument if not explicitly set by the caller, if any
-	DefaultValue JSON `json:"defaultValue"`
+	DefaultValue JSON `json:"defaultValue,omitempty"`
 
 	// A doc string for the argument, if any
-	Description string `json:"description"`
+	Description string `json:"description,omitempty"`
 
 	// The name of the argument
-	Name string `json:"name"`
+	Name string `json:"name,omitempty"`
 
 	// The type of the argument
-	TypeDef *TypeDefInput `json:"typeDef"`
+	TypeDef *TypeDefInput `json:"typeDef,omitempty"`
 }
 
 type FunctionCallInput struct {
 	// The name of the argument to the function
-	Name string `json:"name"`
+	Name string `json:"name,omitempty"`
 
 	// The value of the argument to the function, representing as a JSON-serialized string.
-	Value JSON `json:"value"`
+	Value JSON `json:"value,omitempty"`
 }
 
 type FunctionDef struct {
 	// Arguments accepted by this function, if any
-	Args []*FunctionArgDef `json:"args"`
+	Args []*FunctionArgDef `json:"args,omitempty"`
 
 	// A doc string for the function, if any
-	Description string `json:"description"`
+	Description string `json:"description,omitempty"`
 
 	// The name of the function
-	Name string `json:"name"`
+	Name string `json:"name,omitempty"`
 
 	// The type returned by this function
-	ReturnType *TypeDefInput `json:"returnType"`
+	ReturnType *TypeDefInput `json:"returnType,omitempty"`
 }
 
 type ListTypeDefInput struct {
 	// The type of the elements in the list
-	ElementTypeDef *TypeDefInput `json:"elementTypeDef"`
+	ElementTypeDef *TypeDefInput `json:"elementTypeDef,omitempty"`
 }
 
 type ModuleEnvironmentVariable struct {
-	Name string `json:"name"`
+	Name string `json:"name,omitempty"`
 
-	Value string `json:"value"`
+	Value string `json:"value,omitempty"`
 }
 
 // A definition of a custom object defined in a Module.
 type ObjectTypeDefInput struct {
 	// The doc string for the object, if any
-	Description string `json:"description"`
+	Description string `json:"description,omitempty"`
 
 	// Static fields defined on this object, if any
-	Fields []*FieldTypeDefInput `json:"fields"`
+	Fields []*FieldTypeDefInput `json:"fields,omitempty"`
 
 	// Functions defined on this object, if any
-	Functions []*FunctionDef `json:"functions"`
+	Functions []*FunctionDef `json:"functions,omitempty"`
 
 	// The name of the object
-	Name string `json:"name"`
+	Name string `json:"name,omitempty"`
 }
 
 // Key value object that represents a Pipeline label.
 type PipelineLabel struct {
 	// Label name.
-	Name string `json:"name"`
+	Name string `json:"name,omitempty"`
 
 	// Label value.
-	Value string `json:"value"`
+	Value string `json:"value,omitempty"`
 }
 
 // A definition of a type used in a Module as an argument, return type or object field.
 type TypeDefInput struct {
 	// If kind is LIST, the list-specific type definition.
 	// If kind is not LIST, this will be null."
-	AsList *ListTypeDefInput `json:"asList"`
+	AsList *ListTypeDefInput `json:"asList,omitempty"`
 
 	// If kind is OBJECT, the object-specific type definition.
 	// If kind is not OBJECT, this will be null."
-	AsObject *ObjectTypeDefInput `json:"asObject"`
+	AsObject *ObjectTypeDefInput `json:"asObject,omitempty"`
 
 	// The kind of type this is (e.g. primitive, list, object)
-	Kind TypeDefKind `json:"kind"`
+	Kind TypeDefKind `json:"kind,omitempty"`
 
 	// Whether this type can be set to null
-	Optional bool `json:"optional"`
+	Optional bool `json:"optional,omitempty"`
 }
 
 // A directory whose contents persist across runs.
@@ -161,7 +161,6 @@ type CacheVolume struct {
 }
 
 func (r *CacheVolume) ID(ctx context.Context) (CacheID, error) {
-
 	if r.id != nil {
 		return *r.id, nil
 	}
@@ -251,7 +250,6 @@ type ContainerBuildOpts struct {
 
 // Initializes this container from a Dockerfile build.
 func (r *Container) Build(context *Directory, opts ...ContainerBuildOpts) *Container {
-
 	q := r.q.Select("build")
 	for i := len(opts) - 1; i >= 0; i-- {
 		// `dockerfile` optional argument
@@ -281,7 +279,6 @@ func (r *Container) Build(context *Directory, opts ...ContainerBuildOpts) *Conta
 
 // Retrieves default arguments for future commands.
 func (r *Container) DefaultArgs(ctx context.Context) ([]string, error) {
-
 	q := r.q.Select("defaultArgs")
 
 	var response []string
@@ -294,7 +291,6 @@ func (r *Container) DefaultArgs(ctx context.Context) ([]string, error) {
 //
 // Mounts are included.
 func (r *Container) Directory(path string) *Directory {
-
 	q := r.q.Select("directory")
 	q = q.Arg("path", path)
 
@@ -320,7 +316,6 @@ type ContainerEndpointOpts struct {
 //
 // Currently experimental; set _EXPERIMENTAL_DAGGER_SERVICES_DNS=0 to disable.
 func (r *Container) Endpoint(ctx context.Context, opts ...ContainerEndpointOpts) (string, error) {
-
 	if r.endpoint != nil {
 		return *r.endpoint, nil
 	}
@@ -344,7 +339,6 @@ func (r *Container) Endpoint(ctx context.Context, opts ...ContainerEndpointOpts)
 
 // Retrieves entrypoint to be prepended to the arguments of all commands.
 func (r *Container) Entrypoint(ctx context.Context) ([]string, error) {
-
 	q := r.q.Select("entrypoint")
 
 	var response []string
@@ -355,7 +349,6 @@ func (r *Container) Entrypoint(ctx context.Context) ([]string, error) {
 
 // Retrieves the value of the specified environment variable.
 func (r *Container) EnvVariable(ctx context.Context, name string) (string, error) {
-
 	if r.envVariable != nil {
 		return *r.envVariable, nil
 	}
@@ -370,7 +363,6 @@ func (r *Container) EnvVariable(ctx context.Context, name string) (string, error
 
 // Retrieves the list of environment variables passed to commands.
 func (r *Container) EnvVariables(ctx context.Context) ([]EnvVariable, error) {
-
 	q := r.q.Select("envVariables")
 
 	q = q.Select("name value")
@@ -423,7 +415,6 @@ type ContainerExportOpts struct {
 // Return true on success.
 // It can also publishes platform variants.
 func (r *Container) Export(ctx context.Context, path string, opts ...ContainerExportOpts) (bool, error) {
-
 	if r.export != nil {
 		return *r.export, nil
 	}
@@ -457,7 +448,6 @@ func (r *Container) Export(ctx context.Context, path string, opts ...ContainerEx
 //
 // Currently experimental; set _EXPERIMENTAL_DAGGER_SERVICES_DNS=0 to disable.
 func (r *Container) ExposedPorts(ctx context.Context) ([]Port, error) {
-
 	q := r.q.Select("exposedPorts")
 
 	q = q.Select("description port protocol")
@@ -493,7 +483,6 @@ func (r *Container) ExposedPorts(ctx context.Context) ([]Port, error) {
 //
 // Mounts are included.
 func (r *Container) File(path string) *File {
-
 	q := r.q.Select("file")
 	q = q.Arg("path", path)
 
@@ -505,7 +494,6 @@ func (r *Container) File(path string) *File {
 
 // Initializes this container from a pulled base image.
 func (r *Container) From(address string) *Container {
-
 	q := r.q.Select("from")
 	q = q.Arg("address", address)
 
@@ -519,7 +507,6 @@ func (r *Container) From(address string) *Container {
 //
 // Currently experimental; set _EXPERIMENTAL_DAGGER_SERVICES_DNS=0 to disable.
 func (r *Container) Hostname(ctx context.Context) (string, error) {
-
 	if r.hostname != nil {
 		return *r.hostname, nil
 	}
@@ -533,7 +520,6 @@ func (r *Container) Hostname(ctx context.Context) (string, error) {
 
 // A unique identifier for this container.
 func (r *Container) ID(ctx context.Context) (ContainerID, error) {
-
 	if r.id != nil {
 		return *r.id, nil
 	}
@@ -574,7 +560,6 @@ func (r *Container) MarshalJSON() ([]byte, error) {
 
 // The unique image reference which can only be retrieved immediately after the 'Container.From' call.
 func (r *Container) ImageRef(ctx context.Context) (string, error) {
-
 	if r.imageRef != nil {
 		return *r.imageRef, nil
 	}
@@ -598,7 +583,6 @@ type ContainerImportOpts struct {
 // NOTE: this involves unpacking the tarball to an OCI store on the host at
 // $XDG_CACHE_DIR/dagger/oci. This directory can be removed whenever you like.
 func (r *Container) Import(source *File, opts ...ContainerImportOpts) *Container {
-
 	q := r.q.Select("import")
 	for i := len(opts) - 1; i >= 0; i-- {
 		// `tag` optional argument
@@ -616,7 +600,6 @@ func (r *Container) Import(source *File, opts ...ContainerImportOpts) *Container
 
 // Retrieves the value of the specified label.
 func (r *Container) Label(ctx context.Context, name string) (string, error) {
-
 	if r.label != nil {
 		return *r.label, nil
 	}
@@ -631,7 +614,6 @@ func (r *Container) Label(ctx context.Context, name string) (string, error) {
 
 // Retrieves the list of labels passed to container.
 func (r *Container) Labels(ctx context.Context) ([]Label, error) {
-
 	q := r.q.Select("labels")
 
 	q = q.Select("name value")
@@ -664,7 +646,6 @@ func (r *Container) Labels(ctx context.Context) ([]Label, error) {
 
 // Retrieves the list of paths where a directory is mounted.
 func (r *Container) Mounts(ctx context.Context) ([]string, error) {
-
 	q := r.q.Select("mounts")
 
 	var response []string
@@ -683,7 +664,6 @@ type ContainerPipelineOpts struct {
 
 // Creates a named sub-pipeline
 func (r *Container) Pipeline(name string, opts ...ContainerPipelineOpts) *Container {
-
 	q := r.q.Select("pipeline")
 	for i := len(opts) - 1; i >= 0; i-- {
 		// `description` optional argument
@@ -705,7 +685,6 @@ func (r *Container) Pipeline(name string, opts ...ContainerPipelineOpts) *Contai
 
 // The platform this container executes and publishes as.
 func (r *Container) Platform(ctx context.Context) (Platform, error) {
-
 	if r.platform != nil {
 		return *r.platform, nil
 	}
@@ -739,7 +718,6 @@ type ContainerPublishOpts struct {
 // Publish returns a fully qualified ref.
 // It can also publish platform variants.
 func (r *Container) Publish(ctx context.Context, address string, opts ...ContainerPublishOpts) (string, error) {
-
 	if r.publish != nil {
 		return *r.publish, nil
 	}
@@ -768,7 +746,6 @@ func (r *Container) Publish(ctx context.Context, address string, opts ...Contain
 
 // Retrieves this container's root filesystem. Mounts are not included.
 func (r *Container) Rootfs() *Directory {
-
 	q := r.q.Select("rootfs")
 
 	return &Directory{
@@ -781,7 +758,6 @@ func (r *Container) Rootfs() *Directory {
 //
 // Will execute default command if none is set, or error if there's no default.
 func (r *Container) Stderr(ctx context.Context) (string, error) {
-
 	if r.stderr != nil {
 		return *r.stderr, nil
 	}
@@ -797,7 +773,6 @@ func (r *Container) Stderr(ctx context.Context) (string, error) {
 //
 // Will execute default command if none is set, or error if there's no default.
 func (r *Container) Stdout(ctx context.Context) (string, error) {
-
 	if r.stdout != nil {
 		return *r.stdout, nil
 	}
@@ -813,7 +788,6 @@ func (r *Container) Stdout(ctx context.Context) (string, error) {
 //
 // It doesn't run the default command if no exec has been set.
 func (r *Container) Sync(ctx context.Context) (*Container, error) {
-
 	q := r.q.Select("sync")
 
 	return r, q.Execute(ctx, r.c)
@@ -821,7 +795,6 @@ func (r *Container) Sync(ctx context.Context) (*Container, error) {
 
 // Retrieves the user to be set for all commands.
 func (r *Container) User(ctx context.Context) (string, error) {
-
 	if r.user != nil {
 		return *r.user, nil
 	}
@@ -841,7 +814,6 @@ type ContainerWithDefaultArgsOpts struct {
 
 // Configures default arguments for future commands.
 func (r *Container) WithDefaultArgs(opts ...ContainerWithDefaultArgsOpts) *Container {
-
 	q := r.q.Select("withDefaultArgs")
 	for i := len(opts) - 1; i >= 0; i-- {
 		// `args` optional argument
@@ -872,7 +844,6 @@ type ContainerWithDirectoryOpts struct {
 
 // Retrieves this container plus a directory written at the given path.
 func (r *Container) WithDirectory(path string, directory *Directory, opts ...ContainerWithDirectoryOpts) *Container {
-
 	q := r.q.Select("withDirectory")
 	for i := len(opts) - 1; i >= 0; i-- {
 		// `exclude` optional argument
@@ -899,7 +870,6 @@ func (r *Container) WithDirectory(path string, directory *Directory, opts ...Con
 
 // Retrieves this container but with a different command entrypoint.
 func (r *Container) WithEntrypoint(args []string) *Container {
-
 	q := r.q.Select("withEntrypoint")
 	q = q.Arg("args", args)
 
@@ -918,7 +888,6 @@ type ContainerWithEnvVariableOpts struct {
 
 // Retrieves this container plus the given environment variable.
 func (r *Container) WithEnvVariable(name string, value string, opts ...ContainerWithEnvVariableOpts) *Container {
-
 	q := r.q.Select("withEnvVariable")
 	for i := len(opts) - 1; i >= 0; i-- {
 		// `expand` optional argument
@@ -959,7 +928,6 @@ type ContainerWithExecOpts struct {
 
 // Retrieves this container after executing the specified command inside it.
 func (r *Container) WithExec(args []string, opts ...ContainerWithExecOpts) *Container {
-
 	q := r.q.Select("withExec")
 	for i := len(opts) - 1; i >= 0; i-- {
 		// `skipEntrypoint` optional argument
@@ -1011,7 +979,6 @@ type ContainerWithExposedPortOpts struct {
 //
 // Currently experimental; set _EXPERIMENTAL_DAGGER_SERVICES_DNS=0 to disable.
 func (r *Container) WithExposedPort(port int, opts ...ContainerWithExposedPortOpts) *Container {
-
 	q := r.q.Select("withExposedPort")
 	for i := len(opts) - 1; i >= 0; i-- {
 		// `protocol` optional argument
@@ -1047,7 +1014,6 @@ type ContainerWithFileOpts struct {
 
 // Retrieves this container plus the contents of the given file copied to the given path.
 func (r *Container) WithFile(path string, source *File, opts ...ContainerWithFileOpts) *Container {
-
 	q := r.q.Select("withFile")
 	for i := len(opts) - 1; i >= 0; i-- {
 		// `permissions` optional argument
@@ -1071,7 +1037,6 @@ func (r *Container) WithFile(path string, source *File, opts ...ContainerWithFil
 // Indicate that subsequent operations should be featured more prominently in
 // the UI.
 func (r *Container) WithFocus() *Container {
-
 	q := r.q.Select("withFocus")
 
 	return &Container{
@@ -1082,7 +1047,6 @@ func (r *Container) WithFocus() *Container {
 
 // Retrieves this container plus the given label.
 func (r *Container) WithLabel(name string, value string) *Container {
-
 	q := r.q.Select("withLabel")
 	q = q.Arg("name", name)
 	q = q.Arg("value", value)
@@ -1113,7 +1077,6 @@ type ContainerWithMountedCacheOpts struct {
 
 // Retrieves this container plus a cache volume mounted at the given path.
 func (r *Container) WithMountedCache(path string, cache *CacheVolume, opts ...ContainerWithMountedCacheOpts) *Container {
-
 	q := r.q.Select("withMountedCache")
 	for i := len(opts) - 1; i >= 0; i-- {
 		// `source` optional argument
@@ -1150,7 +1113,6 @@ type ContainerWithMountedDirectoryOpts struct {
 
 // Retrieves this container plus a directory mounted at the given path.
 func (r *Container) WithMountedDirectory(path string, source *Directory, opts ...ContainerWithMountedDirectoryOpts) *Container {
-
 	q := r.q.Select("withMountedDirectory")
 	for i := len(opts) - 1; i >= 0; i-- {
 		// `owner` optional argument
@@ -1179,7 +1141,6 @@ type ContainerWithMountedFileOpts struct {
 
 // Retrieves this container plus a file mounted at the given path.
 func (r *Container) WithMountedFile(path string, source *File, opts ...ContainerWithMountedFileOpts) *Container {
-
 	q := r.q.Select("withMountedFile")
 	for i := len(opts) - 1; i >= 0; i-- {
 		// `owner` optional argument
@@ -1208,7 +1169,6 @@ type ContainerWithMountedSecretOpts struct {
 
 // Retrieves this container plus a secret mounted into a file at the given path.
 func (r *Container) WithMountedSecret(path string, source *Secret, opts ...ContainerWithMountedSecretOpts) *Container {
-
 	q := r.q.Select("withMountedSecret")
 	for i := len(opts) - 1; i >= 0; i-- {
 		// `owner` optional argument
@@ -1227,7 +1187,6 @@ func (r *Container) WithMountedSecret(path string, source *Secret, opts ...Conta
 
 // Retrieves this container plus a temporary directory mounted at the given path.
 func (r *Container) WithMountedTemp(path string) *Container {
-
 	q := r.q.Select("withMountedTemp")
 	q = q.Arg("path", path)
 
@@ -1255,7 +1214,6 @@ type ContainerWithNewFileOpts struct {
 
 // Retrieves this container plus a new file written at the given path.
 func (r *Container) WithNewFile(path string, opts ...ContainerWithNewFileOpts) *Container {
-
 	q := r.q.Select("withNewFile")
 	for i := len(opts) - 1; i >= 0; i-- {
 		// `contents` optional argument
@@ -1281,7 +1239,6 @@ func (r *Container) WithNewFile(path string, opts ...ContainerWithNewFileOpts) *
 
 // Retrieves this container with a registry authentication for a given address.
 func (r *Container) WithRegistryAuth(address string, username string, secret *Secret) *Container {
-
 	q := r.q.Select("withRegistryAuth")
 	q = q.Arg("address", address)
 	q = q.Arg("username", username)
@@ -1295,7 +1252,6 @@ func (r *Container) WithRegistryAuth(address string, username string, secret *Se
 
 // Initializes this container from this DirectoryID.
 func (r *Container) WithRootfs(directory *Directory) *Container {
-
 	q := r.q.Select("withRootfs")
 	q = q.Arg("directory", directory)
 
@@ -1307,7 +1263,6 @@ func (r *Container) WithRootfs(directory *Directory) *Container {
 
 // Retrieves this container plus an env variable containing the given secret.
 func (r *Container) WithSecretVariable(name string, secret *Secret) *Container {
-
 	q := r.q.Select("withSecretVariable")
 	q = q.Arg("name", name)
 	q = q.Arg("secret", secret)
@@ -1329,7 +1284,6 @@ func (r *Container) WithSecretVariable(name string, secret *Secret) *Container {
 //
 // Currently experimental; set _EXPERIMENTAL_DAGGER_SERVICES_DNS=0 to disable.
 func (r *Container) WithServiceBinding(alias string, service *Container) *Container {
-
 	q := r.q.Select("withServiceBinding")
 	q = q.Arg("alias", alias)
 	q = q.Arg("service", service)
@@ -1352,7 +1306,6 @@ type ContainerWithUnixSocketOpts struct {
 
 // Retrieves this container plus a socket forwarded to the given Unix socket path.
 func (r *Container) WithUnixSocket(path string, source *Socket, opts ...ContainerWithUnixSocketOpts) *Container {
-
 	q := r.q.Select("withUnixSocket")
 	for i := len(opts) - 1; i >= 0; i-- {
 		// `owner` optional argument
@@ -1371,7 +1324,6 @@ func (r *Container) WithUnixSocket(path string, source *Socket, opts ...Containe
 
 // Retrieves this container with a different command user.
 func (r *Container) WithUser(name string) *Container {
-
 	q := r.q.Select("withUser")
 	q = q.Arg("name", name)
 
@@ -1383,7 +1335,6 @@ func (r *Container) WithUser(name string) *Container {
 
 // Retrieves this container with a different working directory.
 func (r *Container) WithWorkdir(path string) *Container {
-
 	q := r.q.Select("withWorkdir")
 	q = q.Arg("path", path)
 
@@ -1395,7 +1346,6 @@ func (r *Container) WithWorkdir(path string) *Container {
 
 // Retrieves this container minus the given environment variable.
 func (r *Container) WithoutEnvVariable(name string) *Container {
-
 	q := r.q.Select("withoutEnvVariable")
 	q = q.Arg("name", name)
 
@@ -1415,7 +1365,6 @@ type ContainerWithoutExposedPortOpts struct {
 //
 // Currently experimental; set _EXPERIMENTAL_DAGGER_SERVICES_DNS=0 to disable.
 func (r *Container) WithoutExposedPort(port int, opts ...ContainerWithoutExposedPortOpts) *Container {
-
 	q := r.q.Select("withoutExposedPort")
 	for i := len(opts) - 1; i >= 0; i-- {
 		// `protocol` optional argument
@@ -1436,7 +1385,6 @@ func (r *Container) WithoutExposedPort(port int, opts ...ContainerWithoutExposed
 //
 // This is the initial state of all containers.
 func (r *Container) WithoutFocus() *Container {
-
 	q := r.q.Select("withoutFocus")
 
 	return &Container{
@@ -1447,7 +1395,6 @@ func (r *Container) WithoutFocus() *Container {
 
 // Retrieves this container minus the given environment label.
 func (r *Container) WithoutLabel(name string) *Container {
-
 	q := r.q.Select("withoutLabel")
 	q = q.Arg("name", name)
 
@@ -1459,7 +1406,6 @@ func (r *Container) WithoutLabel(name string) *Container {
 
 // Retrieves this container after unmounting everything at the given path.
 func (r *Container) WithoutMount(path string) *Container {
-
 	q := r.q.Select("withoutMount")
 	q = q.Arg("path", path)
 
@@ -1471,7 +1417,6 @@ func (r *Container) WithoutMount(path string) *Container {
 
 // Retrieves this container without the registry authentication of a given address.
 func (r *Container) WithoutRegistryAuth(address string) *Container {
-
 	q := r.q.Select("withoutRegistryAuth")
 	q = q.Arg("address", address)
 
@@ -1483,7 +1428,6 @@ func (r *Container) WithoutRegistryAuth(address string) *Container {
 
 // Retrieves this container with a previously added Unix socket removed.
 func (r *Container) WithoutUnixSocket(path string) *Container {
-
 	q := r.q.Select("withoutUnixSocket")
 	q = q.Arg("path", path)
 
@@ -1495,7 +1439,6 @@ func (r *Container) WithoutUnixSocket(path string) *Container {
 
 // Retrieves the working directory for all commands.
 func (r *Container) Workdir(ctx context.Context) (string, error) {
-
 	if r.workdir != nil {
 		return *r.workdir, nil
 	}
@@ -1541,7 +1484,6 @@ type DirectoryAsModuleOpts struct {
 // If sourceSubpath is not set, the module source code is loaded from the root of
 // the directory.
 func (r *Directory) AsModule(opts ...DirectoryAsModuleOpts) *Module {
-
 	q := r.q.Select("asModule")
 	for i := len(opts) - 1; i >= 0; i-- {
 		// `sourceSubpath` optional argument
@@ -1558,7 +1500,6 @@ func (r *Directory) AsModule(opts ...DirectoryAsModuleOpts) *Module {
 
 // Gets the difference between this directory and an another directory.
 func (r *Directory) Diff(other *Directory) *Directory {
-
 	q := r.q.Select("diff")
 	q = q.Arg("other", other)
 
@@ -1570,7 +1511,6 @@ func (r *Directory) Diff(other *Directory) *Directory {
 
 // Retrieves a directory at the given path.
 func (r *Directory) Directory(path string) *Directory {
-
 	q := r.q.Select("directory")
 	q = q.Arg("path", path)
 
@@ -1600,7 +1540,6 @@ type DirectoryDockerBuildOpts struct {
 
 // Builds a new Docker container from this directory.
 func (r *Directory) DockerBuild(opts ...DirectoryDockerBuildOpts) *Container {
-
 	q := r.q.Select("dockerBuild")
 	for i := len(opts) - 1; i >= 0; i-- {
 		// `dockerfile` optional argument
@@ -1639,7 +1578,6 @@ type DirectoryEntriesOpts struct {
 
 // Returns a list of files and directories at the given path.
 func (r *Directory) Entries(ctx context.Context, opts ...DirectoryEntriesOpts) ([]string, error) {
-
 	q := r.q.Select("entries")
 	for i := len(opts) - 1; i >= 0; i-- {
 		// `path` optional argument
@@ -1656,7 +1594,6 @@ func (r *Directory) Entries(ctx context.Context, opts ...DirectoryEntriesOpts) (
 
 // Writes the contents of the directory to a path on the host.
 func (r *Directory) Export(ctx context.Context, path string) (bool, error) {
-
 	if r.export != nil {
 		return *r.export, nil
 	}
@@ -1671,7 +1608,6 @@ func (r *Directory) Export(ctx context.Context, path string) (bool, error) {
 
 // Retrieves a file at the given path.
 func (r *Directory) File(path string) *File {
-
 	q := r.q.Select("file")
 	q = q.Arg("path", path)
 
@@ -1683,7 +1619,6 @@ func (r *Directory) File(path string) *File {
 
 // The content-addressed identifier of the directory.
 func (r *Directory) ID(ctx context.Context) (DirectoryID, error) {
-
 	if r.id != nil {
 		return *r.id, nil
 	}
@@ -1732,7 +1667,6 @@ type DirectoryPipelineOpts struct {
 
 // Creates a named sub-pipeline
 func (r *Directory) Pipeline(name string, opts ...DirectoryPipelineOpts) *Directory {
-
 	q := r.q.Select("pipeline")
 	for i := len(opts) - 1; i >= 0; i-- {
 		// `description` optional argument
@@ -1754,7 +1688,6 @@ func (r *Directory) Pipeline(name string, opts ...DirectoryPipelineOpts) *Direct
 
 // Force evaluation in the engine.
 func (r *Directory) Sync(ctx context.Context) (*Directory, error) {
-
 	q := r.q.Select("sync")
 
 	return r, q.Execute(ctx, r.c)
@@ -1770,7 +1703,6 @@ type DirectoryWithDirectoryOpts struct {
 
 // Retrieves this directory plus a directory written at the given path.
 func (r *Directory) WithDirectory(path string, directory *Directory, opts ...DirectoryWithDirectoryOpts) *Directory {
-
 	q := r.q.Select("withDirectory")
 	for i := len(opts) - 1; i >= 0; i-- {
 		// `exclude` optional argument
@@ -1801,7 +1733,6 @@ type DirectoryWithFileOpts struct {
 
 // Retrieves this directory plus the contents of the given file copied to the given path.
 func (r *Directory) WithFile(path string, source *File, opts ...DirectoryWithFileOpts) *Directory {
-
 	q := r.q.Select("withFile")
 	for i := len(opts) - 1; i >= 0; i-- {
 		// `permissions` optional argument
@@ -1828,7 +1759,6 @@ type DirectoryWithNewDirectoryOpts struct {
 
 // Retrieves this directory plus a new directory created at the given path.
 func (r *Directory) WithNewDirectory(path string, opts ...DirectoryWithNewDirectoryOpts) *Directory {
-
 	q := r.q.Select("withNewDirectory")
 	for i := len(opts) - 1; i >= 0; i-- {
 		// `permissions` optional argument
@@ -1854,7 +1784,6 @@ type DirectoryWithNewFileOpts struct {
 
 // Retrieves this directory plus a new file written at the given path.
 func (r *Directory) WithNewFile(path string, contents string, opts ...DirectoryWithNewFileOpts) *Directory {
-
 	q := r.q.Select("withNewFile")
 	for i := len(opts) - 1; i >= 0; i-- {
 		// `permissions` optional argument
@@ -1873,7 +1802,6 @@ func (r *Directory) WithNewFile(path string, contents string, opts ...DirectoryW
 
 // Retrieves this directory with all file/dir timestamps set to the given time.
 func (r *Directory) WithTimestamps(timestamp int) *Directory {
-
 	q := r.q.Select("withTimestamps")
 	q = q.Arg("timestamp", timestamp)
 
@@ -1885,7 +1813,6 @@ func (r *Directory) WithTimestamps(timestamp int) *Directory {
 
 // Retrieves this directory with the directory at the given path removed.
 func (r *Directory) WithoutDirectory(path string) *Directory {
-
 	q := r.q.Select("withoutDirectory")
 	q = q.Arg("path", path)
 
@@ -1897,7 +1824,6 @@ func (r *Directory) WithoutDirectory(path string) *Directory {
 
 // Retrieves this directory with the file at the given path removed.
 func (r *Directory) WithoutFile(path string) *Directory {
-
 	q := r.q.Select("withoutFile")
 	q = q.Arg("path", path)
 
@@ -1918,7 +1844,6 @@ type EnvVariable struct {
 
 // The environment variable name.
 func (r *EnvVariable) Name(ctx context.Context) (string, error) {
-
 	if r.name != nil {
 		return *r.name, nil
 	}
@@ -1932,7 +1857,6 @@ func (r *EnvVariable) Name(ctx context.Context) (string, error) {
 
 // The environment variable value.
 func (r *EnvVariable) Value(ctx context.Context) (string, error) {
-
 	if r.value != nil {
 		return *r.value, nil
 	}
@@ -1957,7 +1881,6 @@ type FieldTypeDef struct {
 
 // A doc string for the field, if any
 func (r *FieldTypeDef) Description(ctx context.Context) (string, error) {
-
 	if r.description != nil {
 		return *r.description, nil
 	}
@@ -1971,7 +1894,6 @@ func (r *FieldTypeDef) Description(ctx context.Context) (string, error) {
 
 // The name of the field in the object
 func (r *FieldTypeDef) Name(ctx context.Context) (string, error) {
-
 	if r.name != nil {
 		return *r.name, nil
 	}
@@ -1985,7 +1907,6 @@ func (r *FieldTypeDef) Name(ctx context.Context) (string, error) {
 
 // The type of the field
 func (r *FieldTypeDef) TypeDef() *TypeDef {
-
 	q := r.q.Select("typeDef")
 
 	return &TypeDef{
@@ -2016,7 +1937,6 @@ func (r *File) With(f WithFileFunc) *File {
 
 // Retrieves the contents of the file.
 func (r *File) Contents(ctx context.Context) (string, error) {
-
 	if r.contents != nil {
 		return *r.contents, nil
 	}
@@ -2037,7 +1957,6 @@ type FileExportOpts struct {
 
 // Writes the file to a file path on the host.
 func (r *File) Export(ctx context.Context, path string, opts ...FileExportOpts) (bool, error) {
-
 	if r.export != nil {
 		return *r.export, nil
 	}
@@ -2058,7 +1977,6 @@ func (r *File) Export(ctx context.Context, path string, opts ...FileExportOpts) 
 
 // Retrieves the content-addressed identifier of the file.
 func (r *File) ID(ctx context.Context) (FileID, error) {
-
 	if r.id != nil {
 		return *r.id, nil
 	}
@@ -2099,7 +2017,6 @@ func (r *File) MarshalJSON() ([]byte, error) {
 
 // Gets the size of the file, in bytes.
 func (r *File) Size(ctx context.Context) (int, error) {
-
 	if r.size != nil {
 		return *r.size, nil
 	}
@@ -2113,7 +2030,6 @@ func (r *File) Size(ctx context.Context) (int, error) {
 
 // Force evaluation in the engine.
 func (r *File) Sync(ctx context.Context) (*File, error) {
-
 	q := r.q.Select("sync")
 
 	return r, q.Execute(ctx, r.c)
@@ -2121,7 +2037,6 @@ func (r *File) Sync(ctx context.Context) (*File, error) {
 
 // Retrieves this file with its created/modified timestamps set to the given time.
 func (r *File) WithTimestamps(timestamp int) *File {
-
 	q := r.q.Select("withTimestamps")
 	q = q.Arg("timestamp", timestamp)
 
@@ -2143,7 +2058,6 @@ type Function struct {
 
 // Arguments accepted by this function, if any
 func (r *Function) Args(ctx context.Context) ([]FunctionArg, error) {
-
 	q := r.q.Select("args")
 
 	q = q.Select("defaultValue description name")
@@ -2188,7 +2102,6 @@ type FunctionCallOpts struct {
 // loading arbitrary modules and invoking functions in them is
 // required.
 func (r *Function) Call(ctx context.Context, opts ...FunctionCallOpts) (JSON, error) {
-
 	if r.call != nil {
 		return *r.call, nil
 	}
@@ -2208,7 +2121,6 @@ func (r *Function) Call(ctx context.Context, opts ...FunctionCallOpts) (JSON, er
 
 // A doc string for the function, if any
 func (r *Function) Description(ctx context.Context) (string, error) {
-
 	if r.description != nil {
 		return *r.description, nil
 	}
@@ -2221,7 +2133,6 @@ func (r *Function) Description(ctx context.Context) (string, error) {
 }
 
 func (r *Function) ID(ctx context.Context) (FunctionID, error) {
-
 	if r.id != nil {
 		return *r.id, nil
 	}
@@ -2262,7 +2173,6 @@ func (r *Function) MarshalJSON() ([]byte, error) {
 
 // The name of the function
 func (r *Function) Name(ctx context.Context) (string, error) {
-
 	if r.name != nil {
 		return *r.name, nil
 	}
@@ -2276,7 +2186,6 @@ func (r *Function) Name(ctx context.Context) (string, error) {
 
 // The type returned by this function
 func (r *Function) ReturnType() *TypeDef {
-
 	q := r.q.Select("returnType")
 
 	return &TypeDef{
@@ -2296,7 +2205,6 @@ type FunctionArg struct {
 
 // A default value to use for this argument when not explicitly set by the caller, if any
 func (r *FunctionArg) DefaultValue(ctx context.Context) (JSON, error) {
-
 	if r.defaultValue != nil {
 		return *r.defaultValue, nil
 	}
@@ -2310,7 +2218,6 @@ func (r *FunctionArg) DefaultValue(ctx context.Context) (JSON, error) {
 
 // A doc string for the argument, if any
 func (r *FunctionArg) Description(ctx context.Context) (string, error) {
-
 	if r.description != nil {
 		return *r.description, nil
 	}
@@ -2324,7 +2231,6 @@ func (r *FunctionArg) Description(ctx context.Context) (string, error) {
 
 // The name of the argument
 func (r *FunctionArg) Name(ctx context.Context) (string, error) {
-
 	if r.name != nil {
 		return *r.name, nil
 	}
@@ -2338,7 +2244,6 @@ func (r *FunctionArg) Name(ctx context.Context) (string, error) {
 
 // The type of the argument
 func (r *FunctionArg) TypeDef() *TypeDef {
-
 	q := r.q.Select("typeDef")
 
 	return &TypeDef{
@@ -2359,7 +2264,6 @@ type FunctionCall struct {
 
 // The argument values the function is being invoked with.
 func (r *FunctionCall) InputArgs(ctx context.Context) ([]FunctionCallArgValue, error) {
-
 	q := r.q.Select("inputArgs")
 
 	q = q.Select("name value")
@@ -2392,7 +2296,6 @@ func (r *FunctionCall) InputArgs(ctx context.Context) ([]FunctionCallArgValue, e
 
 // The name of the function being called.
 func (r *FunctionCall) Name(ctx context.Context) (string, error) {
-
 	if r.name != nil {
 		return *r.name, nil
 	}
@@ -2407,7 +2310,6 @@ func (r *FunctionCall) Name(ctx context.Context) (string, error) {
 // The value of the parent object of the function being called.
 // If the function is "top-level" to the module, this is always an empty object.
 func (r *FunctionCall) Parent(ctx context.Context) (JSON, error) {
-
 	if r.parent != nil {
 		return *r.parent, nil
 	}
@@ -2422,7 +2324,6 @@ func (r *FunctionCall) Parent(ctx context.Context) (JSON, error) {
 // The name of the parent object of the function being called.
 // If the function is "top-level" to the module, this is the name of the module.
 func (r *FunctionCall) ParentName(ctx context.Context) (string, error) {
-
 	if r.parentName != nil {
 		return *r.parentName, nil
 	}
@@ -2437,7 +2338,6 @@ func (r *FunctionCall) ParentName(ctx context.Context) (string, error) {
 // Set the return value of the function call to the provided value.
 // The value should be a string of the JSON serialization of the return value.
 func (r *FunctionCall) ReturnValue(ctx context.Context, value JSON) (Void, error) {
-
 	if r.returnValue != nil {
 		return *r.returnValue, nil
 	}
@@ -2460,7 +2360,6 @@ type FunctionCallArgValue struct {
 
 // The name of the argument.
 func (r *FunctionCallArgValue) Name(ctx context.Context) (string, error) {
-
 	if r.name != nil {
 		return *r.name, nil
 	}
@@ -2474,7 +2373,6 @@ func (r *FunctionCallArgValue) Name(ctx context.Context) (string, error) {
 
 // The value of the argument represented as a string of the JSON serialization.
 func (r *FunctionCallArgValue) Value(ctx context.Context) (JSON, error) {
-
 	if r.value != nil {
 		return *r.value, nil
 	}
@@ -2501,7 +2399,6 @@ type GitRefTreeOpts struct {
 
 // The filesystem tree at this ref.
 func (r *GitRef) Tree(opts ...GitRefTreeOpts) *Directory {
-
 	q := r.q.Select("tree")
 	for i := len(opts) - 1; i >= 0; i-- {
 		// `sshKnownHosts` optional argument
@@ -2528,7 +2425,6 @@ type GitRepository struct {
 
 // Returns details on one branch.
 func (r *GitRepository) Branch(name string) *GitRef {
-
 	q := r.q.Select("branch")
 	q = q.Arg("name", name)
 
@@ -2540,7 +2436,6 @@ func (r *GitRepository) Branch(name string) *GitRef {
 
 // Returns details on one commit.
 func (r *GitRepository) Commit(id string) *GitRef {
-
 	q := r.q.Select("commit")
 	q = q.Arg("id", id)
 
@@ -2552,7 +2447,6 @@ func (r *GitRepository) Commit(id string) *GitRef {
 
 // Returns details on one tag.
 func (r *GitRepository) Tag(name string) *GitRef {
-
 	q := r.q.Select("tag")
 	q = q.Arg("name", name)
 
@@ -2578,7 +2472,6 @@ type HostDirectoryOpts struct {
 
 // Accesses a directory on the host.
 func (r *Host) Directory(path string, opts ...HostDirectoryOpts) *Directory {
-
 	q := r.q.Select("directory")
 	for i := len(opts) - 1; i >= 0; i-- {
 		// `exclude` optional argument
@@ -2600,7 +2493,6 @@ func (r *Host) Directory(path string, opts ...HostDirectoryOpts) *Directory {
 
 // Accesses a file on the host.
 func (r *Host) File(path string) *File {
-
 	q := r.q.Select("file")
 	q = q.Arg("path", path)
 
@@ -2613,7 +2505,6 @@ func (r *Host) File(path string) *File {
 // Sets a secret given a user-defined name and the file path on the host, and returns the secret.
 // The file is limited to a size of 512000 bytes.
 func (r *Host) SetSecretFile(name string, path string) *Secret {
-
 	q := r.q.Select("setSecretFile")
 	q = q.Arg("name", name)
 	q = q.Arg("path", path)
@@ -2626,7 +2517,6 @@ func (r *Host) SetSecretFile(name string, path string) *Secret {
 
 // Accesses a Unix socket on the host.
 func (r *Host) UnixSocket(path string) *Socket {
-
 	q := r.q.Select("unixSocket")
 	q = q.Arg("path", path)
 
@@ -2647,7 +2537,6 @@ type Label struct {
 
 // The label name.
 func (r *Label) Name(ctx context.Context) (string, error) {
-
 	if r.name != nil {
 		return *r.name, nil
 	}
@@ -2661,7 +2550,6 @@ func (r *Label) Name(ctx context.Context) (string, error) {
 
 // The label value.
 func (r *Label) Value(ctx context.Context) (string, error) {
-
 	if r.value != nil {
 		return *r.value, nil
 	}
@@ -2680,7 +2568,6 @@ type ListTypeDef struct {
 
 // The type of the elements in the list
 func (r *ListTypeDef) ElementTypeDef() *TypeDef {
-
 	q := r.q.Select("elementTypeDef")
 
 	return &TypeDef{
@@ -2709,7 +2596,6 @@ func (r *Module) With(f WithModuleFunc) *Module {
 
 // The doc string of the module, if any
 func (r *Module) Description(ctx context.Context) (string, error) {
-
 	if r.description != nil {
 		return *r.description, nil
 	}
@@ -2723,7 +2609,6 @@ func (r *Module) Description(ctx context.Context) (string, error) {
 
 // Functions served by this module
 func (r *Module) Functions(ctx context.Context) ([]Function, error) {
-
 	q := r.q.Select("functions")
 
 	q = q.Select("id")
@@ -2754,7 +2639,6 @@ func (r *Module) Functions(ctx context.Context) ([]Function, error) {
 }
 
 func (r *Module) ID(ctx context.Context) (ModuleID, error) {
-
 	if r.id != nil {
 		return *r.id, nil
 	}
@@ -2795,7 +2679,6 @@ func (r *Module) MarshalJSON() ([]byte, error) {
 
 // The name of the module
 func (r *Module) Name(ctx context.Context) (string, error) {
-
 	if r.name != nil {
 		return *r.name, nil
 	}
@@ -2817,7 +2700,6 @@ type ModuleServeOpts struct {
 //	Note: this can only be called once per session.
 //	In the future, it could return a stream or service to remove the side effect.
 func (r *Module) Serve(ctx context.Context, opts ...ModuleServeOpts) (Void, error) {
-
 	if r.serve != nil {
 		return *r.serve, nil
 	}
@@ -2837,7 +2719,6 @@ func (r *Module) Serve(ctx context.Context, opts ...ModuleServeOpts) (Void, erro
 
 // This module plus the given Function associated with it
 func (r *Module) WithFunction(id *Function) *Module {
-
 	q := r.q.Select("withFunction")
 	q = q.Arg("id", id)
 
@@ -2858,7 +2739,6 @@ type ObjectTypeDef struct {
 
 // The doc string for the object, if any
 func (r *ObjectTypeDef) Description(ctx context.Context) (string, error) {
-
 	if r.description != nil {
 		return *r.description, nil
 	}
@@ -2872,7 +2752,6 @@ func (r *ObjectTypeDef) Description(ctx context.Context) (string, error) {
 
 // Static fields defined on this object, if any
 func (r *ObjectTypeDef) Fields(ctx context.Context) ([]FieldTypeDef, error) {
-
 	q := r.q.Select("fields")
 
 	q = q.Select("description name")
@@ -2905,7 +2784,6 @@ func (r *ObjectTypeDef) Fields(ctx context.Context) ([]FieldTypeDef, error) {
 
 // Functions defined on this object, if any
 func (r *ObjectTypeDef) Functions(ctx context.Context) ([]Function, error) {
-
 	q := r.q.Select("functions")
 
 	q = q.Select("id")
@@ -2937,7 +2815,6 @@ func (r *ObjectTypeDef) Functions(ctx context.Context) ([]Function, error) {
 
 // The name of the object
 func (r *ObjectTypeDef) Name(ctx context.Context) (string, error) {
-
 	if r.name != nil {
 		return *r.name, nil
 	}
@@ -2961,7 +2838,6 @@ type Port struct {
 
 // The port description.
 func (r *Port) Description(ctx context.Context) (string, error) {
-
 	if r.description != nil {
 		return *r.description, nil
 	}
@@ -2975,7 +2851,6 @@ func (r *Port) Description(ctx context.Context) (string, error) {
 
 // The port number.
 func (r *Port) Port(ctx context.Context) (int, error) {
-
 	if r.port != nil {
 		return *r.port, nil
 	}
@@ -2989,7 +2864,6 @@ func (r *Port) Port(ctx context.Context) (int, error) {
 
 // The transport layer network protocol.
 func (r *Port) Protocol(ctx context.Context) (NetworkProtocol, error) {
-
 	if r.protocol != nil {
 		return *r.protocol, nil
 	}
@@ -3012,7 +2886,6 @@ func (r *Client) With(f WithClientFunc) *Client {
 
 // Constructs a cache volume for a given cache key.
 func (r *Client) CacheVolume(key string) *CacheVolume {
-
 	q := r.q.Select("cacheVolume")
 	q = q.Arg("key", key)
 
@@ -3024,7 +2897,6 @@ func (r *Client) CacheVolume(key string) *CacheVolume {
 
 // Checks if the current Dagger Engine is compatible with an SDK's required version.
 func (r *Client) CheckVersionCompatibility(ctx context.Context, version string) (bool, error) {
-
 	q := r.q.Select("checkVersionCompatibility")
 	q = q.Arg("version", version)
 
@@ -3047,7 +2919,6 @@ type ContainerOpts struct {
 // Optional platform argument initializes new containers to execute and publish as that platform.
 // Platform defaults to that of the builder's host.
 func (r *Client) Container(opts ...ContainerOpts) *Container {
-
 	q := r.q.Select("container")
 	for i := len(opts) - 1; i >= 0; i-- {
 		// `id` optional argument
@@ -3070,7 +2941,6 @@ func (r *Client) Container(opts ...ContainerOpts) *Container {
 // If the caller is not currently executing in a function, this will return
 // an error.
 func (r *Client) CurrentFunctionCall() *FunctionCall {
-
 	q := r.q.Select("currentFunctionCall")
 
 	return &FunctionCall{
@@ -3081,7 +2951,6 @@ func (r *Client) CurrentFunctionCall() *FunctionCall {
 
 // The module currently being served in the session, if any.
 func (r *Client) CurrentModule() *Module {
-
 	q := r.q.Select("currentModule")
 
 	return &Module{
@@ -3092,7 +2961,6 @@ func (r *Client) CurrentModule() *Module {
 
 // The default platform of the builder.
 func (r *Client) DefaultPlatform(ctx context.Context) (Platform, error) {
-
 	q := r.q.Select("defaultPlatform")
 
 	var response Platform
@@ -3108,7 +2976,6 @@ type DirectoryOpts struct {
 
 // Load a directory by ID. No argument produces an empty directory.
 func (r *Client) Directory(opts ...DirectoryOpts) *Directory {
-
 	q := r.q.Select("directory")
 	for i := len(opts) - 1; i >= 0; i-- {
 		// `id` optional argument
@@ -3125,7 +2992,6 @@ func (r *Client) Directory(opts ...DirectoryOpts) *Directory {
 
 // Loads a file by ID.
 func (r *Client) File(id FileID) *File {
-
 	q := r.q.Select("file")
 	q = q.Arg("id", id)
 
@@ -3137,7 +3003,6 @@ func (r *Client) File(id FileID) *File {
 
 // Load a function by ID
 func (r *Client) Function(id FunctionID) *Function {
-
 	q := r.q.Select("function")
 	q = q.Arg("id", id)
 
@@ -3157,7 +3022,6 @@ type GitOpts struct {
 
 // Queries a git repository.
 func (r *Client) Git(url string, opts ...GitOpts) *GitRepository {
-
 	q := r.q.Select("git")
 	for i := len(opts) - 1; i >= 0; i-- {
 		// `keepGitDir` optional argument
@@ -3179,7 +3043,6 @@ func (r *Client) Git(url string, opts ...GitOpts) *GitRepository {
 
 // Queries the host environment.
 func (r *Client) Host() *Host {
-
 	q := r.q.Select("host")
 
 	return &Host{
@@ -3196,7 +3059,6 @@ type HTTPOpts struct {
 
 // Returns a file containing an http remote url content.
 func (r *Client) HTTP(url string, opts ...HTTPOpts) *File {
-
 	q := r.q.Select("http")
 	for i := len(opts) - 1; i >= 0; i-- {
 		// `experimentalServiceHost` optional argument
@@ -3219,7 +3081,6 @@ type ModuleOpts struct {
 
 // Load a module by ID, or create a new one if id is unset.
 func (r *Client) Module(opts ...ModuleOpts) *Module {
-
 	q := r.q.Select("module")
 	for i := len(opts) - 1; i >= 0; i-- {
 		// `id` optional argument
@@ -3236,7 +3097,6 @@ func (r *Client) Module(opts ...ModuleOpts) *Module {
 
 // Create a new function from the provided definition.
 func (r *Client) NewFunction(def *FunctionDef) *Function {
-
 	q := r.q.Select("newFunction")
 	q = q.Arg("def", def)
 
@@ -3256,7 +3116,6 @@ type PipelineOpts struct {
 
 // Creates a named sub-pipeline.
 func (r *Client) Pipeline(name string, opts ...PipelineOpts) *Client {
-
 	q := r.q.Select("pipeline")
 	for i := len(opts) - 1; i >= 0; i-- {
 		// `description` optional argument
@@ -3278,7 +3137,6 @@ func (r *Client) Pipeline(name string, opts ...PipelineOpts) *Client {
 
 // Loads a secret from its ID.
 func (r *Client) Secret(id SecretID) *Secret {
-
 	q := r.q.Select("secret")
 	q = q.Arg("id", id)
 
@@ -3291,7 +3149,6 @@ func (r *Client) Secret(id SecretID) *Secret {
 // Sets a secret given a user defined name to its plaintext and returns the secret.
 // The plaintext value is limited to a size of 128000 bytes.
 func (r *Client) SetSecret(name string, plaintext string) *Secret {
-
 	q := r.q.Select("setSecret")
 	q = q.Arg("name", name)
 	q = q.Arg("plaintext", plaintext)
@@ -3309,7 +3166,6 @@ type SocketOpts struct {
 
 // Loads a socket by its ID.
 func (r *Client) Socket(opts ...SocketOpts) *Socket {
-
 	q := r.q.Select("socket")
 	for i := len(opts) - 1; i >= 0; i-- {
 		// `id` optional argument
@@ -3335,7 +3191,6 @@ type Secret struct {
 
 // The identifier for this secret.
 func (r *Secret) ID(ctx context.Context) (SecretID, error) {
-
 	if r.id != nil {
 		return *r.id, nil
 	}
@@ -3376,7 +3231,6 @@ func (r *Secret) MarshalJSON() ([]byte, error) {
 
 // The value of this secret.
 func (r *Secret) Plaintext(ctx context.Context) (string, error) {
-
 	if r.plaintext != nil {
 		return *r.plaintext, nil
 	}
@@ -3397,7 +3251,6 @@ type Socket struct {
 
 // The content-addressed identifier of the socket.
 func (r *Socket) ID(ctx context.Context) (SocketID, error) {
-
 	if r.id != nil {
 		return *r.id, nil
 	}
@@ -3448,7 +3301,6 @@ type TypeDef struct {
 // If kind is LIST, the list-specific type definition.
 // If kind is not LIST, this will be null.
 func (r *TypeDef) AsList() *ListTypeDef {
-
 	q := r.q.Select("asList")
 
 	return &ListTypeDef{
@@ -3460,7 +3312,6 @@ func (r *TypeDef) AsList() *ListTypeDef {
 // If kind is OBJECT, the object-specific type definition.
 // If kind is not OBJECT, this will be null.
 func (r *TypeDef) AsObject() *ObjectTypeDef {
-
 	q := r.q.Select("asObject")
 
 	return &ObjectTypeDef{
@@ -3471,7 +3322,6 @@ func (r *TypeDef) AsObject() *ObjectTypeDef {
 
 // The kind of type this is (e.g. primitive, list, object)
 func (r *TypeDef) Kind(ctx context.Context) (TypeDefKind, error) {
-
 	if r.kind != nil {
 		return *r.kind, nil
 	}
@@ -3485,7 +3335,6 @@ func (r *TypeDef) Kind(ctx context.Context) (TypeDefKind, error) {
 
 // Whether this type can be set to null. Defaults to false.
 func (r *TypeDef) Optional(ctx context.Context) (bool, error) {
-
 	if r.optional != nil {
 		return *r.optional, nil
 	}
@@ -3531,9 +3380,9 @@ const (
 type TypeDefKind string
 
 const (
-	Boolean TypeDefKind = "Boolean"
-	Integer TypeDefKind = "Integer"
-	List    TypeDefKind = "List"
-	Object  TypeDefKind = "Object"
-	String  TypeDefKind = "String"
+	Booleankind TypeDefKind = "BooleanKind"
+	Integerkind TypeDefKind = "IntegerKind"
+	Listkind    TypeDefKind = "ListKind"
+	Objectkind  TypeDefKind = "ObjectKind"
+	Stringkind  TypeDefKind = "StringKind"
 )
