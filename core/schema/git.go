@@ -134,8 +134,8 @@ func (s *gitSchema) tree(ctx *core.Context, parent gitRef, args gitTreeArgs) (*c
 	if args.SSHKnownHosts != "" {
 		opts = append(opts, llb.KnownSSHHosts(args.SSHKnownHosts))
 	}
-	if args.SSHAuthSocket != "" {
-		opts = append(opts, llb.MountSSHSock(string(args.SSHAuthSocket)))
+	if args.SSHAuthSocket.ID != nil {
+		opts = append(opts, llb.MountSSHSock(args.SSHAuthSocket.String()))
 	}
 
 	var svcs core.ServiceBindings

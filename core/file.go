@@ -17,6 +17,7 @@ import (
 	fstypes "github.com/tonistiigi/fsutil/types"
 	"github.com/vito/progrock"
 
+	"github.com/dagger/dagger/core/idproto"
 	"github.com/dagger/dagger/core/pipeline"
 	"github.com/dagger/dagger/core/reffs"
 	"github.com/dagger/dagger/core/resourceid"
@@ -25,6 +26,8 @@ import (
 
 // File is a content-addressed file.
 type File struct {
+	ID *idproto.ID `json:"id"`
+
 	LLB      *pb.Definition `json:"llb"`
 	File     string         `json:"file"`
 	Pipeline pipeline.Path  `json:"pipeline"`
@@ -81,11 +84,6 @@ func (file *File) Clone() *File {
 	cp.Pipeline = cloneSlice(cp.Pipeline)
 	cp.Services = cloneSlice(cp.Services)
 	return &cp
-}
-
-// ID marshals the file into a content-addressed ID.
-func (file *File) ID() (FileID, error) {
-	return resourceid.Encode(file)
 }
 
 var _ pipeline.Pipelineable = (*File)(nil)

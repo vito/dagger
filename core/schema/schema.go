@@ -9,6 +9,7 @@ import (
 	"github.com/containerd/containerd/content"
 	"github.com/dagger/dagger/auth"
 	"github.com/dagger/dagger/core"
+	"github.com/dagger/dagger/core/idproto"
 	"github.com/dagger/dagger/engine"
 	"github.com/dagger/dagger/engine/buildkit"
 	"github.com/dagger/dagger/tracing"
@@ -49,6 +50,8 @@ func New(params InitializeArgs) (*MergedSchemas, error) {
 		functionContextCache: NewFunctionContextCache(),
 		moduleCache:          core.NewCacheMap[digest.Digest, *core.Module](),
 
+		queryCache: core.NewCacheMap[digest.Digest, any](),
+
 		moduleSchemaViews: map[digest.Digest]*moduleSchemaView{},
 	}
 	return merged, nil
@@ -69,6 +72,9 @@ type MergedSchemas struct {
 	importCache          *core.CacheMap[uint64, *specs.Descriptor]
 	functionContextCache *FunctionContextCache
 	moduleCache          *core.CacheMap[digest.Digest, *core.Module]
+
+	// TODO(vito): theoretically this replaces most of above?
+	queryCache *core.CacheMap[digest.Digest, any]
 
 	mu sync.RWMutex
 	// Map of module digest -> schema presented to module.
@@ -173,6 +179,24 @@ func (s *moduleSchemaView) schema() *graphql.Schema {
 
 func (s *MergedSchemas) ShutdownClient(ctx context.Context, client *engine.ClientMetadata) error {
 	return s.services.StopClientServices(ctx, client)
+}
+
+func loader[T any](cache *core.CacheMap[digest.Digest, any]) func(*idproto.ID) (*T, error) {
+	return func(id *idproto.ID) (*T, error) {
+		dig, err := id.Digest()
+		if err != nil {
+			return nil, err
+		}
+		val, err := cache.Get(dig)
+		if err != nil {
+			return nil, err
+		}
+		t, ok := val.(*T)
+		if !ok {
+			return nil, fmt.Errorf("ID refers to a %T, not a %T", val, t)
+		}
+		return t, nil
+	}
 }
 
 func (s *moduleSchemaView) addSchemas(schemasToAdd ...ExecutableSchema) error {

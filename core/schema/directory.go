@@ -5,6 +5,7 @@ import (
 
 	"github.com/dagger/dagger/core"
 	"github.com/dagger/dagger/core/pipeline"
+	"github.com/dagger/dagger/core/resourceid"
 	specs "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
@@ -26,7 +27,7 @@ func (s *directorySchema) Schema() string {
 	return Directory
 }
 
-var directoryIDResolver = stringResolver(core.DirectoryID(""))
+var directoryIDResolver = idResolver[core.DirectoryID, core.Directory]()
 
 func (s *directorySchema) Resolvers() Resolvers {
 	return Resolvers{
@@ -34,7 +35,7 @@ func (s *directorySchema) Resolvers() Resolvers {
 		"Query": ObjectResolver{
 			"directory": ToResolver(s.directory),
 		},
-		"Directory": ToIDableObjectResolver(core.DirectoryID.Decode, ObjectResolver{
+		"Directory": ToIDableObjectResolver(loader[core.Directory](s.queryCache), ObjectResolver{
 			"id":               ToResolver(s.id),
 			"sync":             ToResolver(s.sync),
 			"pipeline":         ToResolver(s.pipeline),
@@ -74,7 +75,7 @@ type directoryArgs struct {
 }
 
 func (s *directorySchema) directory(ctx *core.Context, parent *core.Query, args directoryArgs) (*core.Directory, error) {
-	if args.ID != "" {
+	if args.ID.ID != nil {
 		return args.ID.Decode()
 	}
 	platform := s.platform
@@ -82,15 +83,15 @@ func (s *directorySchema) directory(ctx *core.Context, parent *core.Query, args 
 }
 
 func (s *directorySchema) id(ctx *core.Context, parent *core.Directory, args any) (core.DirectoryID, error) {
-	return parent.ID()
+	return resourceid.FromProto[core.Directory](parent.ID), nil
 }
 
 func (s *directorySchema) sync(ctx *core.Context, parent *core.Directory, _ any) (core.DirectoryID, error) {
 	_, err := parent.Evaluate(ctx.Context, s.bk, s.svcs)
 	if err != nil {
-		return "", err
+		return core.DirectoryID{}, err
 	}
-	return parent.ID()
+	return resourceid.FromProto[core.Directory](parent.ID), nil
 }
 
 type subdirectoryArgs struct {
@@ -228,7 +229,7 @@ func (s *directorySchema) dockerBuild(ctx *core.Context, parent *core.Directory,
 	if args.Platform != nil {
 		platform = *args.Platform
 	}
-	ctr, err := core.NewContainer("", parent.Pipeline, platform)
+	ctr, err := core.NewContainer(core.ContainerID{}, parent.Pipeline, platform)
 	if err != nil {
 		return ctr, err
 	}

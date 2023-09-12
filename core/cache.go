@@ -4,14 +4,15 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 
-	"github.com/dagger/dagger/core/resourceid"
+	"github.com/dagger/dagger/core/idproto"
 	"github.com/opencontainers/go-digest"
 	"github.com/pkg/errors"
 )
 
 // CacheVolume is a persistent volume with a globally scoped identifier.
 type CacheVolume struct {
-	Keys []string `json:"keys"`
+	ID   *idproto.ID `json:"id"`
+	Keys []string    `json:"keys"`
 }
 
 var ErrInvalidCacheID = errors.New("invalid cache ID; create one using cacheVolume")
@@ -38,10 +39,6 @@ func (cache *CacheVolume) Sum() string {
 	}
 
 	return base64.StdEncoding.EncodeToString(hash.Sum(nil))
-}
-
-func (cache *CacheVolume) ID() (CacheID, error) {
-	return resourceid.Encode(cache)
 }
 
 // CacheSharingMode is a string deriving from CacheSharingMode enum

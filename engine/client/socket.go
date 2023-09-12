@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 
+	"github.com/dagger/dagger/core/resourceid"
 	"github.com/dagger/dagger/core/socket"
 	"github.com/moby/buildkit/session/sshforward"
 	"google.golang.org/grpc"
@@ -26,7 +27,11 @@ func (p SocketProvider) CheckAgent(ctx context.Context, req *sshforward.CheckAge
 	if req.ID == "" {
 		return nil, status.Errorf(codes.InvalidArgument, "id is not set")
 	}
-	socket, err := socket.ID(req.ID).Decode()
+	id, err := resourceid.Decode(req.ID)
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid id: %v", err)
+	}
+	socket, err := socket.ID{id}.Decode()
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid id: %v", err)
 	}
@@ -44,14 +49,18 @@ func (p SocketProvider) ForwardAgent(stream sshforward.SSH_ForwardAgentServer) e
 	if !ok {
 		return status.Errorf(codes.InvalidArgument, "no metadata")
 	}
-	var id string
+	var idStr string
 	if v, ok := opts[sshforward.KeySSHID]; ok && len(v) > 0 && v[0] != "" {
-		id = v[0]
+		idStr = v[0]
 	}
-	if id == "" {
+	if idStr == "" {
 		return status.Errorf(codes.InvalidArgument, "id is not set")
 	}
-	socket, err := socket.ID(id).Decode()
+	id, err := resourceid.Decode(idStr)
+	if err != nil {
+		return status.Errorf(codes.InvalidArgument, "invalid id: %v", err)
+	}
+	socket, err := socket.ID{id}.Decode()
 	if err != nil {
 		return status.Errorf(codes.InvalidArgument, "invalid id: %v", err)
 	}

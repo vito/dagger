@@ -5,34 +5,47 @@ import (
 	"fmt"
 
 	"github.com/dagger/dagger/core"
+	"github.com/dagger/dagger/core/resourceid"
 	"github.com/dagger/graphql"
 	"github.com/dagger/graphql/language/ast"
 )
 
-// stringResolver is used to generate a scalar resolver for a stringable type.
-func stringResolver[T ~string](sample T) ScalarResolver {
+// idResolver is used to generate a scalar resolver for a stringable type.
+func idResolver[I resourceid.ID[T], T any]() ScalarResolver {
 	return ScalarResolver{
 		Serialize: func(value any) (any, error) {
 			switch v := value.(type) {
 			case string, T:
 				return v, nil
+			case resourceid.ID[T]:
+				return v.String(), nil
 			default:
-				return nil, fmt.Errorf("unexpected %T type %T", sample, v)
+				return nil, fmt.Errorf("want string or resourceid.ID[T], have %T: %+v", v, v)
 			}
 		},
 		ParseValue: func(value any) (any, error) {
 			switch v := value.(type) {
 			case string:
-				return T(v), nil
+				rid, err := resourceid.Decode(v)
+				if err != nil {
+					return nil, fmt.Errorf("failed to parse resource ID %q: %w", v, err)
+				}
+				return rid, nil
 			default:
+				var sample T
 				return nil, fmt.Errorf("unexpected %T type %T", sample, v)
 			}
 		},
 		ParseLiteral: func(valueAST ast.Value) (any, error) {
 			switch valueAST := valueAST.(type) {
 			case *ast.StringValue:
-				return T(valueAST.Value), nil
+				rid, err := resourceid.Decode(valueAST.Value)
+				if err != nil {
+					return nil, fmt.Errorf("failed to parse resource ID %q: %w", valueAST.Value, err)
+				}
+				return rid, nil
 			default:
+				var sample T
 				return nil, fmt.Errorf("unexpected %T literal type: %T", sample, valueAST)
 			}
 		},

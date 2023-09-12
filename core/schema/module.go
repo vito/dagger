@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/dagger/dagger/core"
+	"github.com/dagger/dagger/core/resourceid"
 	"github.com/dagger/dagger/engine"
 	"github.com/dagger/dagger/engine/buildkit"
 	"github.com/iancoleman/strcase"
@@ -41,8 +42,8 @@ func (s *moduleSchema) Schema() string {
 
 func (s *moduleSchema) Resolvers() Resolvers {
 	return Resolvers{
-		"ModuleID":   stringResolver(core.ModuleID("")),
-		"FunctionID": stringResolver(core.FunctionID("")),
+		"ModuleID":   idResolver[core.ModuleID, core.Module](),
+		"FunctionID": idResolver[core.FunctionID, core.Function](),
 		"Query": ObjectResolver{
 			"module":              ToResolver(s.module),
 			"currentModule":       ToResolver(s.currentModule),
@@ -53,12 +54,12 @@ func (s *moduleSchema) Resolvers() Resolvers {
 		"Directory": ObjectResolver{
 			"asModule": ToResolver(s.directoryAsModule),
 		},
-		"Module": ToIDableObjectResolver(core.ModuleID.Decode, ObjectResolver{
+		"Module": ToIDableObjectResolver(loader[core.Module](s.queryCache), ObjectResolver{
 			"id":           ToResolver(s.moduleID),
 			"withFunction": ToResolver(s.moduleWithFunction),
 			"serve":        ToVoidResolver(s.moduleServe),
 		}),
-		"Function": ToIDableObjectResolver(core.FunctionID.Decode, ObjectResolver{
+		"Function": ToIDableObjectResolver(loader[core.Function](s.queryCache), ObjectResolver{
 			"id":   ToResolver(s.functionID),
 			"call": ToResolver(s.functionCall),
 		}),
@@ -85,7 +86,7 @@ type moduleArgs struct {
 }
 
 func (s *moduleSchema) module(ctx *core.Context, query *core.Query, args moduleArgs) (*core.Module, error) {
-	if args.ID == "" {
+	if args.ID.ID == nil {
 		return core.NewModule(s.platform, query.PipelinePath()), nil
 	}
 	return args.ID.Decode()
@@ -110,44 +111,12 @@ func (s *moduleSchema) function(ctx *core.Context, _ *core.Query, args queryFunc
 }
 
 func (s *moduleSchema) newFunction(ctx *core.Context, _ *core.Query, args struct{ Def *core.Function }) (*core.Function, error) {
-	// We can mostly use the Def as is, but need to also fill in its ModuleID.
+	// We can mostly use the Def as is, but need to also fill in its Module.
 	fnCtx, err := s.functionContextCache.FunctionContextFrom(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get function context from context: %w", err)
 	}
-	modID, err := fnCtx.Module.ID()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get module ID: %w", err)
-	}
-
-	var walkTypeDef func(def *core.TypeDef)
-	var setFnModuleID func(def *core.Function)
-	walkTypeDef = func(def *core.TypeDef) {
-		switch def.Kind {
-		case core.TypeDefKindString, core.TypeDefKindInteger,
-			core.TypeDefKindBoolean, core.TypeDefKindVoid:
-			return
-		case core.TypeDefKindList:
-			walkTypeDef(def.AsList.ElementTypeDef)
-		case core.TypeDefKindObject:
-			for _, field := range def.AsObject.Fields {
-				walkTypeDef(field.TypeDef)
-			}
-			for _, fn := range def.AsObject.Functions {
-				setFnModuleID(fn)
-			}
-		default:
-			panic(fmt.Errorf("unhandled type def kind %q", def.Kind))
-		}
-	}
-	setFnModuleID = func(fn *core.Function) {
-		fn.ModuleID = modID
-		for _, arg := range fn.Args {
-			walkTypeDef(arg.TypeDef)
-		}
-		walkTypeDef(fn.ReturnType)
-	}
-	setFnModuleID(args.Def)
+	args.Def.Module = fnCtx.Module
 	return args.Def, nil
 }
 
@@ -172,7 +141,7 @@ func (s *moduleSchema) directoryAsModule(ctx *core.Context, sourceDir *core.Dire
 }
 
 func (s *moduleSchema) moduleID(ctx *core.Context, module *core.Module, args any) (_ core.ModuleID, rerr error) {
-	return module.ID()
+	return resourceid.FromProto[core.Module](module.ID), nil
 }
 
 func (s *moduleSchema) moduleServe(ctx *core.Context, module *core.Module, args any) (rerr error) {
@@ -213,7 +182,7 @@ func (s *moduleSchema) moduleWithFunction(ctx *core.Context, module *core.Module
 }
 
 func (s *moduleSchema) functionID(ctx *core.Context, fn *core.Function, _ any) (core.FunctionID, error) {
-	return fn.ID()
+	return resourceid.FromProto[core.Function](fn.ID), nil
 }
 
 func (s *moduleSchema) functionCallReturnValue(ctx *core.Context, fnCall *core.FunctionCall, args struct{ Value any }) error {
@@ -252,11 +221,7 @@ func (s *moduleSchema) functionCall(ctx *core.Context, fn *core.Function, args f
 	// TODO: re-add support for different exit codes
 	cacheExitCode := uint32(0)
 
-	mod, err := fn.ModuleID.Decode()
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode module: %w", err)
-	}
-
+	mod := fn.Module
 	if err := s.installDeps(ctx, mod); err != nil {
 		return nil, fmt.Errorf("failed to install deps: %w", err)
 	}
@@ -267,7 +232,7 @@ func (s *moduleSchema) functionCall(ctx *core.Context, fn *core.Function, args f
 		Parent:     args.Parent,
 		InputArgs:  args.Input,
 	}
-	ctx, err = s.functionContextCache.WithFunctionContext(ctx, &FunctionContext{
+	ctx, err := s.functionContextCache.WithFunctionContext(ctx, &FunctionContext{
 		Module:      mod,
 		CurrentCall: callParams,
 	})
@@ -480,7 +445,7 @@ type FunctionContext struct {
 }
 
 func (fnCtx *FunctionContext) Digest() (digest.Digest, error) {
-	modDigest, err := fnCtx.Module.Digest()
+	modDigest, err := fnCtx.Module.ID.Digest()
 	if err != nil {
 		return "", fmt.Errorf("failed to get module digest: %w", err)
 	}
@@ -510,7 +475,7 @@ func (cache *FunctionContextCache) WithFunctionContext(ctx *core.Context, fnCtx 
 	if err != nil {
 		return nil, fmt.Errorf("failed to get function context digest: %w", err)
 	}
-	moduleDigest, err := fnCtx.Module.Digest()
+	moduleDigest, err := fnCtx.Module.ID.Digest()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get module digest: %w", err)
 	}
@@ -556,7 +521,7 @@ func (s *moduleSchema) serveModuleToDigest(ctx *core.Context, mod *core.Module, 
 		return fmt.Errorf("failed to load dep module functions: %w", err)
 	}
 
-	modDigest, err := mod.Digest()
+	modDigest, err := mod.ID.Digest()
 	if err != nil {
 		return fmt.Errorf("failed to get module digest: %w", err)
 	}
@@ -592,10 +557,6 @@ func (s *moduleSchema) loadModuleFunctions(ctx *core.Context, mod *core.Module) 
 			return nil, fmt.Errorf("failed to install module recursive dependencies: %w", err)
 		}
 
-		modID, err := mod.ID()
-		if err != nil {
-			return nil, fmt.Errorf("failed to get module ID: %w", err)
-		}
 		// canned function for asking the SDK to return the module + functions it provides
 		getModDefFn := &core.Function{
 			ReturnType: &core.TypeDef{
@@ -604,7 +565,7 @@ func (s *moduleSchema) loadModuleFunctions(ctx *core.Context, mod *core.Module) 
 					Name: "Module",
 				},
 			},
-			ModuleID: modID,
+			Module: mod,
 		}
 		result, err := s.functionCall(ctx, getModDefFn, functionCallArgs{
 			ParentName: gqlObjectName(mod.Name),
@@ -616,19 +577,18 @@ func (s *moduleSchema) loadModuleFunctions(ctx *core.Context, mod *core.Module) 
 		if !ok {
 			return nil, fmt.Errorf("expected string result, got %T", result)
 		}
-		mod, err = core.ModuleID(idStr).Decode()
+		rid, err := resourceid.Decode(idStr)
 		if err != nil {
-			return nil, fmt.Errorf("failed to decode module: %w", err)
+			return nil, fmt.Errorf("failed to parse module id: %w", err)
 		}
-
-		return mod, nil
+		return loader[core.Module](s.queryCache)(rid)
 	})
 }
 
 // installDeps stitches in the schemas for all the deps of the given module to the module's
 // schema view.
 func (s *moduleSchema) installDeps(ctx *core.Context, module *core.Module) error {
-	moduleDigest, err := module.Digest()
+	moduleDigest, err := module.ID.Digest()
 	if err != nil {
 		return err
 	}
@@ -883,9 +843,13 @@ func (s *moduleSchema) addFunctionToSchema(
 			return result, nil
 		}
 
-		id, ok := result.(string)
+		idStr, ok := result.(string)
 		if !ok {
 			return nil, fmt.Errorf("expected string ID result for %s, got %T", objFnName, result)
+		}
+		id, err := resourceid.Decode(idStr)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode ID result for %s: %w", objFnName, err)
 		}
 		return returnIDableObjectResolver.FromID(id)
 	})

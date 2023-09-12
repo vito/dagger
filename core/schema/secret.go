@@ -2,6 +2,7 @@ package schema
 
 import (
 	"github.com/dagger/dagger/core"
+	"github.com/dagger/dagger/core/resourceid"
 )
 
 type secretSchema struct {
@@ -18,7 +19,7 @@ func (s *secretSchema) Schema() string {
 	return Secret
 }
 
-var secretIDResolver = stringResolver(core.SecretID(""))
+var secretIDResolver = idResolver[core.SecretID, core.Secret]()
 
 func (s *secretSchema) Resolvers() Resolvers {
 	return Resolvers{
@@ -27,7 +28,7 @@ func (s *secretSchema) Resolvers() Resolvers {
 			"secret":    ToResolver(s.secret),
 			"setSecret": ToResolver(s.setSecret),
 		},
-		"Secret": ToIDableObjectResolver(core.SecretID.Decode, ObjectResolver{
+		"Secret": ToIDableObjectResolver(loader[core.Secret](s.queryCache), ObjectResolver{
 			"id":        ToResolver(s.id),
 			"plaintext": ToResolver(s.plaintext),
 		}),
@@ -39,7 +40,7 @@ func (s *secretSchema) Dependencies() []ExecutableSchema {
 }
 
 func (s *secretSchema) id(ctx *core.Context, parent *core.Secret, args any) (core.SecretID, error) {
-	return parent.ID()
+	return resourceid.FromProto[core.Secret](parent.ID), nil
 }
 
 type secretArgs struct {
@@ -72,12 +73,7 @@ func (s *secretSchema) setSecret(ctx *core.Context, parent any, args setSecretAr
 }
 
 func (s *secretSchema) plaintext(ctx *core.Context, parent *core.Secret, args any) (string, error) {
-	id, err := parent.ID()
-	if err != nil {
-		return "", err
-	}
-
-	bytes, err := s.secrets.GetSecret(ctx, id.String())
+	bytes, err := s.secrets.GetSecret(ctx, parent.Name)
 	if err != nil {
 		return "", err
 	}

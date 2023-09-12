@@ -2,6 +2,7 @@ package schema
 
 import (
 	"github.com/dagger/dagger/core"
+	"github.com/dagger/dagger/core/resourceid"
 )
 
 type fileSchema struct {
@@ -21,7 +22,7 @@ func (s *fileSchema) Schema() string {
 	return File
 }
 
-var fileIDResolver = stringResolver(core.FileID(""))
+var fileIDResolver = idResolver[core.FileID, core.File]()
 
 func (s *fileSchema) Resolvers() Resolvers {
 	return Resolvers{
@@ -29,7 +30,7 @@ func (s *fileSchema) Resolvers() Resolvers {
 		"Query": ObjectResolver{
 			"file": ToResolver(s.file),
 		},
-		"File": ToIDableObjectResolver(core.FileID.Decode, ObjectResolver{
+		"File": ToIDableObjectResolver(loader[core.File](s.queryCache), ObjectResolver{
 			"id":             ToResolver(s.id),
 			"sync":           ToResolver(s.sync),
 			"contents":       ToResolver(s.contents),
@@ -53,15 +54,15 @@ func (s *fileSchema) file(ctx *core.Context, parent any, args fileArgs) (*core.F
 }
 
 func (s *fileSchema) id(ctx *core.Context, parent *core.File, args any) (core.FileID, error) {
-	return parent.ID()
+	return resourceid.FromProto[core.File](parent.ID), nil
 }
 
 func (s *fileSchema) sync(ctx *core.Context, parent *core.File, _ any) (core.FileID, error) {
 	err := parent.Evaluate(ctx.Context, s.bk, s.svcs)
 	if err != nil {
-		return "", err
+		return core.FileID{}, err
 	}
-	return parent.ID()
+	return resourceid.FromProto[core.File](parent.ID), nil
 }
 
 func (s *fileSchema) contents(ctx *core.Context, file *core.File, args any) (string, error) {
