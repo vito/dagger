@@ -48,7 +48,11 @@ func (s *httpSchema) http(ctx *core.Context, parent *core.Query, args httpArgs) 
 
 	svcs := core.ServiceBindings{}
 	if args.ExperimentalServiceHost != nil {
-		svcs[*args.ExperimentalServiceHost] = nil
+		host, err := args.ExperimentalServiceHost.Decode()
+		if err != nil {
+			return nil, err
+		}
+		svcs = core.ServiceBindings{host: nil}
 	}
 
 	opts := []llb.HTTPOption{

@@ -118,12 +118,16 @@ func (s *gitSchema) tree(ctx *core.Context, parent gitRef, args gitTreeArgs) (*c
 	if args.SSHKnownHosts != "" {
 		opts = append(opts, llb.KnownSSHHosts(args.SSHKnownHosts))
 	}
-	if args.SSHAuthSocket != "" {
-		opts = append(opts, llb.MountSSHSock(string(args.SSHAuthSocket)))
+	if args.SSHAuthSocket.ID != nil {
+		opts = append(opts, llb.MountSSHSock(args.SSHAuthSocket.String()))
 	}
 	var svcs core.ServiceBindings
 	if parent.Repository.ServiceHost != nil {
-		svcs = core.ServiceBindings{*parent.Repository.ServiceHost: nil}
+		host, err := parent.Repository.ServiceHost.Decode()
+		if err != nil {
+			return nil, err
+		}
+		svcs = core.ServiceBindings{host: nil}
 	}
 
 	useDNS := len(svcs) > 0

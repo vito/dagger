@@ -18,7 +18,7 @@ func (s *cacheSchema) Schema() string {
 	return Cache
 }
 
-var cacheIDResolver = stringResolver(core.CacheID(""))
+var cacheIDResolver = idResolver[core.CacheID, core.CacheVolume]()
 
 func (s *cacheSchema) Resolvers() Resolvers {
 	return Resolvers{
@@ -26,7 +26,7 @@ func (s *cacheSchema) Resolvers() Resolvers {
 		"Query": ObjectResolver{
 			"cacheVolume": ToResolver(s.cacheVolume),
 		},
-		"CacheVolume": ToIDableObjectResolver(core.CacheID.Decode, ObjectResolver{
+		"CacheVolume": ToIDableObjectResolver(loader[core.CacheVolume](s.queryCache), ObjectResolver{
 			"id": ToResolver(s.id),
 		}),
 	}
@@ -37,7 +37,7 @@ func (s *cacheSchema) Dependencies() []ExecutableSchema {
 }
 
 func (s *cacheSchema) id(ctx *core.Context, parent *core.CacheVolume, args any) (core.CacheID, error) {
-	return parent.ID()
+	return core.CacheID{ID: parent.ID}, nil
 }
 
 type cacheArgs struct {

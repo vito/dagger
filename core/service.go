@@ -23,7 +23,8 @@ type Service struct {
 	Detach    func()
 }
 
-type ServiceBindings map[ContainerID]AliasSet
+// TODO this should really be a list; rebase
+type ServiceBindings map[*Container]AliasSet
 
 type AliasSet []string
 
@@ -86,12 +87,7 @@ func WithServices[T any](ctx context.Context, bk *buildkit.Client, svcs ServiceB
 	eg := new(errgroup.Group)
 	started := make(chan *Service, len(svcs))
 
-	for svcID, aliases := range svcs {
-		svc, err := svcID.Decode()
-		if err != nil {
-			return zero, err
-		}
-
+	for svc, aliases := range svcs {
 		host, err := svc.HostnameOrErr()
 		if err != nil {
 			return zero, err

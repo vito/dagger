@@ -28,6 +28,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/vito/progrock"
 
+	"github.com/dagger/dagger/core/idproto"
 	"github.com/dagger/dagger/core/pipeline"
 	"github.com/dagger/dagger/core/resourceid"
 	"github.com/dagger/dagger/core/socket"
@@ -42,6 +43,8 @@ const OCIStoreName = "dagger-oci"
 
 // Container is a content-addressed container.
 type Container struct {
+	ID *idproto.ID `json:"id"`
+
 	// The container's root filesystem.
 	FS *pb.Definition `json:"fs"`
 
@@ -92,14 +95,7 @@ func (container *Container) PBDefinitions() ([]*pb.Definition, error) {
 		}
 	}
 	if container.Services != nil {
-		for ctrID := range container.Services {
-			ctr, err := ctrID.Decode()
-			if err != nil {
-				return nil, err
-			}
-			if ctr == nil {
-				continue
-			}
+		for ctr := range container.Services {
 			ctrDefs, err := ctr.PBDefinitions()
 			if err != nil {
 				return nil, err
@@ -145,11 +141,6 @@ func (container *Container) Clone() *Container {
 	return &cp
 }
 
-// ID marshals the container into a content-addressed ID.
-func (container *Container) ID() (ContainerID, error) {
-	return resourceid.Encode(container)
-}
-
 var _ pipeline.Pipelineable = (*Container)(nil)
 
 // PipelinePath returns the container's pipeline path.
@@ -186,7 +177,7 @@ func (owner Ownership) Opt() llb.ChownOption {
 // ContainerSecret configures a secret to expose, either as an environment
 // variable or mounted to a file path.
 type ContainerSecret struct {
-	Secret    SecretID   `json:"secret"`
+	Name      string     `json:"secret"`
 	EnvName   string     `json:"env,omitempty"`
 	MountPath string     `json:"path,omitempty"`
 	Owner     *Ownership `json:"owner,omitempty"`
@@ -195,9 +186,9 @@ type ContainerSecret struct {
 // ContainerSocket configures a socket to expose, currently as a Unix socket,
 // but potentially as a TCP or UDP address in the future.
 type ContainerSocket struct {
-	SocketID socket.ID  `json:"socket"`
-	UnixPath string     `json:"unix_path,omitempty"`
-	Owner    *Ownership `json:"owner,omitempty"`
+	SocketID *idproto.ID `json:"socket"`
+	UnixPath string      `json:"unix_path,omitempty"`
+	Owner    *Ownership  `json:"owner,omitempty"`
 }
 
 // ContainerPort configures a port to expose from the container.
@@ -401,7 +392,7 @@ func (container *Container) buildUncached(
 		}
 
 		container.Secrets = append(container.Secrets, ContainerSecret{
-			Secret:    secretID,
+			Name:      secret.Name,
 			MountPath: fmt.Sprintf("/run/secrets/%s", secret.Name),
 		})
 	}
@@ -648,13 +639,8 @@ func (container *Container) WithMountedSecret(ctx context.Context, bk *buildkit.
 		return nil, err
 	}
 
-	secretID, err := source.ID()
-	if err != nil {
-		return nil, err
-	}
-
 	container.Secrets = append(container.Secrets, ContainerSecret{
-		Secret:    secretID,
+		Name:      source.Name,
 		MountPath: target,
 		Owner:     ownership,
 	})
@@ -709,13 +695,8 @@ func (container *Container) WithUnixSocket(ctx context.Context, bk *buildkit.Cli
 		return nil, err
 	}
 
-	socketID, err := source.ID()
-	if err != nil {
-		return nil, err
-	}
-
 	newSocket := ContainerSocket{
-		SocketID: socketID,
+		SocketID: source.ID,
 		UnixPath: target,
 		Owner:    ownership,
 	}
@@ -760,13 +741,8 @@ func (container *Container) WithoutUnixSocket(ctx context.Context, target string
 func (container *Container) WithSecretVariable(ctx context.Context, name string, secret *Secret) (*Container, error) {
 	container = container.Clone()
 
-	secretID, err := secret.ID()
-	if err != nil {
-		return nil, err
-	}
-
 	container.Secrets = append(container.Secrets, ContainerSecret{
-		Secret:  secretID,
+		Name:    secret.Name,
 		EnvName: name,
 	})
 
@@ -1128,7 +1104,7 @@ func (container *Container) WithExec(ctx context.Context, bk *buildkit.Client, p
 
 	secretsToScrub := SecretToScrubInfo{}
 	for i, secret := range container.Secrets {
-		secretOpts := []llb.SecretOption{llb.SecretID(secret.Secret.String())}
+		secretOpts := []llb.SecretOption{llb.SecretID(secret.Name)}
 
 		var secretDest string
 		switch {
@@ -1170,8 +1146,13 @@ func (container *Container) WithExec(ctx context.Context, bk *buildkit.Client, p
 			return nil, fmt.Errorf("unsupported socket: only unix paths are implemented")
 		}
 
+		dig, err := ctrSocket.SocketID.Digest()
+		if err != nil {
+			return nil, fmt.Errorf("socket %s: %w", ctrSocket.UnixPath, err)
+		}
+
 		socketOpts := []llb.SSHOption{
-			llb.SSHID(string(ctrSocket.SocketID)),
+			llb.SSHID(dig.String()),
 			llb.SSHSocketTarget(ctrSocket.UnixPath),
 		}
 
@@ -1413,7 +1394,7 @@ func (container *Container) Publish(
 	ctx context.Context,
 	bk *buildkit.Client,
 	ref string,
-	platformVariants []ContainerID,
+	platformVariants []*Container,
 	forcedCompression ImageLayerCompression,
 	mediaTypes ImageMediaTypes,
 ) (string, error) {
@@ -1426,16 +1407,8 @@ func (container *Container) Publish(
 	}
 
 	inputByPlatform := map[string]buildkit.ContainerExport{}
-	id, err := container.ID()
-	if err != nil {
-		return "", err
-	}
 	services := ServiceBindings{}
-	for _, variantID := range append([]ContainerID{id}, platformVariants...) {
-		variant, err := variantID.Decode()
-		if err != nil {
-			return "", err
-		}
+	for _, variant := range append([]*Container{container}, platformVariants...) {
 		if variant.FS == nil {
 			continue
 		}
@@ -1507,7 +1480,7 @@ func (container *Container) Export(
 	ctx context.Context,
 	bk *buildkit.Client,
 	dest string,
-	platformVariants []ContainerID,
+	platformVariants []*Container,
 	forcedCompression ImageLayerCompression,
 	mediaTypes ImageMediaTypes,
 ) error {
@@ -1520,16 +1493,8 @@ func (container *Container) Export(
 	}
 
 	inputByPlatform := map[string]buildkit.ContainerExport{}
-	id, err := container.ID()
-	if err != nil {
-		return err
-	}
 	services := ServiceBindings{}
-	for _, variantID := range append([]ContainerID{id}, platformVariants...) {
-		variant, err := variantID.Decode()
-		if err != nil {
-			return err
-		}
+	for _, variant := range append([]*Container{container}, platformVariants...) {
 		if variant.FS == nil {
 			continue
 		}
@@ -1537,7 +1502,6 @@ func (container *Container) Export(
 		if err != nil {
 			return err
 		}
-
 		def, err := st.Marshal(ctx, llb.Platform(variant.Platform))
 		if err != nil {
 			return err
@@ -1567,7 +1531,7 @@ func (container *Container) Export(
 		opts[string(exptypes.OptKeyForceCompression)] = strconv.FormatBool(true)
 	}
 
-	_, err = WithServices(ctx, bk, services, func() (map[string]string, error) {
+	_, err := WithServices(ctx, bk, services, func() (map[string]string, error) {
 		return bk.ExportContainerImage(ctx, inputByPlatform, dest, opts)
 	})
 	return err
@@ -1783,13 +1747,8 @@ func (container *Container) WithoutExposedPort(port int, protocol NetworkProtoco
 func (container *Container) WithServiceBinding(bk *buildkit.Client, svc *Container, alias string) (*Container, error) {
 	container = container.Clone()
 
-	svcID, err := svc.ID()
-	if err != nil {
-		return nil, err
-	}
-
 	container.Services.Merge(ServiceBindings{
-		svcID: AliasSet{alias},
+		svc: AliasSet{alias},
 	})
 
 	if alias != "" {

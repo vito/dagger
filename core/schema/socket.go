@@ -2,6 +2,7 @@ package schema
 
 import (
 	"github.com/dagger/dagger/core"
+	"github.com/dagger/dagger/core/resourceid"
 	"github.com/dagger/dagger/core/socket"
 )
 
@@ -21,7 +22,7 @@ func (s *socketSchema) Schema() string {
 	return Socket
 }
 
-var socketIDResolver = stringResolver(socket.ID(""))
+var socketIDResolver = idResolver[socket.ID, socket.Socket]()
 
 func (s *socketSchema) Resolvers() Resolvers {
 	return Resolvers{
@@ -29,7 +30,7 @@ func (s *socketSchema) Resolvers() Resolvers {
 		"Query": ObjectResolver{
 			"socket": ToResolver(s.socket),
 		},
-		"Socket": ToIDableObjectResolver(socket.ID.Decode, ObjectResolver{
+		"Socket": ToIDableObjectResolver(loader[socket.Socket](s.queryCache), ObjectResolver{
 			"id": ToResolver(s.id),
 		}),
 	}
@@ -40,7 +41,7 @@ func (s *socketSchema) Dependencies() []ExecutableSchema {
 }
 
 func (s *socketSchema) id(ctx *core.Context, parent *socket.Socket, args any) (socket.ID, error) {
-	return parent.ID()
+	return resourceid.FromProto[socket.Socket](parent.ID), nil
 }
 
 type socketArgs struct {

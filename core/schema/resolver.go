@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/dagger/dagger/core"
+	"github.com/dagger/dagger/core/idproto"
 	"github.com/dagger/dagger/core/pipeline"
 	"github.com/dagger/dagger/core/resourceid"
 	"github.com/dagger/graphql"
@@ -35,26 +36,27 @@ func (r ObjectResolver) SetField(name string, fn graphql.FieldResolveFn) {
 	r[name] = fn
 }
 
+// TODO(vito): figure out how this changes with idproto
 type IDableObjectResolver interface {
-	FromID(id string) (any, error)
-	ToID(any) (string, error)
+	FromID(*idproto.ID) (any, error)
+	ToID(any) (*idproto.ID, error)
 	Resolver
 }
 
-func ToIDableObjectResolver[I ~string, T any](idToObject func(I) (*T, error), r ObjectResolver) IDableObjectResolver {
+func ToIDableObjectResolver[I resourceid.ID[T], T any](idToObject func(*idproto.ID) (*T, error), r ObjectResolver) IDableObjectResolver {
 	return idableObjectResolver[I, T]{idToObject, r}
 }
 
-type idableObjectResolver[I ~string, T any] struct {
-	idToObject func(I) (*T, error)
+type idableObjectResolver[I resourceid.ID[T], T any] struct {
+	idToObject func(*idproto.ID) (*T, error)
 	ObjectResolver
 }
 
-func (r idableObjectResolver[I, T]) FromID(id string) (any, error) {
-	return r.idToObject(I(id))
+func (r idableObjectResolver[I, T]) FromID(id *idproto.ID) (any, error) {
+	return r.idToObject(id)
 }
 
-func (r idableObjectResolver[I, T]) ToID(t any) (string, error) {
+func (r idableObjectResolver[I, T]) ToID(t any) (*idproto.ID, error) {
 	return core.ResourceToID(t)
 }
 

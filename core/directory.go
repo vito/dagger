@@ -20,6 +20,7 @@ import (
 	fstypes "github.com/tonistiigi/fsutil/types"
 	"github.com/vito/progrock"
 
+	"github.com/dagger/dagger/core/idproto"
 	"github.com/dagger/dagger/core/pipeline"
 	"github.com/dagger/dagger/core/resourceid"
 	"github.com/dagger/dagger/engine/buildkit"
@@ -27,6 +28,8 @@ import (
 
 // Directory is a content-addressed directory.
 type Directory struct {
+	ID *idproto.ID `json:"id"`
+
 	LLB      *pb.Definition `json:"llb"`
 	Dir      string         `json:"dir"`
 	Platform specs.Platform `json:"platform"`
@@ -42,14 +45,7 @@ func (dir *Directory) PBDefinitions() ([]*pb.Definition, error) {
 		defs = append(defs, dir.LLB)
 	}
 	if dir.Services != nil {
-		for ctrID := range dir.Services {
-			ctr, err := ctrID.Decode()
-			if err != nil {
-				return nil, err
-			}
-			if ctr == nil {
-				continue
-			}
+		for ctr := range dir.Services {
 			ctrDefs, err := ctr.PBDefinitions()
 			if err != nil {
 				return nil, err
@@ -85,10 +81,6 @@ func NewDirectorySt(ctx context.Context, st llb.State, dir string, pipeline pipe
 	}
 
 	return NewDirectory(ctx, def.ToPB(), dir, pipeline, platform, services), nil
-}
-
-func (dir *Directory) ID() (DirectoryID, error) {
-	return resourceid.Encode(dir)
 }
 
 // Clone returns a deep copy of the container suitable for modifying in a

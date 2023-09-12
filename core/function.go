@@ -4,29 +4,19 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/dagger/dagger/core/resourceid"
+	"github.com/dagger/dagger/core/idproto"
 	"github.com/opencontainers/go-digest"
 )
 
 type Function struct {
+	ID *idproto.ID `json:"id"`
+
 	Name        string         `json:"name"`
 	Description string         `json:"description"`
 	Args        []*FunctionArg `json:"args"`
 	ReturnType  *TypeDef       `json:"returnType"`
 
-	// (Not in public API) Used to invoke function in the context of its module.
-	// We don't use *Module directly because it causes JSON serialization to fail
-	// due to circular references.
-	ModuleID ModuleID `json:"moduleID,omitempty"`
-}
-
-func (fn *Function) ID() (FunctionID, error) {
-	return resourceid.Encode(fn)
-}
-
-func (fn *Function) Digest() (digest.Digest, error) {
-	// TODO: does this need to unpack ModuleID and stable digest that?
-	return stableDigest(fn)
+	Module *Module `json:"moduleID,omitempty"`
 }
 
 func (fn Function) Clone() (*Function, error) {

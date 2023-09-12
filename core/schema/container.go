@@ -12,6 +12,7 @@ import (
 
 	"github.com/dagger/dagger/core"
 	"github.com/dagger/dagger/core/pipeline"
+	"github.com/dagger/dagger/core/resourceid"
 	"github.com/dagger/dagger/core/socket"
 
 	"github.com/moby/buildkit/frontend/dockerfile/shell"
@@ -41,11 +42,11 @@ func (s *containerSchema) Schema() string {
 
 func (s *containerSchema) Resolvers() Resolvers {
 	return Resolvers{
-		"ContainerID": stringResolver(core.ContainerID("")),
+		"ContainerID": idResolver[core.ContainerID, core.Container](),
 		"Query": ObjectResolver{
 			"container": ToResolver(s.container),
 		},
-		"Container": ToIDableObjectResolver(core.ContainerID.Decode, ObjectResolver{
+		"Container": ToIDableObjectResolver(loader[core.Container](s.queryCache), ObjectResolver{
 			"id":                   ToResolver(s.id),
 			"sync":                 ToResolver(s.sync),
 			"from":                 ToResolver(s.from),
@@ -118,7 +119,7 @@ type containerArgs struct {
 func (s *containerSchema) container(ctx *core.Context, parent *core.Query, args containerArgs) (_ *core.Container, rerr error) {
 	platform := s.MergedSchemas.platform
 	if args.Platform != nil {
-		if args.ID != "" {
+		if args.ID.ID != nil {
 			return nil, fmt.Errorf("cannot specify both existing container ID and platform")
 		}
 		platform = *args.Platform
@@ -134,13 +135,13 @@ func (s *containerSchema) container(ctx *core.Context, parent *core.Query, args 
 func (s *containerSchema) sync(ctx *core.Context, parent *core.Container, _ any) (core.ContainerID, error) {
 	_, err := parent.Evaluate(ctx, s.bk)
 	if err != nil {
-		return "", err
+		return core.ContainerID{}, err
 	}
-	return parent.ID()
+	return resourceid.FromProto[core.Container](parent.ID), nil
 }
 
 func (s *containerSchema) id(ctx *core.Context, parent *core.Container, args any) (core.ContainerID, error) {
-	return parent.ID()
+	return resourceid.FromProto[core.Container](parent.ID), nil
 }
 
 type containerFromArgs struct {
@@ -453,7 +454,15 @@ type containerPublishArgs struct {
 }
 
 func (s *containerSchema) publish(ctx *core.Context, parent *core.Container, args containerPublishArgs) (string, error) {
-	return parent.Publish(ctx, s.bk, args.Address, args.PlatformVariants, args.ForcedCompression, args.MediaTypes)
+	variants := make([]*core.Container, len(args.PlatformVariants))
+	for i, id := range args.PlatformVariants {
+		var err error
+		variants[i], err = id.Decode()
+		if err != nil {
+			return "", err
+		}
+	}
+	return parent.Publish(ctx, s.bk, args.Address, variants, args.ForcedCompression, args.MediaTypes)
 }
 
 type containerWithMountedFileArgs struct {
@@ -480,7 +489,7 @@ type containerWithMountedCacheArgs struct {
 
 func (s *containerSchema) withMountedCache(ctx *core.Context, parent *core.Container, args containerWithMountedCacheArgs) (*core.Container, error) {
 	var dir *core.Directory
-	if args.Source != "" {
+	if args.Source.ID != nil {
 		var err error
 		dir, err = args.Source.Decode()
 		if err != nil {
@@ -666,7 +675,15 @@ type containerExportArgs struct {
 }
 
 func (s *containerSchema) export(ctx *core.Context, parent *core.Container, args containerExportArgs) (bool, error) {
-	if err := parent.Export(ctx, s.bk, args.Path, args.PlatformVariants, args.ForcedCompression, args.MediaTypes); err != nil {
+	variants := make([]*core.Container, len(args.PlatformVariants))
+	for i, id := range args.PlatformVariants {
+		var err error
+		variants[i], err = id.Decode()
+		if err != nil {
+			return false, err
+		}
+	}
+	if err := parent.Export(ctx, s.bk, args.Path, variants, args.ForcedCompression, args.MediaTypes); err != nil {
 		return false, err
 	}
 
