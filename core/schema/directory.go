@@ -12,9 +12,8 @@ import (
 type directorySchema struct {
 	*MergedSchemas
 
-	host       *core.Host
-	svcs       *core.Services
-	buildCache *core.CacheMap[uint64, *core.Container]
+	host *core.Host
+	svcs *core.Services
 }
 
 var _ ExecutableSchema = &directorySchema{}
@@ -235,6 +234,7 @@ func (s *directorySchema) dockerBuild(ctx *core.Context, parent *core.Directory,
 	}
 	return ctr.Build(
 		ctx,
+		ctx.ID,
 		parent,
 		args.Dockerfile,
 		args.BuildArgs,
@@ -242,6 +242,5 @@ func (s *directorySchema) dockerBuild(ctx *core.Context, parent *core.Directory,
 		args.Secrets,
 		s.bk,
 		s.svcs,
-		s.buildCache,
 	)
 }

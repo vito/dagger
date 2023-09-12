@@ -327,50 +327,17 @@ const defaultDockerfileName = "Dockerfile"
 
 func (container *Container) Build(
 	ctx context.Context,
+	id *idproto.ID,
 	context *Directory,
 	dockerfile string,
 	buildArgs []BuildArg,
 	target string,
 	secrets []SecretID,
 	bk *buildkit.Client,
-	svcs *Services,
-	buildCache *CacheMap[uint64, *Container],
-) (*Container, error) {
-	clientMetadata, err := engine.ClientMetadataFromContext(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	return buildCache.GetOrInitialize(
-		cacheKey(
-			container,
-			context,
-			dockerfile,
-			buildArgs,
-			target,
-			secrets,
-			// scope cache per-client to avoid sharing caches across builds that are
-			// structurally similar but use different client-specific inputs (i.e.
-			// local dir with same path but different content)
-			clientMetadata.ClientID,
-		),
-		func() (*Container, error) {
-			return container.buildUncached(ctx, bk, context, dockerfile, buildArgs, target, secrets, svcs)
-		},
-	)
-}
-
-func (container *Container) buildUncached(
-	ctx context.Context,
-	bk *buildkit.Client,
-	context *Directory,
-	dockerfile string,
-	buildArgs []BuildArg,
-	target string,
-	secrets []SecretID,
 	svcs *Services,
 ) (*Container, error) {
 	container = container.Clone()
+	container.ID = id
 
 	container.Services.Merge(context.Services)
 
@@ -1456,6 +1423,7 @@ func (container *Container) Export(
 
 func (container *Container) Import(
 	ctx context.Context,
+	id *idproto.ID,
 	source FileID,
 	tag string,
 	bk *buildkit.Client,

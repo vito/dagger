@@ -3,6 +3,7 @@ package schema
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 
 	"github.com/dagger/dagger/core"
 	"github.com/dagger/dagger/core/idproto"
@@ -68,6 +69,10 @@ type ScalarResolver struct {
 
 func (ScalarResolver) _resolver() {}
 
+type IDable interface {
+	DaggerID() *idproto.ID
+}
+
 // ToResolver transforms any function f with a *Context, a parent P and some args A that returns a Response R and an error
 // into a graphql resolver graphql.FieldResolveFn.
 func ToResolver[P any, A any, R any](f func(*core.Context, P, A) (R, error)) graphql.FieldResolveFn {
@@ -99,6 +104,36 @@ func ToResolver[P any, A any, R any](f func(*core.Context, P, A) (R, error)) gra
 			p.Context = progrock.ToContext(p.Context, recorder)
 		}
 
+		var id *idproto.ID
+		if idable, ok := p.Source.(IDable); ok {
+			id = idable.DaggerID()
+
+			args := make([]*idproto.Argument, 0, len(p.Args))
+			for k, v := range p.Args {
+				// TODO:
+				args = append(args, &idproto.Argument{
+					Name:  k,
+					Value: idproto.LiteralValue(v),
+				})
+			}
+			sort.Slice(args, func(i, j int) bool {
+				return args[i].Name < args[j].Name
+			})
+
+			id.Append(p.Info.FieldName, args...)
+
+			// TODO: values are always non null? or should it be Type instead of
+			// TypeName?
+			//
+			// should prob be Type, if we want it to be generalizable, i.e. list
+			// values. do we?
+			if nn, ok := p.Info.ReturnType.(*graphql.NonNull); ok {
+				id.TypeName = nn.OfType.Name()
+			} else {
+				id.TypeName = p.Info.ReturnType.Name()
+			}
+		}
+
 		vtx, err := queryVertex(recorder, p.Info.FieldName, p.Source, args)
 		if err != nil {
 			return nil, err
@@ -108,6 +143,7 @@ func ToResolver[P any, A any, R any](f func(*core.Context, P, A) (R, error)) gra
 			Context:       p.Context,
 			ResolveParams: p,
 			Vertex:        vtx,
+			ID:            id,
 		}
 
 		res, err := f(&ctx, parent, args)
@@ -121,7 +157,6 @@ func ToResolver[P any, A any, R any](f func(*core.Context, P, A) (R, error)) gra
 			if err != nil {
 				return nil, fmt.Errorf("failed to compute digest: %w", err)
 			}
-
 			vtx.Output(dg)
 		}
 

@@ -45,7 +45,6 @@ func New(params InitializeArgs) (*MergedSchemas, error) {
 		services:     svcs,
 		host:         core.NewHost(),
 
-		buildCache:           core.NewCacheMap[uint64, *core.Container](),
 		importCache:          core.NewCacheMap[uint64, *specs.Descriptor](),
 		functionContextCache: NewFunctionContextCache(),
 		moduleCache:          core.NewCacheMap[digest.Digest, *core.Module](),
@@ -68,7 +67,6 @@ type MergedSchemas struct {
 	host         *core.Host
 	services     *core.Services
 
-	buildCache           *core.CacheMap[uint64, *core.Container]
 	importCache          *core.CacheMap[uint64, *specs.Descriptor]
 	functionContextCache *FunctionContextCache
 	moduleCache          *core.CacheMap[digest.Digest, *core.Module]
@@ -90,7 +88,7 @@ func (s *MergedSchemas) initializeModuleSchema(moduleDigest digest.Digest) (*mod
 
 	err := ms.addSchemas(
 		&querySchema{s},
-		&directorySchema{s, s.host, s.services, s.buildCache},
+		&directorySchema{s, s.host, s.services},
 		&fileSchema{s, s.host, s.services},
 		&gitSchema{s, s.services},
 		&containerSchema{
@@ -99,7 +97,6 @@ func (s *MergedSchemas) initializeModuleSchema(moduleDigest digest.Digest) (*mod
 			s.services,
 			s.ociStore,
 			s.leaseManager,
-			s.buildCache,
 			s.importCache,
 		},
 		&cacheSchema{s},

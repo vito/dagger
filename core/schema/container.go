@@ -27,7 +27,6 @@ type containerSchema struct {
 	ociStore     content.Store
 	leaseManager *leaseutil.Manager
 
-	buildCache  *core.CacheMap[uint64, *core.Container]
 	importCache *core.CacheMap[uint64, *specs.Descriptor]
 }
 
@@ -50,60 +49,60 @@ func (s *containerSchema) Resolvers() Resolvers {
 		"Container": ToIDableObjectResolver(loader[core.Container](s.queryCache), ObjectResolver{
 			"id":                   ToResolver(s.id),
 			"sync":                 ToResolver(s.sync),
-			"from":                 ToResolver(s.from),
-			"build":                ToResolver(s.build),
+			"from":                 ToResolver(s.from),  // TODO return pinned ID
+			"build":                ToResolver(s.build), // TODO update ID
 			"rootfs":               ToResolver(s.rootfs),
-			"pipeline":             ToResolver(s.pipeline),
-			"withRootfs":           ToResolver(s.withRootfs),
+			"pipeline":             ToResolver(s.pipeline),   // TODO update ID, meta
+			"withRootfs":           ToResolver(s.withRootfs), // TODO update ID
 			"file":                 ToResolver(s.file),
 			"directory":            ToResolver(s.directory),
 			"user":                 ToResolver(s.user),
-			"withUser":             ToResolver(s.withUser),
+			"withUser":             ToResolver(s.withUser), // TODO update ID
 			"workdir":              ToResolver(s.workdir),
-			"withWorkdir":          ToResolver(s.withWorkdir),
+			"withWorkdir":          ToResolver(s.withWorkdir), // TODO update ID
 			"envVariables":         ToResolver(s.envVariables),
 			"envVariable":          ToResolver(s.envVariable),
-			"withEnvVariable":      ToResolver(s.withEnvVariable),
-			"withSecretVariable":   ToResolver(s.withSecretVariable),
-			"withoutEnvVariable":   ToResolver(s.withoutEnvVariable),
-			"withLabel":            ToResolver(s.withLabel),
+			"withEnvVariable":      ToResolver(s.withEnvVariable),    // TODO update ID
+			"withSecretVariable":   ToResolver(s.withSecretVariable), // TODO update ID
+			"withoutEnvVariable":   ToResolver(s.withoutEnvVariable), // TODO update ID
+			"withLabel":            ToResolver(s.withLabel),          // TODO update ID
 			"label":                ToResolver(s.label),
 			"labels":               ToResolver(s.labels),
-			"withoutLabel":         ToResolver(s.withoutLabel),
+			"withoutLabel":         ToResolver(s.withoutLabel), // TODO update ID
 			"entrypoint":           ToResolver(s.entrypoint),
-			"withEntrypoint":       ToResolver(s.withEntrypoint),
+			"withEntrypoint":       ToResolver(s.withEntrypoint), // TODO update ID
 			"defaultArgs":          ToResolver(s.defaultArgs),
-			"withDefaultArgs":      ToResolver(s.withDefaultArgs),
+			"withDefaultArgs":      ToResolver(s.withDefaultArgs), // TODO update ID
 			"mounts":               ToResolver(s.mounts),
-			"withMountedDirectory": ToResolver(s.withMountedDirectory),
-			"withMountedFile":      ToResolver(s.withMountedFile),
-			"withMountedTemp":      ToResolver(s.withMountedTemp),
-			"withMountedCache":     ToResolver(s.withMountedCache),
-			"withMountedSecret":    ToResolver(s.withMountedSecret),
-			"withUnixSocket":       ToResolver(s.withUnixSocket),
-			"withoutUnixSocket":    ToResolver(s.withoutUnixSocket),
-			"withoutMount":         ToResolver(s.withoutMount),
-			"withFile":             ToResolver(s.withFile),
-			"withNewFile":          ToResolver(s.withNewFile),
-			"withDirectory":        ToResolver(s.withDirectory),
-			"withExec":             ToResolver(s.withExec),
+			"withMountedDirectory": ToResolver(s.withMountedDirectory), // TODO update ID
+			"withMountedFile":      ToResolver(s.withMountedFile),      // TODO update ID
+			"withMountedTemp":      ToResolver(s.withMountedTemp),      // TODO update ID
+			"withMountedCache":     ToResolver(s.withMountedCache),     // TODO update ID
+			"withMountedSecret":    ToResolver(s.withMountedSecret),    // TODO update ID
+			"withUnixSocket":       ToResolver(s.withUnixSocket),       // TODO update ID
+			"withoutUnixSocket":    ToResolver(s.withoutUnixSocket),    // TODO update ID
+			"withoutMount":         ToResolver(s.withoutMount),         // TODO update ID
+			"withFile":             ToResolver(s.withFile),             // TODO update ID
+			"withNewFile":          ToResolver(s.withNewFile),          // TODO update ID
+			"withDirectory":        ToResolver(s.withDirectory),        // TODO update ID
+			"withExec":             ToResolver(s.withExec),             // TODO update ID
 			"stdout":               ToResolver(s.stdout),
 			"stderr":               ToResolver(s.stderr),
 			"publish":              ToResolver(s.publish),
 			"platform":             ToResolver(s.platform),
 			"export":               ToResolver(s.export),
-			"import":               ToResolver(s.import_),
-			"withRegistryAuth":     ToResolver(s.withRegistryAuth),
-			"withoutRegistryAuth":  ToResolver(s.withoutRegistryAuth),
+			"import":               ToResolver(s.import_),             // TODO update ID
+			"withRegistryAuth":     ToResolver(s.withRegistryAuth),    // TODO update ID
+			"withoutRegistryAuth":  ToResolver(s.withoutRegistryAuth), // TODO update ID
 			"imageRef":             ToResolver(s.imageRef),
-			"withExposedPort":      ToResolver(s.withExposedPort),
-			"withoutExposedPort":   ToResolver(s.withoutExposedPort),
+			"withExposedPort":      ToResolver(s.withExposedPort),    // TODO update ID
+			"withoutExposedPort":   ToResolver(s.withoutExposedPort), // TODO update ID
 			"exposedPorts":         ToResolver(s.exposedPorts),
 			"hostname":             ToResolver(s.hostname),
 			"endpoint":             ToResolver(s.endpoint),
-			"withServiceBinding":   ToResolver(s.withServiceBinding),
-			"withFocus":            ToResolver(s.withFocus),
-			"withoutFocus":         ToResolver(s.withoutFocus),
+			"withServiceBinding":   ToResolver(s.withServiceBinding), // TODO update ID
+			"withFocus":            ToResolver(s.withFocus),          // TODO update ID, meta
+			"withoutFocus":         ToResolver(s.withoutFocus),       // TODO update ID, meta
 		}),
 	}
 }
@@ -168,6 +167,7 @@ func (s *containerSchema) build(ctx *core.Context, parent *core.Container, args 
 	}
 	return parent.Build(
 		ctx,
+		ctx.ID,
 		dir,
 		args.Dockerfile,
 		args.BuildArgs,
@@ -175,7 +175,6 @@ func (s *containerSchema) build(ctx *core.Context, parent *core.Container, args 
 		args.Secrets,
 		s.bk,
 		s.svcs,
-		s.buildCache,
 	)
 }
 
@@ -694,6 +693,7 @@ type containerImportArgs struct {
 func (s *containerSchema) import_(ctx *core.Context, parent *core.Container, args containerImportArgs) (*core.Container, error) { // nolint:revive
 	return parent.Import(
 		ctx,
+		ctx.ID,
 		args.Source,
 		args.Tag,
 		s.bk,
