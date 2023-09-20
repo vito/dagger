@@ -13,7 +13,6 @@ import (
 	"github.com/dagger/dagger/core"
 	"github.com/dagger/dagger/core/pipeline"
 	"github.com/dagger/dagger/core/resourceid"
-	"github.com/dagger/dagger/core/socket"
 
 	"github.com/moby/buildkit/frontend/dockerfile/shell"
 	"github.com/moby/buildkit/util/leaseutil"
@@ -638,7 +637,7 @@ func (s *containerSchema) withNewFile(ctx *core.Context, parent *core.Container,
 
 type containerWithUnixSocketArgs struct {
 	Path   string
-	Source socket.ID
+	Source core.SocketID
 	Owner  string
 }
 

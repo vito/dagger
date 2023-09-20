@@ -3,7 +3,6 @@ package schema
 import (
 	"github.com/dagger/dagger/core"
 	"github.com/dagger/dagger/core/resourceid"
-	"github.com/dagger/dagger/core/socket"
 )
 
 type socketSchema struct {
@@ -22,7 +21,7 @@ func (s *socketSchema) Schema() string {
 	return Socket
 }
 
-var socketIDResolver = idResolver[socket.ID, socket.Socket]()
+var socketIDResolver = idResolver[core.SocketID, core.Socket]()
 
 func (s *socketSchema) Resolvers() Resolvers {
 	return Resolvers{
@@ -30,7 +29,7 @@ func (s *socketSchema) Resolvers() Resolvers {
 		"Query": ObjectResolver{
 			"socket": ToResolver(s.socket),
 		},
-		"Socket": ToIDableObjectResolver(loader[socket.Socket](s.queryCache), ObjectResolver{
+		"Socket": ToIDableObjectResolver(loader[core.Socket](s.queryCache), ObjectResolver{
 			"id": ToResolver(s.id),
 		}),
 	}
@@ -40,15 +39,15 @@ func (s *socketSchema) Dependencies() []ExecutableSchema {
 	return nil
 }
 
-func (s *socketSchema) id(ctx *core.Context, parent *socket.Socket, args any) (socket.ID, error) {
-	return resourceid.FromProto[socket.Socket](parent.ID), nil
+func (s *socketSchema) id(ctx *core.Context, parent *core.Socket, args any) (core.SocketID, error) {
+	return resourceid.FromProto[core.Socket](parent.ID), nil
 }
 
 type socketArgs struct {
-	ID socket.ID
+	ID core.SocketID
 }
 
 // nolint: unparam
-func (s *socketSchema) socket(_ *core.Context, _ any, args socketArgs) (*socket.Socket, error) {
+func (s *socketSchema) socket(_ *core.Context, _ any, args socketArgs) (*core.Socket, error) {
 	return args.ID.Decode()
 }

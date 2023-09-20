@@ -5,10 +5,11 @@ import (
 
 	"github.com/dagger/dagger/core/idproto"
 	"github.com/dagger/dagger/core/resourceid"
-	"github.com/dagger/dagger/core/socket"
 )
 
 type ContainerID = resourceid.ID[Container]
+
+type SocketID = resourceid.ID[Socket]
 
 type ServiceID = resourceid.ID[Service]
 
@@ -23,8 +24,6 @@ type SecretID = resourceid.ID[Secret]
 type ModuleID = resourceid.ID[Module]
 
 type FunctionID = resourceid.ID[Function]
-
-// SocketID is in the socket package (to avoid circular imports)
 
 // ResourceFromID returns the resource corresponding to the given ID.
 func ResourceFromID(idStr string) (any, error) {
@@ -47,8 +46,8 @@ func ResourceFromID(idStr string) (any, error) {
 		return ModuleID{ID: id}.Decode()
 	case FunctionID{}.ResourceTypeName():
 		return FunctionID{ID: id}.Decode()
-	case socket.ID{}.ResourceTypeName():
-		return socket.ID{ID: id}.Decode()
+	case SocketID{}.ResourceTypeName():
+		return SocketID{ID: id}.Decode()
 	}
 	return nil, fmt.Errorf("unknown resource type: %v", id.TypeName)
 }
@@ -71,7 +70,7 @@ func ResourceToID(r any) (*idproto.ID, error) {
 		id = r.ID
 	case *Function:
 		id = r.ID
-	case *socket.Socket:
+	case *Socket:
 		id = r.ID
 	default:
 		return nil, fmt.Errorf("unknown resource type: %T", r)

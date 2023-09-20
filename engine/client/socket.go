@@ -2,9 +2,9 @@ package client
 
 import (
 	"context"
+	"io"
+	"net"
 
-	"github.com/dagger/dagger/core/resourceid"
-	"github.com/dagger/dagger/core/socket"
 	"github.com/moby/buildkit/session/sshforward"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -27,17 +27,6 @@ func (p SocketProvider) CheckAgent(ctx context.Context, req *sshforward.CheckAge
 	if req.ID == "" {
 		return nil, status.Errorf(codes.InvalidArgument, "id is not set")
 	}
-	id, err := resourceid.Decode(req.ID)
-	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "invalid id: %v", err)
-	}
-	socket, err := socket.ID{id}.Decode()
-	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "invalid id: %v", err)
-	}
-	if !socket.IsHost() {
-		return nil, status.Errorf(codes.InvalidArgument, "id is not a host socket")
-	}
 	return &sshforward.CheckAgentResponse{}, nil
 }
 
@@ -49,27 +38,35 @@ func (p SocketProvider) ForwardAgent(stream sshforward.SSH_ForwardAgentServer) e
 	if !ok {
 		return status.Errorf(codes.InvalidArgument, "no metadata")
 	}
-	var idStr string
+	var unixPath string
 	if v, ok := opts[sshforward.KeySSHID]; ok && len(v) > 0 && v[0] != "" {
-		idStr = v[0]
+		unixPath = v[0]
 	}
-	if idStr == "" {
+	if unixPath == "" {
 		return status.Errorf(codes.InvalidArgument, "id is not set")
 	}
-	id, err := resourceid.Decode(idStr)
+	return (&socketProxy{
+		dial: func() (io.ReadWriteCloser, error) {
+			return net.Dial("unix", unixPath)
+		},
+	}).ForwardAgent(stream)
+}
+
+type socketProxy struct {
+	dial func() (io.ReadWriteCloser, error)
+}
+
+var _ sshforward.SSHServer = &socketProxy{}
+
+func (p *socketProxy) CheckAgent(ctx context.Context, req *sshforward.CheckAgentRequest) (*sshforward.CheckAgentResponse, error) {
+	return &sshforward.CheckAgentResponse{}, nil
+}
+
+func (p *socketProxy) ForwardAgent(stream sshforward.SSH_ForwardAgentServer) error {
+	conn, err := p.dial()
 	if err != nil {
-		return status.Errorf(codes.InvalidArgument, "invalid id: %v", err)
+		return err
 	}
-	socket, err := socket.ID{id}.Decode()
-	if err != nil {
-		return status.Errorf(codes.InvalidArgument, "invalid id: %v", err)
-	}
-	if !socket.IsHost() {
-		return status.Errorf(codes.InvalidArgument, "id is not a host socket")
-	}
-	socketServer, err := socket.Server()
-	if err != nil {
-		return status.Errorf(codes.InvalidArgument, "invalid socket: %v", err)
-	}
-	return socketServer.ForwardAgent(stream)
+
+	return sshforward.Copy(context.TODO(), conn, stream, nil)
 }

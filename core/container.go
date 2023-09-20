@@ -33,7 +33,6 @@ import (
 	"github.com/dagger/dagger/core/idproto"
 	"github.com/dagger/dagger/core/pipeline"
 	"github.com/dagger/dagger/core/resourceid"
-	"github.com/dagger/dagger/core/socket"
 	"github.com/dagger/dagger/engine"
 	"github.com/dagger/dagger/engine/buildkit"
 )
@@ -183,9 +182,9 @@ type ContainerSecret struct {
 // ContainerSocket configures a socket to expose, currently as a Unix socket,
 // but potentially as a TCP or UDP address in the future.
 type ContainerSocket struct {
-	SocketID *idproto.ID `json:"socket"`
-	UnixPath string      `json:"unix_path,omitempty"`
-	Owner    *Ownership  `json:"owner,omitempty"`
+	HostPath      string     `json:"host_path"`
+	ContainerPath string     `json:"container_path,omitempty"`
+	Owner         *Ownership `json:"owner,omitempty"`
 }
 
 // FSState returns the container's root filesystem mount state. If there is
@@ -650,7 +649,7 @@ func (container *Container) MountTargets(ctx context.Context) ([]string, error) 
 	return mounts, nil
 }
 
-func (container *Container) WithUnixSocket(ctx context.Context, bk *buildkit.Client, target string, source *socket.Socket, owner string) (*Container, error) {
+func (container *Container) WithUnixSocket(ctx context.Context, bk *buildkit.Client, target string, source *Socket, owner string) (*Container, error) {
 	container = container.Clone()
 
 	target = absPath(container.Config.WorkingDir, target)
@@ -661,14 +660,14 @@ func (container *Container) WithUnixSocket(ctx context.Context, bk *buildkit.Cli
 	}
 
 	newSocket := ContainerSocket{
-		SocketID: source.ID,
-		UnixPath: target,
-		Owner:    ownership,
+		HostPath:      source.HostPath,
+		ContainerPath: target,
+		Owner:         ownership,
 	}
 
 	var replaced bool
 	for i, sock := range container.Sockets {
-		if sock.UnixPath == target {
+		if sock.ContainerPath == target {
 			container.Sockets[i] = newSocket
 			replaced = true
 			break
@@ -691,7 +690,7 @@ func (container *Container) WithoutUnixSocket(ctx context.Context, target string
 	target = absPath(container.Config.WorkingDir, target)
 
 	for i, sock := range container.Sockets {
-		if sock.UnixPath == target {
+		if sock.ContainerPath == target {
 			container.Sockets = append(container.Sockets[:i], container.Sockets[i+1:]...)
 			break
 		}
@@ -1096,24 +1095,19 @@ func (container *Container) WithExec(ctx context.Context, bk *buildkit.Client, p
 	}
 
 	for _, ctrSocket := range container.Sockets {
-		if ctrSocket.UnixPath == "" {
+		if ctrSocket.ContainerPath == "" {
 			return nil, fmt.Errorf("unsupported socket: only unix paths are implemented")
 		}
 
-		dig, err := ctrSocket.SocketID.Digest()
-		if err != nil {
-			return nil, fmt.Errorf("socket %s: %w", ctrSocket.UnixPath, err)
-		}
-
 		socketOpts := []llb.SSHOption{
-			llb.SSHID(dig.String()),
-			llb.SSHSocketTarget(ctrSocket.UnixPath),
+			llb.SSHID(ctrSocket.HostPath),
+			llb.SSHSocketTarget(ctrSocket.ContainerPath),
 		}
 
 		if ctrSocket.Owner != nil {
 			socketOpts = append(socketOpts,
 				llb.SSHSocketOpt(
-					ctrSocket.UnixPath,
+					ctrSocket.ContainerPath,
 					ctrSocket.Owner.UID,
 					ctrSocket.Owner.GID,
 					0o600, // preserve default
