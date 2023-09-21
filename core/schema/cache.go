@@ -18,15 +18,12 @@ func (s *cacheSchema) Schema() string {
 	return Cache
 }
 
-var cacheIDResolver = idResolver[core.CacheID, core.CacheVolume]()
-
 func (s *cacheSchema) Resolvers() Resolvers {
 	return Resolvers{
-		"CacheID": cacheIDResolver,
 		"Query": ObjectResolver{
 			"cacheVolume": ToResolver(s.cacheVolume),
 		},
-		"CacheVolume": ToIDableObjectResolver(loader[core.CacheVolume](s.queryCache), ObjectResolver{
+		"CacheVolume": CacheByID(s.objects, ObjectResolver{
 			"id": ToResolver(s.id),
 		}),
 	}

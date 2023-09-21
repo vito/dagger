@@ -12,6 +12,8 @@ import (
 )
 
 type Host struct {
+	IDable
+	pipeline.Pipelineable
 }
 
 func NewHost() *Host {

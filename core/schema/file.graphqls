@@ -1,18 +1,15 @@
 extend type Query {
-    "Loads a file by ID."
-    file(id: FileID!): File
+  "Loads a file by ID."
+  file(id: ID!): File
 }
-
-"A file identifier."
-scalar FileID
 
 "A file."
 type File {
   "Retrieves the content-addressed identifier of the file."
-  id: FileID!
+  id: ID!
 
   "Force evaluation in the engine."
-  sync: FileID!
+  sync: ID!
 
   "Retrieves the contents of the file."
   contents: String!

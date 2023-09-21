@@ -26,15 +26,12 @@ func (s *directorySchema) Schema() string {
 	return Directory
 }
 
-var directoryIDResolver = idResolver[core.DirectoryID, core.Directory]()
-
 func (s *directorySchema) Resolvers() Resolvers {
 	return Resolvers{
-		"DirectoryID": directoryIDResolver,
-		"Query": ObjectResolver{
+		"Query": CacheByID(s.objects, ObjectResolver{
 			"directory": ToResolver(s.directory),
-		},
-		"Directory": ToIDableObjectResolver(loader[core.Directory](s.queryCache), ObjectResolver{
+		}),
+		"Directory": CacheByID(s.objects, ObjectResolver{
 			"id":               ToResolver(s.id),
 			"sync":             ToResolver(s.sync),
 			"pipeline":         ToResolver(s.pipeline),
@@ -75,14 +72,14 @@ type directoryArgs struct {
 
 func (s *directorySchema) directory(ctx *core.Context, parent *core.Query, args directoryArgs) (*core.Directory, error) {
 	if args.ID.ID != nil {
-		return args.ID.Decode()
+		return args.ID.Decode(s.objects)
 	}
 	platform := s.platform
 	return core.NewScratchDirectory(parent.PipelinePath(), platform), nil
 }
 
 func (s *directorySchema) id(ctx *core.Context, parent *core.Directory, args any) (core.DirectoryID, error) {
-	return resourceid.FromProto[core.Directory](parent.ID), nil
+	return resourceid.FromProto[*core.Directory](parent.ID), nil
 }
 
 func (s *directorySchema) sync(ctx *core.Context, parent *core.Directory, _ any) (core.DirectoryID, error) {
@@ -90,7 +87,7 @@ func (s *directorySchema) sync(ctx *core.Context, parent *core.Directory, _ any)
 	if err != nil {
 		return core.DirectoryID{}, err
 	}
-	return resourceid.FromProto[core.Directory](parent.ID), nil
+	return resourceid.FromProto[*core.Directory](parent.ID), nil
 }
 
 type subdirectoryArgs struct {
@@ -118,7 +115,7 @@ type withDirectoryArgs struct {
 }
 
 func (s *directorySchema) withDirectory(ctx *core.Context, parent *core.Directory, args withDirectoryArgs) (*core.Directory, error) {
-	dir, err := args.Directory.Decode()
+	dir, err := args.Directory.Decode(s.objects)
 	if err != nil {
 		return nil, err
 	}
@@ -166,7 +163,7 @@ type withFileArgs struct {
 }
 
 func (s *directorySchema) withFile(ctx *core.Context, parent *core.Directory, args withFileArgs) (*core.Directory, error) {
-	file, err := args.Source.Decode()
+	file, err := args.Source.Decode(s.objects)
 	if err != nil {
 		return nil, err
 	}
@@ -195,7 +192,7 @@ type diffArgs struct {
 }
 
 func (s *directorySchema) diff(ctx *core.Context, parent *core.Directory, args diffArgs) (*core.Directory, error) {
-	dir, err := args.Other.Decode()
+	dir, err := args.Other.Decode(s.objects)
 	if err != nil {
 		return nil, err
 	}
@@ -228,18 +225,24 @@ func (s *directorySchema) dockerBuild(ctx *core.Context, parent *core.Directory,
 	if args.Platform != nil {
 		platform = *args.Platform
 	}
-	ctr, err := core.NewContainer(core.ContainerID{}, parent.Pipeline, platform)
+	ctr, err := core.NewContainer(parent.Pipeline, platform)
 	if err != nil {
-		return ctr, err
+		return nil, err
+	}
+	secrets := make([]*core.Secret, len(args.Secrets))
+	for i, secret := range args.Secrets {
+		secrets[i], err = secret.Decode(s.objects)
+		if err != nil {
+			return nil, err
+		}
 	}
 	return ctr.Build(
 		ctx,
-		ctx.ID,
 		parent,
 		args.Dockerfile,
 		args.BuildArgs,
 		args.Target,
-		args.Secrets,
+		secrets,
 		s.bk,
 		s.svcs,
 	)

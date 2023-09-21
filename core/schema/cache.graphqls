@@ -1,6 +1,3 @@
-"A global cache volume identifier."
-scalar CacheID
-
 "Sharing mode of the cache volume."
 enum CacheSharingMode {
   "Shares the cache volume amongst many build pipelines"
@@ -30,5 +27,5 @@ extend type Query {
 
 "A directory whose contents persist across runs."
 type CacheVolume {
-  id: CacheID!
+  id: ID!
 }

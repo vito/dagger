@@ -72,6 +72,7 @@ require (
 	github.com/koron-go/prefixw v1.0.0
 	github.com/mackerelio/go-osstat v0.2.4
 	github.com/mattn/go-isatty v0.0.18
+	github.com/mitchellh/mapstructure v1.5.0
 	github.com/moby/sys/mount v0.3.3
 	github.com/nxadm/tail v1.4.8
 	github.com/opencontainers/runc v1.1.9

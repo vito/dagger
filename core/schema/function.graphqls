@@ -1,12 +1,10 @@
-scalar FunctionID
-
 extend type Query {
   "Load a function by ID"
-  function(id: FunctionID!): Function!
+  function(id: ID!): Function!
 }
 
 type Function {
-  id: FunctionID!
+  id: ID!
 
   "The name of the function"
   name: String!

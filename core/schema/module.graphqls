@@ -1,10 +1,8 @@
-scalar ModuleID
-
 extend type Query {
   """
   Load a module by ID, or create a new one if id is unset.
   """
-  module(id: ModuleID): Module!
+  module(id: ID): Module!
 
   """
   The module currently being served in the session, if any.
@@ -14,7 +12,7 @@ extend type Query {
 
 type Module {
   "The ID of the module"
-  id: ModuleID!
+  id: ID!
 
   "The name of the module"
   name: String!
@@ -41,7 +39,7 @@ type Module {
   functions: [Function!]
 
   "This module plus the given Function associated with it"
-  withFunction(id: FunctionID!): Module!
+  withFunction(id: ID!): Module!
 
   """
   Serve a module's API in the current session.

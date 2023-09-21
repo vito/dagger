@@ -1,18 +1,15 @@
 extend type Query {
   "Load a directory by ID. No argument produces an empty directory."
-  directory(id: DirectoryID): Directory!
+  directory(id: ID): Directory!
 }
-
-"A content-addressed directory identifier."
-scalar DirectoryID
 
 "A directory."
 type Directory {
   "The content-addressed identifier of the directory."
-  id: DirectoryID!
+  id: ID!
 
   "Force evaluation in the engine."
-  sync: DirectoryID!
+  sync: ID!
 
   "Creates a named sub-pipeline"
   pipeline(
@@ -56,7 +53,7 @@ type Directory {
     """
     Identifier of the file to copy.
     """
-    source: FileID!
+    source: ID!
 
     """
     Permission given to the copied file (e.g., 0600).
@@ -118,7 +115,7 @@ type Directory {
     path: String!
 
     "Identifier of the directory to copy."
-    directory: DirectoryID!
+    directory: ID!
 
     """
     Exclude artifacts that match the given pattern (e.g., ["node_modules/", ".git*"]).
@@ -161,7 +158,7 @@ type Directory {
   "Gets the difference between this directory and an another directory."
   diff(
     "Identifier of the directory to compare."
-    other: DirectoryID!
+    other: ID!
   ): Directory!
 
   """
@@ -199,7 +196,7 @@ type Directory {
 
     They will be mounted at /run/secrets/[secret-name].
     """
-    secrets: [SecretID!]
+    secrets: [ID!]
   ): Container!
 
   """

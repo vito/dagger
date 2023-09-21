@@ -30,7 +30,6 @@ import (
 	"github.com/pkg/errors"
 	"github.com/vito/progrock"
 
-	"github.com/dagger/dagger/core/idproto"
 	"github.com/dagger/dagger/core/pipeline"
 	"github.com/dagger/dagger/core/resourceid"
 	"github.com/dagger/dagger/engine"
@@ -39,9 +38,9 @@ import (
 
 var ErrContainerNoExec = errors.New("no command has been executed")
 
-// Container is a content-addressed container.
+// Container is a container.
 type Container struct {
-	ID *idproto.ID `json:"id"`
+	IDable
 
 	// The container's root filesystem.
 	FS *pb.Definition `json:"fs"`
@@ -107,16 +106,11 @@ func (container *Container) PBDefinitions() ([]*pb.Definition, error) {
 	return defs, nil
 }
 
-func NewContainer(id ContainerID, pipeline pipeline.Path, platform specs.Platform) (*Container, error) {
-	container, err := id.Decode()
-	if err != nil {
-		return nil, err
-	}
-
-	container.Pipeline = pipeline.Copy()
-	container.Platform = platform
-
-	return container, nil
+func NewContainer(pipeline pipeline.Path, platform specs.Platform) (*Container, error) {
+	return &Container{
+		Pipeline: pipeline.Copy(),
+		Platform: platform,
+	}, nil
 }
 
 // Clone returns a deep copy of the container suitable for modifying in a
@@ -126,6 +120,7 @@ func (container *Container) Clone() *Container {
 		return nil
 	}
 	cp := *container
+	cp.ID = nil // see IDable struct docs
 	cp.Config.ExposedPorts = cloneMap(cp.Config.ExposedPorts)
 	cp.Config.Env = cloneSlice(cp.Config.Env)
 	cp.Config.Entrypoint = cloneSlice(cp.Config.Entrypoint)
@@ -326,26 +321,19 @@ const defaultDockerfileName = "Dockerfile"
 
 func (container *Container) Build(
 	ctx context.Context,
-	id *idproto.ID,
 	context *Directory,
 	dockerfile string,
 	buildArgs []BuildArg,
 	target string,
-	secrets []SecretID,
+	secrets []*Secret,
 	bk *buildkit.Client,
 	svcs *Services,
 ) (*Container, error) {
 	container = container.Clone()
-	container.ID = id
 
 	container.Services.Merge(context.Services)
 
-	for _, secretID := range secrets {
-		secret, err := secretID.Decode()
-		if err != nil {
-			return nil, err
-		}
-
+	for _, secret := range secrets {
 		container.Secrets = append(container.Secrets, ContainerSecret{
 			Name:      secret.Name,
 			MountPath: fmt.Sprintf("/run/secrets/%s", secret.Name),
@@ -1417,8 +1405,7 @@ func (container *Container) Export(
 
 func (container *Container) Import(
 	ctx context.Context,
-	id *idproto.ID,
-	source FileID,
+	file *File,
 	tag string,
 	bk *buildkit.Client,
 	host *Host,
@@ -1427,11 +1414,6 @@ func (container *Container) Import(
 	store content.Store,
 	lm *leaseutil.Manager,
 ) (*Container, error) {
-	file, err := source.Decode()
-	if err != nil {
-		return nil, err
-	}
-
 	clientMetadata, err := engine.ClientMetadataFromContext(ctx)
 	if err != nil {
 		return nil, err

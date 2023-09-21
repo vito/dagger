@@ -5,51 +5,46 @@ import (
 	"fmt"
 
 	"github.com/dagger/dagger/core"
+	"github.com/dagger/dagger/core/idproto"
 	"github.com/dagger/dagger/core/resourceid"
 	"github.com/dagger/graphql"
 	"github.com/dagger/graphql/language/ast"
 )
 
 // idResolver is used to generate a scalar resolver for a stringable type.
-func idResolver[I resourceid.ID[T], T any]() ScalarResolver {
-	return ScalarResolver{
-		Serialize: func(value any) (any, error) {
-			switch v := value.(type) {
-			case string, T:
-				return v, nil
-			case resourceid.ID[T]:
-				return v.String(), nil
-			default:
-				return nil, fmt.Errorf("want string or resourceid.ID[T], have %T: %+v", v, v)
+var idResolver = ScalarResolver{
+	Serialize: func(value any) (any, error) {
+		switch v := value.(type) {
+		case *idproto.ID:
+			return resourceid.Encode(v)
+		default:
+			return nil, fmt.Errorf("want *idproto.Proto, have %T: %+v", v, v)
+		}
+	},
+	ParseValue: func(value any) (any, error) {
+		switch v := value.(type) {
+		case string:
+			rid, err := resourceid.Decode(v)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse resource ID %q: %w", v, err)
 			}
-		},
-		ParseValue: func(value any) (any, error) {
-			switch v := value.(type) {
-			case string:
-				rid, err := resourceid.Decode(v)
-				if err != nil {
-					return nil, fmt.Errorf("failed to parse resource ID %q: %w", v, err)
-				}
-				return rid, nil
-			default:
-				var sample T
-				return nil, fmt.Errorf("unexpected %T type %T", sample, v)
+			return rid, nil
+		default:
+			return nil, fmt.Errorf("want string for *idproto.Proto, have %T: %+v", v, v)
+		}
+	},
+	ParseLiteral: func(valueAST ast.Value) (any, error) {
+		switch valueAST := valueAST.(type) {
+		case *ast.StringValue:
+			rid, err := resourceid.Decode(valueAST.Value)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse resource ID %q: %w", valueAST.Value, err)
 			}
-		},
-		ParseLiteral: func(valueAST ast.Value) (any, error) {
-			switch valueAST := valueAST.(type) {
-			case *ast.StringValue:
-				rid, err := resourceid.Decode(valueAST.Value)
-				if err != nil {
-					return nil, fmt.Errorf("failed to parse resource ID %q: %w", valueAST.Value, err)
-				}
-				return rid, nil
-			default:
-				var sample T
-				return nil, fmt.Errorf("unexpected %T literal type: %T", sample, valueAST)
-			}
-		},
-	}
+			return rid, nil
+		default:
+			return nil, fmt.Errorf("want ast.StringValue for *idproto.Proto, have %T: %+v", valueAST, valueAST)
+		}
+	},
 }
 
 var jsonResolver = ScalarResolver{

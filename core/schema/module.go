@@ -42,34 +42,32 @@ func (s *moduleSchema) Schema() string {
 
 func (s *moduleSchema) Resolvers() Resolvers {
 	return Resolvers{
-		"ModuleID":   idResolver[core.ModuleID, core.Module](),
-		"FunctionID": idResolver[core.FunctionID, core.Function](),
-		"Query": ObjectResolver{
+		"Query": CacheByID(s.objects, ObjectResolver{
 			"module":              ToResolver(s.module),
 			"currentModule":       ToResolver(s.currentModule),
 			"function":            ToResolver(s.function),
 			"newFunction":         ToResolver(s.newFunction),
 			"currentFunctionCall": ToResolver(s.currentFunctionCall),
-		},
-		"Directory": ObjectResolver{
+		}),
+		"Directory": CacheByID(s.objects, ObjectResolver{
 			"asModule": ToResolver(s.directoryAsModule),
-		},
-		"Module": ToIDableObjectResolver(loader[core.Module](s.queryCache), ObjectResolver{
+		}),
+		"Module": CacheByID(s.objects, ObjectResolver{
 			"id":           ToResolver(s.moduleID),
 			"withFunction": ToResolver(s.moduleWithFunction),
 			"serve":        ToVoidResolver(s.moduleServe),
 		}),
-		"Function": ToIDableObjectResolver(loader[core.Function](s.queryCache), ObjectResolver{
+		"Function": CacheByID(s.objects, ObjectResolver{
 			"id":   ToResolver(s.functionID),
 			"call": ToResolver(s.functionCall),
 		}),
-		"FunctionCall": ObjectResolver{
+		"FunctionCall": CacheByID(s.objects, ObjectResolver{
 			"returnValue": ToVoidResolver(s.functionCallReturnValue),
 			"parent":      ToResolver(s.functionCallParent),
-		},
-		"TypeDef": ObjectResolver{
+		}),
+		"TypeDef": CacheByID(s.objects, ObjectResolver{
 			"kind": ToResolver(s.typeDefKind),
-		},
+		}),
 	}
 }
 
@@ -89,7 +87,7 @@ func (s *moduleSchema) module(ctx *core.Context, query *core.Query, args moduleA
 	if args.ID.ID == nil {
 		return core.NewModule(s.platform, query.PipelinePath()), nil
 	}
-	return args.ID.Decode()
+	return args.ID.Decode(s.objects)
 }
 
 func (s *moduleSchema) currentModule(ctx *core.Context, _ *core.Query, _ any) (*core.Module, error) {
@@ -107,7 +105,7 @@ type queryFunctionArgs struct {
 }
 
 func (s *moduleSchema) function(ctx *core.Context, _ *core.Query, args queryFunctionArgs) (*core.Function, error) {
-	return args.ID.Decode()
+	return args.ID.Decode(s.objects)
 }
 
 func (s *moduleSchema) newFunction(ctx *core.Context, _ *core.Query, args struct{ Def *core.Function }) (*core.Function, error) {
@@ -141,7 +139,7 @@ func (s *moduleSchema) directoryAsModule(ctx *core.Context, sourceDir *core.Dire
 }
 
 func (s *moduleSchema) moduleID(ctx *core.Context, module *core.Module, args any) (_ core.ModuleID, rerr error) {
-	return resourceid.FromProto[core.Module](module.ID), nil
+	return resourceid.FromProto[*core.Module](module.ID), nil
 }
 
 func (s *moduleSchema) moduleServe(ctx *core.Context, module *core.Module, args any) (rerr error) {
@@ -174,7 +172,7 @@ func (s *moduleSchema) moduleWithFunction(ctx *core.Context, module *core.Module
 		}
 	}()
 
-	fn, err := args.ID.Decode()
+	fn, err := args.ID.Decode(s.objects)
 	if err != nil {
 		return nil, err
 	}
@@ -182,7 +180,7 @@ func (s *moduleSchema) moduleWithFunction(ctx *core.Context, module *core.Module
 }
 
 func (s *moduleSchema) functionID(ctx *core.Context, fn *core.Function, _ any) (core.FunctionID, error) {
-	return resourceid.FromProto[core.Function](fn.ID), nil
+	return resourceid.FromProto[*core.Function](fn.ID), nil
 }
 
 func (s *moduleSchema) functionCallReturnValue(ctx *core.Context, fnCall *core.FunctionCall, args struct{ Value any }) error {
@@ -343,7 +341,7 @@ func (s *moduleSchema) functionCall(ctx *core.Context, fn *core.Function, args f
 // If we didn't do this, then it would be possible for Buildkit to prune the content pointed to by the blob://
 // source without pruning the function call cache entry. That would result callers being able to evaluate the
 // result of a function call but hitting an error about missing content.
-func (s *moduleSchema) linkDependencyBlobs(ctx context.Context, cacheResult *buildkit.Result, value any, typeDef *core.TypeDef) error {
+func (s *moduleSchema) linkDependencyBlobs(ctx *core.Context, cacheResult *buildkit.Result, value any, typeDef *core.TypeDef) error {
 	switch typeDef.Kind {
 	case core.TypeDefKindString, core.TypeDefKindInteger,
 		core.TypeDefKindBoolean, core.TypeDefKindVoid:
@@ -360,25 +358,27 @@ func (s *moduleSchema) linkDependencyBlobs(ctx context.Context, cacheResult *bui
 		}
 		return nil
 	case core.TypeDefKindObject:
-		_, isIDable := s.idableObjectResolver(typeDef.AsObject.Name)
-		if !isIDable {
-			// This object is not IDable but we still need to check its Fields for any objects that may contain
-			// IDable objects
-			mapValue, ok := value.(map[string]any)
-			if !ok {
-				return fmt.Errorf("expected object value for %s, got %T", typeDef.AsObject.Name, value)
-			}
-			for fieldName, fieldValue := range mapValue {
-				field, ok := typeDef.AsObject.FieldByName(fieldName)
-				if !ok {
-					continue
-				}
-				if err := s.linkDependencyBlobs(ctx, cacheResult, fieldValue, field.TypeDef); err != nil {
-					return fmt.Errorf("failed to link dependency blobs: %w", err)
-				}
-			}
-			return nil
-		}
+		// TODO(vito): align with input vs. object decision elsewhere, so far
+		// deciding inputs should go away
+		// _, isIDable := s.idableObjectResolver(typeDef.AsObject.Name)
+		// if !isIDable {
+		// 	// This object is not IDable but we still need to check its Fields for any objects that may contain
+		// 	// IDable objects
+		// 	mapValue, ok := value.(map[string]any)
+		// 	if !ok {
+		// 		return fmt.Errorf("expected object value for %s, got %T", typeDef.AsObject.Name, value)
+		// 	}
+		// 	for fieldName, fieldValue := range mapValue {
+		// 		field, ok := typeDef.AsObject.FieldByName(fieldName)
+		// 		if !ok {
+		// 			continue
+		// 		}
+		// 		if err := s.linkDependencyBlobs(ctx, cacheResult, fieldValue, field.TypeDef); err != nil {
+		// 			return fmt.Errorf("failed to link dependency blobs: %w", err)
+		// 		}
+		// 	}
+		// 	return nil
+		// }
 
 		// This is an IDable core type, check to see if it has any blobs:// we need to link with.
 		idStr, ok := value.(string)
@@ -386,12 +386,17 @@ func (s *moduleSchema) linkDependencyBlobs(ctx context.Context, cacheResult *bui
 			return fmt.Errorf("expected string value for id result, got %T", value)
 		}
 
-		resource, err := core.ResourceFromID(idStr)
+		idp, err := resourceid.Decode(idStr)
 		if err != nil {
+			return fmt.Errorf("expected encoded resourceid: %w", err)
+		}
+
+		var value any
+		if err := s.objects.Load(idp, &value); err != nil {
 			return fmt.Errorf("failed to get resource from ID: %w", err)
 		}
 
-		pbDefinitioner, ok := resource.(core.HasPBDefinitions)
+		pbDefinitioner, ok := value.(core.HasPBDefinitions)
 		if !ok {
 			// no dependency blobs to handle
 			return nil
@@ -423,18 +428,6 @@ func (s *moduleSchema) linkDependencyBlobs(ctx context.Context, cacheResult *bui
 	default:
 		return fmt.Errorf("unhandled type def kind %q", typeDef.Kind)
 	}
-}
-
-// Check to see if the given object name is one of our core API's IDable types, returning the
-// IDableObjectResolver if so.
-func (s *moduleSchema) idableObjectResolver(objName string) (IDableObjectResolver, bool) {
-	objName = gqlObjectName(objName)
-	resolver, ok := s.currentSchemaView.resolvers()[objName]
-	if !ok {
-		return nil, false
-	}
-	idableResolver, ok := resolver.(IDableObjectResolver)
-	return idableResolver, ok
 }
 
 // FunctionContext holds the metadata of a function call. Used to support the currentModule and
@@ -581,7 +574,7 @@ func (s *moduleSchema) loadModuleFunctions(ctx *core.Context, mod *core.Module) 
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse module id: %w", err)
 		}
-		return loader[core.Module](s.queryCache)(rid)
+		return loader[*core.Module](s.objects)(rid)
 	})
 }
 
@@ -700,22 +693,22 @@ func (s *moduleSchema) addTypeDefToSchema(
 		if typeDef.AsObject == nil {
 			return nil, fmt.Errorf("expected object type def, got nil")
 		}
+
 		objTypeDef := typeDef.AsObject
 		objName := gqlObjectName(objTypeDef.Name)
 
 		// check whether this is a pre-existing object (from core or another module) being extended
 		_, preExistingObject := s.currentSchemaView.resolvers()[objName]
-		// also check whether it's specifically an idable object from the core API
-		idableObjectResolver, _ := s.idableObjectResolver(objName)
 
 		astDef := &ast.Definition{
 			Name:        objName,
 			Description: objTypeDef.Description,
 			Kind:        ast.Object,
 		}
-		if isInput && idableObjectResolver == nil {
-			astDef.Kind = ast.InputObject
-		}
+		// TODO(vito)
+		// if isInput && idableObjectResolver == nil {
+		// 	astDef.Kind = ast.InputObject
+		// }
 
 		for _, field := range objTypeDef.Fields {
 			fieldASTType, err := s.addTypeDefToSchema(field.TypeDef, isInput, schemaDoc, newResolvers)
@@ -750,11 +743,12 @@ func (s *moduleSchema) addTypeDefToSchema(
 			}
 		}
 
-		if isInput && idableObjectResolver != nil {
-			// idable types use their ID scalar as the input value
-			return &ast.Type{NamedType: astDef.Name + "ID", NonNull: !typeDef.Optional}, nil
-		}
-		return &ast.Type{NamedType: astDef.Name, NonNull: !typeDef.Optional}, nil
+		// TODO(vito): get rid of all input types
+		// if isInput && idableObjectResolver != nil {
+		// idable types use their ID scalar as the input value
+		return &ast.Type{NamedType: "ID", NonNull: !typeDef.Optional}, nil
+		// }
+		// return &ast.Type{NamedType: astDef.Name, NonNull: !typeDef.Optional}, nil
 	default:
 		return nil, fmt.Errorf("unsupported type kind %q", typeDef.Kind)
 	}
@@ -801,14 +795,7 @@ func (s *moduleSchema) addFunctionToSchema(
 	}
 	parentObj.Fields = append(parentObj.Fields, fieldDef)
 
-	// Our core "id-able" types are serialized as their ID over the wire, but need to be decoded into
-	// their object here. We can identify those types since their object resolvers are wrapped in
-	// ToIDableObjectResolver.
-	var returnIDableObjectResolver IDableObjectResolver
-	if fn.ReturnType.Kind == core.TypeDefKindObject {
-		returnIDableObjectResolver, _ = s.idableObjectResolver(fn.ReturnType.AsObject.Name)
-	}
-	parentIDableObjectResolver, _ := s.idableObjectResolver(parentObj.Name)
+	isObject := fn.ReturnType.Kind == core.TypeDefKindObject
 
 	parentObjResolver[fnName] = ToResolver(func(ctx *core.Context, parent any, args map[string]any) (_ any, rerr error) {
 		defer func() {
@@ -816,12 +803,10 @@ func (s *moduleSchema) addFunctionToSchema(
 				rerr = fmt.Errorf("panic in %s: %s %s", objFnName, r, string(debug.Stack()))
 			}
 		}()
-		if parentIDableObjectResolver != nil {
-			id, err := parentIDableObjectResolver.ToID(parent)
-			if err != nil {
-				return nil, fmt.Errorf("failed to get parent ID: %w", err)
-			}
-			parent = id
+
+		if obj, ok := parent.(IDable); ok && obj.GetID() != nil {
+			// NB: GetID() should really never be nil
+			parent = obj.GetID()
 		}
 
 		var callInput []*core.CallInput
@@ -839,7 +824,8 @@ func (s *moduleSchema) addFunctionToSchema(
 		if err != nil {
 			return nil, fmt.Errorf("failed to call function %q: %w", objFnName, err)
 		}
-		if returnIDableObjectResolver == nil {
+
+		if !isObject {
 			return result, nil
 		}
 
@@ -851,7 +837,11 @@ func (s *moduleSchema) addFunctionToSchema(
 		if err != nil {
 			return nil, fmt.Errorf("failed to decode ID result for %s: %w", objFnName, err)
 		}
-		return returnIDableObjectResolver.FromID(id)
+		var obj any
+		if err := s.objects.Load(id, &obj); err != nil {
+			return nil, fmt.Errorf("failed to load object from ID result for %s: %w", objFnName, err)
+		}
+		return obj, nil
 	})
 	return nil
 }

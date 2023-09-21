@@ -1,8 +1,9 @@
 package schema
 
 import (
-	"encoding/json"
 	"fmt"
+	"log"
+	"runtime/debug"
 	"sort"
 
 	"github.com/dagger/dagger/core"
@@ -10,6 +11,7 @@ import (
 	"github.com/dagger/dagger/core/pipeline"
 	"github.com/dagger/dagger/core/resourceid"
 	"github.com/dagger/graphql"
+	"github.com/mitchellh/mapstructure"
 	"github.com/vito/progrock"
 )
 
@@ -37,28 +39,116 @@ func (r ObjectResolver) SetField(name string, fn graphql.FieldResolveFn) {
 	r[name] = fn
 }
 
-// TODO(vito): figure out how this changes with idproto
-type IDableObjectResolver interface {
-	FromID(*idproto.ID) (any, error)
-	ToID(any) (*idproto.ID, error)
-	Resolver
+func CacheByID(store *core.ObjectStore, obj ObjectResolver) ObjectResolver {
+	wrapped := make(ObjectResolver, len(obj))
+	for name, fn := range obj {
+		wrapped[name] = wrap(store, fn)
+	}
+	return wrapped
 }
 
-func ToIDableObjectResolver[I resourceid.ID[T], T any](idToObject func(*idproto.ID) (*T, error), r ObjectResolver) IDableObjectResolver {
-	return idableObjectResolver[I, T]{idToObject, r}
-}
+func wrap(store *core.ObjectStore, fn graphql.FieldResolveFn) graphql.FieldResolveFn {
+	return func(p graphql.ResolveParams) (any, error) {
+		var shouldCache bool
 
-type idableObjectResolver[I resourceid.ID[T], T any] struct {
-	idToObject func(*idproto.ID) (*T, error)
-	ObjectResolver
-}
+		var id *idproto.ID
+		if idable, ok := p.Source.(IDable); ok {
+			id = idable.GetID()
+		}
 
-func (r idableObjectResolver[I, T]) FromID(id *idproto.ID) (any, error) {
-	return r.idToObject(id)
-}
+		if id == nil {
+			id = idproto.New()
+		}
 
-func (r idableObjectResolver[I, T]) ToID(t any) (*idproto.ID, error) {
-	return core.ResourceToID(t)
+		// if the query returns a non-nullable Object, calculate an ID for
+		// referring to the object
+		if nonNull, ok := p.Info.ReturnType.(*graphql.NonNull); ok {
+			if retObj, ok := nonNull.OfType.(*graphql.Object); ok {
+				args := make([]*idproto.Argument, 0, len(p.Args))
+				for k, v := range p.Args {
+					switch x := v.(type) {
+					case string:
+						if id, err := resourceid.Decode(x); err == nil {
+							log.Println("!!! FOUND A STRING ID", k)
+							v = id
+						}
+					}
+					args = append(args, &idproto.Argument{
+						Name:  k,
+						Value: idproto.LiteralValue(v),
+					})
+				}
+				sort.Slice(args, func(i, j int) bool {
+					return args[i].Name < args[j].Name
+				})
+
+				id = id.Chain(retObj.Name(), p.Info.FieldName, args...)
+
+				log.Println("!!! I HAVE CHAINED THE ID TO", id)
+
+				shouldCache = true
+			} else {
+				log.Println("!!! RETURN IS NOT OBJECT", nonNull)
+			}
+		} else {
+			log.Println("!!! RETURN IS NULLABLE", p.Info.ReturnType)
+		}
+
+		var res any
+		var err error
+		if shouldCache {
+			dig, _ := id.Digest()
+			log.Println("!!! LOADING OR SAVING", dig)
+			res, err = store.LoadOrSave(id, func() (any, error) {
+				res, err := fn(p)
+				if err != nil {
+					return nil, err
+				}
+
+				obj, ok := res.(IDable)
+				if !ok {
+					// NB: if you're here, perhaps you forgot to embed IDable in the
+					// struct?
+					//
+					// this is all built on the premise that all objects are ID-able.
+					return nil, fmt.Errorf(
+						"unexpected: %s.%s: %s returned %T which is not IDable",
+						p.Info.ParentType,
+						p.Info.FieldName,
+						p.Info.ReturnType,
+						res,
+					)
+				}
+
+				if obj.GetID() == nil {
+					// by default, set the ID to the query ID that constructed the object.
+					//
+					// resolvers are free to set an ID of their own if they want to have
+					// more control, for example container.from could return an ID that is
+					// pinned and therefore not "tainted" by an unresolved tag.
+					//
+					// NB: this mutates in-place; the assumption is that if no ID is set,
+					// this is a newly created object and it's OK to mutate it before it
+					// gets saved away.
+					obj.SetID(id)
+
+					log.Println("!!! SETTING DEFAULT ID", id)
+				} else {
+					log.Println("!!! RESPECTING EXISTING ID")
+				}
+
+				return obj, nil
+			})
+		} else {
+			log.Println("!!! NOT BOTHERING TO CACHE")
+			res, err = fn(p)
+		}
+		if err != nil {
+			return nil, err
+		}
+
+		return res, nil
+	}
 }
 
 type ScalarResolver struct {
@@ -70,68 +160,45 @@ type ScalarResolver struct {
 func (ScalarResolver) _resolver() {}
 
 type IDable interface {
-	DaggerID() *idproto.ID
+	GetID() *idproto.ID
+	SetID(*idproto.ID)
 }
 
 // ToResolver transforms any function f with a *Context, a parent P and some args A that returns a Response R and an error
 // into a graphql resolver graphql.FieldResolveFn.
 func ToResolver[P any, A any, R any](f func(*core.Context, P, A) (R, error)) graphql.FieldResolveFn {
 	return func(p graphql.ResolveParams) (any, error) {
+		defer func() {
+			if err := recover(); err != nil {
+				log.Println("!!! PICNIC")
+				debug.PrintStack()
+			}
+		}()
+
 		recorder := progrock.FromContext(p.Context)
 
 		var args A
-		argBytes, err := json.Marshal(p.Args)
+		decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
+			Result:           &args,
+			ErrorUnused:      true,
+			WeaklyTypedInput: true,
+			DecodeHook:       mapstructure.TextUnmarshallerHookFunc(),
+		})
 		if err != nil {
-			return nil, fmt.Errorf("failed to marshal args: %w", err)
+			return nil, fmt.Errorf("failed to create decoder: %w", err)
 		}
-		if err := json.Unmarshal(argBytes, &args); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal args: %w", err)
+		if err := decoder.Decode(p.Args); err != nil {
+			return nil, fmt.Errorf("failed to decode args: %w", err)
 		}
 
-		parent, ok := p.Source.(P)
-		if !ok {
-			parentBytes, err := json.Marshal(p.Source)
-			if err != nil {
-				return nil, fmt.Errorf("failed to marshal parent: %w", err)
-			}
-			if err := json.Unmarshal(parentBytes, &parent); err != nil {
-				return nil, fmt.Errorf("failed to unmarshal parent: %w", err)
-			}
+		var parent P
+		if err := mapstructure.Decode(p.Source, &parent); err != nil {
+			return nil, fmt.Errorf("source is wrong type: %T != %T", p.Source, parent)
 		}
 
 		if pipelineable, ok := p.Source.(pipeline.Pipelineable); ok {
 			recorder = pipelineable.PipelinePath().RecorderGroup(recorder)
 			p.Context = progrock.ToContext(p.Context, recorder)
-		}
-
-		var id *idproto.ID
-		if idable, ok := p.Source.(IDable); ok {
-			id = idable.DaggerID()
-
-			args := make([]*idproto.Argument, 0, len(p.Args))
-			for k, v := range p.Args {
-				// TODO:
-				args = append(args, &idproto.Argument{
-					Name:  k,
-					Value: idproto.LiteralValue(v),
-				})
-			}
-			sort.Slice(args, func(i, j int) bool {
-				return args[i].Name < args[j].Name
-			})
-
-			id.Append(p.Info.FieldName, args...)
-
-			// TODO: values are always non null? or should it be Type instead of
-			// TypeName?
-			//
-			// should prob be Type, if we want it to be generalizable, i.e. list
-			// values. do we?
-			if nn, ok := p.Info.ReturnType.(*graphql.NonNull); ok {
-				id.TypeName = nn.OfType.Name()
-			} else {
-				id.TypeName = p.Info.ReturnType.Name()
-			}
 		}
 
 		vtx, err := queryVertex(recorder, p.Info.FieldName, p.Source, args)
@@ -143,7 +210,6 @@ func ToResolver[P any, A any, R any](f func(*core.Context, P, A) (R, error)) gra
 			Context:       p.Context,
 			ResolveParams: p,
 			Vertex:        vtx,
-			ID:            id,
 		}
 
 		res, err := f(&ctx, parent, args)
@@ -164,6 +230,12 @@ func ToResolver[P any, A any, R any](f func(*core.Context, P, A) (R, error)) gra
 
 		return res, nil
 	}
+}
+
+func StaticResolver(val any) graphql.FieldResolveFn {
+	return ToResolver(func(*core.Context, any, any) (any, error) {
+		return val, nil
+	})
 }
 
 func PassthroughResolver(p graphql.ResolveParams) (any, error) {

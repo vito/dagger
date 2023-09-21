@@ -26,17 +26,17 @@ func (s *gitSchema) Schema() string {
 
 func (s *gitSchema) Resolvers() Resolvers {
 	return Resolvers{
-		"Query": ObjectResolver{
+		"Query": CacheByID(s.objects, ObjectResolver{
 			"git": ToResolver(s.git),
-		},
-		"GitRepository": ObjectResolver{
+		}),
+		"GitRepository": CacheByID(s.objects, ObjectResolver{
 			"branch": ToResolver(s.branch),
 			"tag":    ToResolver(s.tag),
 			"commit": ToResolver(s.commit),
-		},
-		"GitRef": ObjectResolver{
+		}),
+		"GitRef": CacheByID(s.objects, ObjectResolver{
 			"tree": ToResolver(s.tree),
-		},
+		}),
 	}
 }
 
@@ -70,7 +70,7 @@ func (s *gitSchema) git(ctx *core.Context, parent *core.Query, args gitArgs) (gi
 		Pipeline:   parent.PipelinePath(),
 	}
 	if args.ExperimentalServiceHost != nil {
-		ctr, err := args.ExperimentalServiceHost.Decode()
+		ctr, err := args.ExperimentalServiceHost.Decode(s.objects)
 		if err != nil {
 			return gitRepository{}, err
 		}

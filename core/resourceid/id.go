@@ -2,7 +2,7 @@ package resourceid
 
 import (
 	"encoding/base64"
-	"errors"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -19,8 +19,8 @@ type Digestible interface {
 	Digest() (digest.Digest, error)
 }
 
-func New[T any](typeName string) ID[T] {
-	return ID[T]{idproto.New(typeName)}
+func New[T any]() ID[T] {
+	return ID[T]{idproto.New()}
 }
 
 func FromProto[T any](proto *idproto.ID) ID[T] {
@@ -59,15 +59,45 @@ func Decode(id string) (*idproto.ID, error) {
 	return &idproto, nil
 }
 
+func Encode(id *idproto.ID) (string, error) {
+	proto, err := proto.Marshal(id)
+	if err != nil {
+		return "", err
+	}
+	return base64.URLEncoding.EncodeToString(proto), nil
+}
+
 func (id ID[T]) String() string {
-	proto, err := proto.Marshal(id.ID)
+	enc, err := Encode(id.ID)
 	if err != nil {
 		panic(err)
 	}
-	return base64.URLEncoding.EncodeToString(proto)
+	return enc
+}
+
+func (id *ID[T]) UnmarshalText(text []byte) error {
+	proto, err := Decode(string(text))
+	if err != nil {
+		return err
+	}
+	id.ID = proto
+	return nil
+}
+
+type Store interface {
+	Load(*idproto.ID, any) error
 }
 
 // Decode base64-decodes and JSON unmarshals an ID into the object T
-func (id ID[T]) Decode() (*T, error) {
-	return nil, errors.New("TODO replace ID.Decode with resolving the ID and asserting on the return type")
+func (id ID[T]) Decode(store Store) (T, error) {
+	var dest T
+	if err := store.Load(id.ID, &dest); err != nil {
+		return dest, err
+	}
+	return dest, nil
+}
+
+// Decode base64-decodes and JSON unmarshals an ID into the object T
+func (id ID[T]) MarshalJSON() ([]byte, error) {
+	return json.Marshal(id.String())
 }

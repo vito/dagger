@@ -49,7 +49,7 @@ func New(params InitializeArgs) (*MergedSchemas, error) {
 		functionContextCache: NewFunctionContextCache(),
 		moduleCache:          core.NewCacheMap[digest.Digest, *core.Module](),
 
-		queryCache: core.NewCacheMap[digest.Digest, any](),
+		objects: core.NewIDStore(),
 
 		moduleSchemaViews: map[digest.Digest]*moduleSchemaView{},
 	}
@@ -72,7 +72,7 @@ type MergedSchemas struct {
 	moduleCache          *core.CacheMap[digest.Digest, *core.Module]
 
 	// TODO(vito): theoretically this replaces most of above?
-	queryCache *core.CacheMap[digest.Digest, any]
+	objects *core.ObjectStore
 
 	mu sync.RWMutex
 	// Map of module digest -> schema presented to module.
@@ -178,19 +178,11 @@ func (s *MergedSchemas) ShutdownClient(ctx context.Context, client *engine.Clien
 	return s.services.StopClientServices(ctx, client)
 }
 
-func loader[T any](cache *core.CacheMap[digest.Digest, any]) func(*idproto.ID) (*T, error) {
-	return func(id *idproto.ID) (*T, error) {
-		dig, err := id.Digest()
-		if err != nil {
-			return nil, err
-		}
-		val, err := cache.Get(dig)
-		if err != nil {
-			return nil, err
-		}
-		t, ok := val.(*T)
-		if !ok {
-			return nil, fmt.Errorf("ID refers to a %T, not a %T", val, t)
+func loader[T any](store *core.ObjectStore) func(*idproto.ID) (T, error) {
+	return func(id *idproto.ID) (T, error) {
+		var t T
+		if err := store.Load(id, &t); err != nil {
+			return t, err
 		}
 		return t, nil
 	}

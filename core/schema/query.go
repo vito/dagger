@@ -28,12 +28,13 @@ func (s *querySchema) Schema() string {
 
 func (s *querySchema) Resolvers() Resolvers {
 	return Resolvers{
+		"ID":   idResolver,
 		"JSON": jsonResolver,
 		"Void": voidScalarResolver,
-		"Query": ObjectResolver{
+		"Query": CacheByID(s.objects, ObjectResolver{
 			"pipeline":                  ToResolver(s.pipeline),
 			"checkVersionCompatibility": ToResolver(s.checkVersionCompatibility),
-		},
+		}),
 	}
 }
 

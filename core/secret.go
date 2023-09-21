@@ -6,7 +6,6 @@ import (
 	"sync"
 
 	"github.com/dagger/dagger/core/idproto"
-	"github.com/dagger/dagger/core/resourceid"
 	"github.com/dagger/dagger/engine/buildkit"
 	"github.com/moby/buildkit/session/secrets"
 	"github.com/opencontainers/go-digest"
@@ -14,7 +13,7 @@ import (
 
 // Secret is a content-addressed secret.
 type Secret struct {
-	ID *idproto.ID `json:"id"`
+	IDable
 
 	// Name specifies the arbitrary name/id of the secret.
 	Name string `json:"name,omitempty"`
@@ -26,8 +25,20 @@ func NewDynamicSecret(name string) *Secret {
 	}
 }
 
+// NewCanonicalSecret returns a canonical SecretID for the given name.
+func NewCanonicalSecret(name string) *Secret {
+	secret := NewDynamicSecret(name)
+
+	// TODO more conventional way of doing this
+	secret.ID = idproto.New().
+		Chain("Secret", "getSecret", idproto.Arg("name", name))
+
+	return secret
+}
+
 func (secret *Secret) Clone() *Secret {
 	cp := *secret
+	cp.ID = nil
 	return &cp
 }
 
@@ -58,23 +69,11 @@ func (store *SecretStore) SetBuildkitClient(bk *buildkit.Client) {
 
 // AddSecret adds the secret identified by user defined name with its plaintext
 // value to the secret store.
-func (store *SecretStore) AddSecret(_ context.Context, name string, plaintext []byte) (SecretID, error) {
+func (store *SecretStore) AddSecret(name string, plaintext []byte) {
 	store.mu.Lock()
-	defer store.mu.Unlock()
-
-	secret := NewDynamicSecret(name)
-
 	// add the plaintext to the map
-	store.secrets[secret.Name] = plaintext
-
-	return NewCanonicalSecret(secret.Name), nil
-}
-
-// NewCanonicalSecret returns a canonical SecretID for the given name.
-func NewCanonicalSecret(name string) SecretID {
-	var id SecretID = resourceid.New[Secret]("Secret")
-	id.Append("secret", idproto.Arg("name", name))
-	return id
+	store.secrets[name] = plaintext
+	store.mu.Unlock()
 }
 
 // GetSecret returns the plaintext secret value.

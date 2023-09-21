@@ -28,10 +28,69 @@ import (
 
 	"dagger.io/dagger"
 	"github.com/dagger/dagger/core"
+	"github.com/dagger/dagger/core/resourceid"
 	"github.com/dagger/dagger/core/schema"
 	"github.com/dagger/dagger/engine/buildkit"
 	"github.com/dagger/dagger/internal/testutil"
 )
+
+func TestContainerIDs(t *testing.T) {
+	t.Parallel()
+
+	res := struct {
+		Container struct {
+			ID string
+		}
+	}{}
+
+	err := testutil.Query(
+		`{
+			container {
+				id
+			}
+		}`, &res, nil)
+	require.NoError(t, err)
+	require.NotEmpty(t, res.Container.ID)
+
+	idproto, err := resourceid.Decode(res.Container.ID)
+	require.NoError(t, err)
+	t.Log(idproto)
+	require.Equal(t, "Container", idproto.TypeName)
+	require.Len(t, idproto.Constructor, 1)
+	require.Equal(t, "container", idproto.Constructor[0].Field)
+	require.Len(t, idproto.Constructor[0].Args, 0)
+
+	res2 := struct {
+		Container struct {
+			From struct {
+				ID string
+			}
+		}
+	}{}
+
+	err = testutil.Query(
+		`{
+			container {
+				from(address: "`+alpineImage+`") {
+					id
+				}
+			}
+		}`, &res2, nil)
+	require.NoError(t, err)
+	require.NotEmpty(t, res2.Container.From.ID)
+
+	idproto, err = resourceid.Decode(res2.Container.From.ID)
+	require.NoError(t, err)
+	t.Log(idproto)
+	require.Equal(t, "Container", idproto.TypeName)
+	require.Len(t, idproto.Constructor, 2)
+	require.Equal(t, "container", idproto.Constructor[0].Field)
+	require.Len(t, idproto.Constructor[0].Args, 0)
+	require.Equal(t, "from", idproto.Constructor[1].Field)
+	require.Len(t, idproto.Constructor[1].Args, 1)
+	require.Equal(t, "address", idproto.Constructor[1].Args[0].Name)
+	require.Equal(t, alpineImage, idproto.Constructor[1].Args[0].Value.GetString_())
+}
 
 func TestContainerScratch(t *testing.T) {
 	t.Parallel()
@@ -55,6 +114,7 @@ func TestContainerScratch(t *testing.T) {
 			}
 		}`, &res, nil)
 	require.NoError(t, err)
+	require.NotEmpty(t, res.Container.ID)
 	require.Empty(t, res.Container.Rootfs.Entries)
 }
 
@@ -3830,7 +3890,7 @@ EXPOSE 8080
 	}{}
 
 	err = testutil.Query(`
-        query Test($id: ContainerID!) {
+        query Test($id: ID!) {
             container(id: $id) {
                 exposedPorts {
                     port

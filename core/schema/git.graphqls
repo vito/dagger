@@ -14,7 +14,7 @@ extend type Query {
     keepGitDir: Boolean,
 
     "A service which must be started before the repo is fetched."
-    experimentalServiceHost: ContainerID
+    experimentalServiceHost: ID
   ): GitRepository!
 }
 
@@ -55,5 +55,5 @@ type GitRepository {
 "A git ref (tag, branch or commit)."
 type GitRef {
   "The filesystem tree at this ref."
-  tree(sshKnownHosts: String, sshAuthSocket: SocketID): Directory!
+  tree(sshKnownHosts: String, sshAuthSocket: ID): Directory!
 }

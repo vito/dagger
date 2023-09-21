@@ -19,6 +19,12 @@ struct ID {
   constructor @1 :List(Selector);
   # Chain of GraphQL field selections that construct the object, starting from
   # Query.
+
+  digest @2 :Text;
+  # SHA-256 digest of the object constructed by this ID.
+
+  module @3 :ID;
+  # ID of the module that this ID evaluates within.
 }
 
 struct Selector {

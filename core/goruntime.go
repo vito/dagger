@@ -16,7 +16,7 @@ func (mod *Module) goRuntime(
 	sourceDir *Directory,
 	sourceDirSubpath string,
 ) (*Container, error) {
-	baseCtr, err := NewContainer(ContainerID{}, mod.Pipeline, mod.Platform)
+	baseCtr, err := NewContainer(mod.Pipeline, mod.Platform)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create container: %w", err)
 	}

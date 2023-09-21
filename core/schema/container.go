@@ -41,11 +41,10 @@ func (s *containerSchema) Schema() string {
 
 func (s *containerSchema) Resolvers() Resolvers {
 	return Resolvers{
-		"ContainerID": idResolver[core.ContainerID, core.Container](),
-		"Query": ObjectResolver{
+		"Query": CacheByID(s.objects, ObjectResolver{
 			"container": ToResolver(s.container),
-		},
-		"Container": ToIDableObjectResolver(loader[core.Container](s.queryCache), ObjectResolver{
+		}),
+		"Container": CacheByID(s.objects, ObjectResolver{
 			"id":                   ToResolver(s.id),
 			"sync":                 ToResolver(s.sync),
 			"from":                 ToResolver(s.from),  // TODO return pinned ID
@@ -111,7 +110,7 @@ func (s *containerSchema) Dependencies() []ExecutableSchema {
 }
 
 type containerArgs struct {
-	ID       core.ContainerID
+	ID       *core.ContainerID
 	Platform *specs.Platform
 }
 
@@ -124,11 +123,11 @@ func (s *containerSchema) container(ctx *core.Context, parent *core.Query, args 
 		platform = *args.Platform
 	}
 
-	ctr, err := core.NewContainer(args.ID, parent.PipelinePath(), platform)
-	if err != nil {
-		return nil, err
+	if args.ID != nil {
+		return args.ID.Decode(s.objects)
 	}
-	return ctr, err
+
+	return core.NewContainer(parent.PipelinePath(), platform)
 }
 
 func (s *containerSchema) sync(ctx *core.Context, parent *core.Container, _ any) (core.ContainerID, error) {
@@ -136,11 +135,11 @@ func (s *containerSchema) sync(ctx *core.Context, parent *core.Container, _ any)
 	if err != nil {
 		return core.ContainerID{}, err
 	}
-	return resourceid.FromProto[core.Container](parent.ID), nil
+	return resourceid.FromProto[*core.Container](parent.ID), nil
 }
 
 func (s *containerSchema) id(ctx *core.Context, parent *core.Container, args any) (core.ContainerID, error) {
-	return resourceid.FromProto[core.Container](parent.ID), nil
+	return resourceid.FromProto[*core.Container](parent.ID), nil
 }
 
 type containerFromArgs struct {
@@ -160,18 +159,24 @@ type containerBuildArgs struct {
 }
 
 func (s *containerSchema) build(ctx *core.Context, parent *core.Container, args containerBuildArgs) (*core.Container, error) {
-	dir, err := args.Context.Decode()
+	dir, err := args.Context.Decode(s.objects)
 	if err != nil {
 		return nil, err
 	}
+	secrets := make([]*core.Secret, len(args.Secrets))
+	for i, id := range args.Secrets {
+		secrets[i], err = id.Decode(s.objects)
+		if err != nil {
+			return nil, err
+		}
+	}
 	return parent.Build(
-		ctx,
-		ctx.ID,
+		*ctx,
 		dir,
 		args.Dockerfile,
 		args.BuildArgs,
 		args.Target,
-		args.Secrets,
+		secrets,
 		s.bk,
 		s.svcs,
 	)
@@ -182,7 +187,7 @@ type containerWithRootFSArgs struct {
 }
 
 func (s *containerSchema) withRootfs(ctx *core.Context, parent *core.Container, args containerWithRootFSArgs) (*core.Container, error) {
-	dir, err := args.Directory.Decode()
+	dir, err := args.Directory.Decode(s.objects)
 	if err != nil {
 		return nil, err
 	}
@@ -432,7 +437,7 @@ type containerWithMountedDirectoryArgs struct {
 }
 
 func (s *containerSchema) withMountedDirectory(ctx *core.Context, parent *core.Container, args containerWithMountedDirectoryArgs) (*core.Container, error) {
-	dir, err := args.Source.Decode()
+	dir, err := args.Source.Decode(s.objects)
 	if err != nil {
 		return nil, err
 	}
@@ -450,7 +455,7 @@ func (s *containerSchema) publish(ctx *core.Context, parent *core.Container, arg
 	variants := make([]*core.Container, len(args.PlatformVariants))
 	for i, id := range args.PlatformVariants {
 		var err error
-		variants[i], err = id.Decode()
+		variants[i], err = id.Decode(s.objects)
 		if err != nil {
 			return "", err
 		}
@@ -465,7 +470,7 @@ type containerWithMountedFileArgs struct {
 }
 
 func (s *containerSchema) withMountedFile(ctx *core.Context, parent *core.Container, args containerWithMountedFileArgs) (*core.Container, error) {
-	file, err := args.Source.Decode()
+	file, err := args.Source.Decode(s.objects)
 	if err != nil {
 		return nil, err
 	}
@@ -484,13 +489,13 @@ func (s *containerSchema) withMountedCache(ctx *core.Context, parent *core.Conta
 	var dir *core.Directory
 	if args.Source.ID != nil {
 		var err error
-		dir, err = args.Source.Decode()
+		dir, err = args.Source.Decode(s.objects)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	cache, err := args.Cache.Decode()
+	cache, err := args.Cache.Decode(s.objects)
 	if err != nil {
 		return nil, err
 	}
@@ -578,7 +583,7 @@ type containerWithSecretVariableArgs struct {
 }
 
 func (s *containerSchema) withSecretVariable(ctx *core.Context, parent *core.Container, args containerWithSecretVariableArgs) (*core.Container, error) {
-	secret, err := args.Secret.Decode()
+	secret, err := args.Secret.Decode(s.objects)
 	if err != nil {
 		return nil, err
 	}
@@ -593,7 +598,7 @@ type containerWithMountedSecretArgs struct {
 }
 
 func (s *containerSchema) withMountedSecret(ctx *core.Context, parent *core.Container, args containerWithMountedSecretArgs) (*core.Container, error) {
-	secret, err := args.Source.Decode()
+	secret, err := args.Source.Decode(s.objects)
 	if err != nil {
 		return nil, err
 	}
@@ -606,9 +611,15 @@ type containerWithDirectoryArgs struct {
 }
 
 func (s *containerSchema) withDirectory(ctx *core.Context, parent *core.Container, args containerWithDirectoryArgs) (*core.Container, error) {
-	dir, err := args.Directory.Decode()
-	if err != nil {
-		return nil, err
+	var dir *core.Directory
+	var err error
+	if args.Directory.ID != nil {
+		dir, err = args.Directory.Decode(s.objects)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		dir = core.NewScratchDirectory(parent.Pipeline, parent.Platform)
 	}
 	return parent.WithDirectory(ctx, s.bk, args.Path, dir, args.CopyFilter, args.Owner)
 }
@@ -619,7 +630,7 @@ type containerWithFileArgs struct {
 }
 
 func (s *containerSchema) withFile(ctx *core.Context, parent *core.Container, args containerWithFileArgs) (*core.Container, error) {
-	file, err := args.Source.Decode()
+	file, err := args.Source.Decode(s.objects)
 	if err != nil {
 		return nil, err
 	}
@@ -642,7 +653,7 @@ type containerWithUnixSocketArgs struct {
 }
 
 func (s *containerSchema) withUnixSocket(ctx *core.Context, parent *core.Container, args containerWithUnixSocketArgs) (*core.Container, error) {
-	socket, err := args.Source.Decode()
+	socket, err := args.Source.Decode(s.objects)
 	if err != nil {
 		return nil, err
 	}
@@ -672,7 +683,7 @@ func (s *containerSchema) export(ctx *core.Context, parent *core.Container, args
 	variants := make([]*core.Container, len(args.PlatformVariants))
 	for i, id := range args.PlatformVariants {
 		var err error
-		variants[i], err = id.Decode()
+		variants[i], err = id.Decode(s.objects)
 		if err != nil {
 			return false, err
 		}
@@ -690,10 +701,13 @@ type containerImportArgs struct {
 }
 
 func (s *containerSchema) import_(ctx *core.Context, parent *core.Container, args containerImportArgs) (*core.Container, error) { // nolint:revive
+	file, err := args.Source.Decode(s.objects)
+	if err != nil {
+		return nil, err
+	}
 	return parent.Import(
-		ctx,
-		ctx.ID,
-		args.Source,
+		*ctx,
+		file,
 		args.Tag,
 		s.bk,
 		s.host,
@@ -768,7 +782,7 @@ type containerWithServiceDependencyArgs struct {
 }
 
 func (s *containerSchema) withServiceBinding(ctx *core.Context, parent *core.Container, args containerWithServiceDependencyArgs) (*core.Container, error) {
-	ctr, err := args.Service.Decode()
+	ctr, err := args.Service.Decode(s.objects)
 	if err != nil {
 		return nil, err
 	}

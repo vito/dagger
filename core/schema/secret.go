@@ -19,16 +19,13 @@ func (s *secretSchema) Schema() string {
 	return Secret
 }
 
-var secretIDResolver = idResolver[core.SecretID, core.Secret]()
-
 func (s *secretSchema) Resolvers() Resolvers {
 	return Resolvers{
-		"SecretID": secretIDResolver,
-		"Query": ObjectResolver{
+		"Query": CacheByID(s.objects, ObjectResolver{
 			"secret":    ToResolver(s.secret),
 			"setSecret": ToResolver(s.setSecret),
-		},
-		"Secret": ToIDableObjectResolver(loader[core.Secret](s.queryCache), ObjectResolver{
+		}),
+		"Secret": CacheByID(s.objects, ObjectResolver{
 			"id":        ToResolver(s.id),
 			"plaintext": ToResolver(s.plaintext),
 		}),
@@ -40,7 +37,7 @@ func (s *secretSchema) Dependencies() []ExecutableSchema {
 }
 
 func (s *secretSchema) id(ctx *core.Context, parent *core.Secret, args any) (core.SecretID, error) {
-	return resourceid.FromProto[core.Secret](parent.ID), nil
+	return resourceid.FromProto[*core.Secret](parent.ID), nil
 }
 
 type secretArgs struct {
@@ -48,7 +45,7 @@ type secretArgs struct {
 }
 
 func (s *secretSchema) secret(ctx *core.Context, parent any, args secretArgs) (*core.Secret, error) {
-	return args.ID.Decode()
+	return args.ID.Decode(s.objects)
 }
 
 type SecretPlaintext string
@@ -64,12 +61,8 @@ type setSecretArgs struct {
 }
 
 func (s *secretSchema) setSecret(ctx *core.Context, parent any, args setSecretArgs) (*core.Secret, error) {
-	secretID, err := s.secrets.AddSecret(ctx, args.Name, []byte(args.Plaintext))
-	if err != nil {
-		return nil, err
-	}
-
-	return secretID.Decode()
+	s.secrets.AddSecret(args.Name, []byte(args.Plaintext))
+	return core.NewCanonicalSecret(args.Name), nil
 }
 
 func (s *secretSchema) plaintext(ctx *core.Context, parent *core.Secret, args any) (string, error) {

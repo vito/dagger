@@ -3,15 +3,12 @@ package core
 import (
 	"context"
 
-	"github.com/dagger/dagger/core/idproto"
 	"github.com/dagger/graphql"
 	"github.com/vito/progrock"
 )
 
 type Context struct {
 	context.Context
-
-	ID *idproto.ID
 
 	ResolveParams graphql.ResolveParams
 

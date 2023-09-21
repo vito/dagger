@@ -25,20 +25,26 @@ func (s *hostSchema) Schema() string {
 
 func (s *hostSchema) Resolvers() Resolvers {
 	return Resolvers{
-		"Query": ObjectResolver{
-			"host": PassthroughResolver,
-		},
-		"Host": ObjectResolver{
+		"Query": CacheByID(s.objects, ObjectResolver{
+			"host": ToResolver(s.newHost),
+		}),
+		"Host": CacheByID(s.objects, ObjectResolver{
 			"directory":     ToResolver(s.directory),
 			"file":          ToResolver(s.file),
 			"unixSocket":    ToResolver(s.socket),
 			"setSecretFile": ToResolver(s.setSecretFile),
-		},
+		}),
 	}
 }
 
 func (s *hostSchema) Dependencies() []ExecutableSchema {
 	return nil
+}
+
+func (s *hostSchema) newHost(ctx *core.Context, parent *core.Query, args any) (*core.Host, error) {
+	cp := s.host
+	cp.Pipelineable = parent
+	return cp, nil
 }
 
 type setSecretFileArgs struct {
@@ -52,12 +58,9 @@ func (s *hostSchema) setSecretFile(ctx *core.Context, _ any, args setSecretFileA
 		return nil, fmt.Errorf("read secret file: %w", err)
 	}
 
-	secretID, err := s.secrets.AddSecret(ctx, args.Name, secretFileContent)
-	if err != nil {
-		return nil, err
-	}
+	s.secrets.AddSecret(args.Name, secretFileContent)
 
-	return secretID.Decode()
+	return core.NewCanonicalSecret(args.Name), nil
 }
 
 type hostDirectoryArgs struct {
@@ -66,7 +69,7 @@ type hostDirectoryArgs struct {
 	core.CopyFilter
 }
 
-func (s *hostSchema) directory(ctx *core.Context, parent *core.Query, args hostDirectoryArgs) (*core.Directory, error) {
+func (s *hostSchema) directory(ctx *core.Context, parent *core.Host, args hostDirectoryArgs) (*core.Directory, error) {
 	return s.host.Directory(ctx, s.bk, args.Path, parent.PipelinePath(), "host.directory", s.platform, args.CopyFilter)
 }
 

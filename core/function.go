@@ -4,12 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/dagger/dagger/core/idproto"
 	"github.com/opencontainers/go-digest"
 )
 
 type Function struct {
-	ID *idproto.ID `json:"id"`
+	IDable
 
 	Name        string         `json:"name"`
 	Description string         `json:"description"`
@@ -21,6 +20,7 @@ type Function struct {
 
 func (fn Function) Clone() (*Function, error) {
 	cp := fn
+	cp.ID = nil
 	cp.Args = make([]*FunctionArg, len(fn.Args))
 	var err error
 	for i, arg := range fn.Args {
@@ -39,6 +39,8 @@ func (fn Function) Clone() (*Function, error) {
 }
 
 type FunctionArg struct {
+	// IDable // TODO(vito)
+
 	Name         string   `json:"name"`
 	Description  string   `json:"description"`
 	TypeDef      *TypeDef `json:"typeDef"`
@@ -47,6 +49,7 @@ type FunctionArg struct {
 
 func (arg FunctionArg) Clone() (*FunctionArg, error) {
 	cp := arg
+	// cp.ID = nil // TODO(vito)
 	var err error
 	cp.TypeDef, err = arg.TypeDef.Clone()
 	if err != nil {
@@ -66,6 +69,8 @@ func (arg FunctionArg) Clone() (*FunctionArg, error) {
 }
 
 type TypeDef struct {
+	// IDable // TODO(vito)
+
 	Kind     TypeDefKind    `json:"kind"`
 	Optional bool           `json:"optional"`
 	AsList   *ListTypeDef   `json:"asList"`
@@ -74,6 +79,7 @@ type TypeDef struct {
 
 func (typeDef TypeDef) Clone() (*TypeDef, error) {
 	cp := typeDef
+	// cp.ID = nil // TODO(vito)
 	if typeDef.AsList != nil {
 		var err error
 		cp.AsList, err = typeDef.AsList.Clone()
@@ -92,6 +98,8 @@ func (typeDef TypeDef) Clone() (*TypeDef, error) {
 }
 
 type ObjectTypeDef struct {
+	// IDable // TODO(vito)
+
 	Name        string          `json:"name"`
 	Description string          `json:"description"`
 	Fields      []*FieldTypeDef `json:"fields"`
@@ -100,6 +108,7 @@ type ObjectTypeDef struct {
 
 func (typeDef ObjectTypeDef) Clone() (*ObjectTypeDef, error) {
 	cp := typeDef
+	// cp.ID = nil // TODO(vito)
 
 	cp.Fields = make([]*FieldTypeDef, len(typeDef.Fields))
 	for i, field := range typeDef.Fields {
@@ -141,6 +150,8 @@ func (typeDef ObjectTypeDef) FunctionByName(name string) (*Function, bool) {
 }
 
 type FieldTypeDef struct {
+	// IDable // TODO(vito)
+
 	Name        string   `json:"name"`
 	Description string   `json:"description"`
 	TypeDef     *TypeDef `json:"typeDef"`
@@ -148,6 +159,7 @@ type FieldTypeDef struct {
 
 func (typeDef FieldTypeDef) Clone() (*FieldTypeDef, error) {
 	cp := typeDef
+	// cp.ID = nil // TODO(vito)
 	if typeDef.TypeDef != nil {
 		var err error
 		cp.TypeDef, err = typeDef.TypeDef.Clone()
@@ -159,11 +171,14 @@ func (typeDef FieldTypeDef) Clone() (*FieldTypeDef, error) {
 }
 
 type ListTypeDef struct {
+	// IDable                  // TODO(vito)
+
 	ElementTypeDef *TypeDef `json:"elementTypeDef"`
 }
 
 func (typeDef ListTypeDef) Clone() (*ListTypeDef, error) {
 	cp := typeDef
+	// cp.ID = nil // TODO(vito)
 	if typeDef.ElementTypeDef != nil {
 		var err error
 		cp.ElementTypeDef, err = typeDef.ElementTypeDef.Clone()

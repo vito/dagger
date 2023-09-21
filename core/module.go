@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/dagger/dagger/core/idproto"
 	"github.com/dagger/dagger/core/moduleconfig"
 	"github.com/dagger/dagger/core/pipeline"
 	"github.com/dagger/dagger/core/resolver"
@@ -31,7 +30,7 @@ const (
 )
 
 type Module struct {
-	ID *idproto.ID `json:"id"`
+	IDable
 
 	// The module's source code root directory
 	SourceDirectory *Directory `json:"sourceDirectory"`
@@ -96,6 +95,7 @@ func (mod *Module) PBDefinitions() ([]*pb.Definition, error) {
 
 func (mod Module) Clone() (*Module, error) {
 	cp := mod
+	cp.ID = nil
 	if mod.SourceDirectory != nil {
 		cp.SourceDirectory = mod.SourceDirectory.Clone()
 	}

@@ -20,7 +20,6 @@ import (
 	fstypes "github.com/tonistiigi/fsutil/types"
 	"github.com/vito/progrock"
 
-	"github.com/dagger/dagger/core/idproto"
 	"github.com/dagger/dagger/core/pipeline"
 	"github.com/dagger/dagger/core/resourceid"
 	"github.com/dagger/dagger/engine/buildkit"
@@ -28,7 +27,7 @@ import (
 
 // Directory is a content-addressed directory.
 type Directory struct {
-	ID *idproto.ID `json:"id"`
+	IDable
 
 	LLB      *pb.Definition `json:"llb"`
 	Dir      string         `json:"dir"`
@@ -91,6 +90,7 @@ func NewDirectorySt(ctx context.Context, st llb.State, dir string, pipeline pipe
 // WithXXX method.
 func (dir *Directory) Clone() *Directory {
 	cp := *dir
+	cp.ID = nil
 	cp.Pipeline = cloneSlice(cp.Pipeline)
 	cp.Services = cloneSlice(cp.Services)
 	return &cp

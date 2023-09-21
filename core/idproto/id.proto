@@ -17,6 +17,13 @@ message ID {
   // Chain of GraphQL field selections that construct the object, starting from
   // Query.
   repeated Selector constructor = 2;
+
+  // Schema that this ID evaluates against, if any. The typeName field refers
+  // to an object type in this schema.
+  //
+  // In Dagger, this is a module ID. If not present, the global default schema
+  // is implied.
+  ID schema = 3;
 }
 
 // Selector is an individual field and arguments. Its result will either be

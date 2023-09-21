@@ -1,14 +1,15 @@
 package idproto
 
 import (
+	"fmt"
+	reflect "reflect"
+
 	"github.com/opencontainers/go-digest"
 	"google.golang.org/protobuf/proto"
 )
 
-func New(typeName string) *ID {
-	return &ID{
-		TypeName: typeName,
-	}
+func New() *ID {
+	return &ID{}
 }
 
 func Arg(name string, value any) *Argument {
@@ -37,11 +38,33 @@ func LiteralValue(value any) *Literal {
 	case bool:
 		return &Literal{Value: &Literal_Bool{Bool: v}}
 	default:
-		panic("TODO")
+		rv := reflect.ValueOf(value)
+		switch rv.Kind() {
+		case reflect.Ptr:
+			return LiteralValue(rv.Elem().Interface())
+		case reflect.Slice:
+			list := make([]*Literal, rv.Len())
+			for i := 0; i < rv.Len(); i++ {
+				list[i] = LiteralValue(rv.Index(i).Interface())
+			}
+			return &Literal{Value: &Literal_List{List: &List{Values: list}}}
+		case reflect.Map:
+			args := make([]*Argument, rv.Len())
+			i := 0
+			for _, key := range rv.MapKeys() {
+				args[i] = Arg(key.String(), rv.MapIndex(key).Interface())
+				i++
+			}
+			return &Literal{Value: &Literal_Object{Object: &Object{Values: args}}}
+		default:
+			panic(fmt.Sprintf("TODO: cannot make LiteralValue from %T: %+v", value, value))
+		}
 	}
 }
 
-func (id *ID) Append(field string, args ...*Argument) {
+func (id *ID) Chain(typeName string, field string, args ...*Argument) *ID {
+	cp := proto.Clone(id).(*ID)
+
 	var tainted bool
 	for _, arg := range args {
 		if arg.Tainted() {
@@ -50,11 +73,15 @@ func (id *ID) Append(field string, args ...*Argument) {
 		}
 	}
 
-	id.Constructor = append(id.Constructor, &Selector{
+	cp.TypeName = typeName
+
+	cp.Constructor = append(cp.Constructor, &Selector{
 		Field:   field,
 		Args:    args,
 		Tainted: tainted,
 	})
+
+	return cp
 }
 
 // Tainted returns true if the ID contains any tainted selectors.

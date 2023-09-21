@@ -17,7 +17,6 @@ import (
 	fstypes "github.com/tonistiigi/fsutil/types"
 	"github.com/vito/progrock"
 
-	"github.com/dagger/dagger/core/idproto"
 	"github.com/dagger/dagger/core/pipeline"
 	"github.com/dagger/dagger/core/reffs"
 	"github.com/dagger/dagger/core/resourceid"
@@ -26,7 +25,7 @@ import (
 
 // File is a content-addressed file.
 type File struct {
-	ID *idproto.ID `json:"id"`
+	IDable
 
 	LLB      *pb.Definition `json:"llb"`
 	File     string         `json:"file"`
@@ -81,6 +80,7 @@ func NewFileSt(ctx context.Context, st llb.State, dir string, pipeline pipeline.
 // WithXXX method.
 func (file *File) Clone() *File {
 	cp := *file
+	cp.ID = nil
 	cp.Pipeline = cloneSlice(cp.Pipeline)
 	cp.Services = cloneSlice(cp.Services)
 	return &cp

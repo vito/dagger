@@ -6,25 +6,22 @@ extend type Query {
   Optional platform argument initializes new containers to execute and publish as that platform.
   Platform defaults to that of the builder's host.
   """
-  container(id: ContainerID, platform: Platform): Container!
+  container(id: ID, platform: Platform): Container!
 }
-
-"A unique container identifier. Null designates an empty container (scratch)."
-scalar ContainerID
 
 """
 An OCI-compatible container, also known as a docker container.
 """
 type Container {
   "A unique identifier for this container."
-  id: ContainerID!
+  id: ID!
 
   """
   Forces evaluation of the pipeline in the engine.
 
   It doesn't run the default command if no exec has been set.
   """
-  sync: ContainerID!
+  sync: ID!
 
   "The platform this container executes and publishes as."
   platform: Platform!
@@ -56,7 +53,7 @@ type Container {
   """
   build(
     "Directory context used by the Dockerfile."
-    context: DirectoryID!
+    context: ID!
 
     """
     Path to the Dockerfile to use.
@@ -80,14 +77,14 @@ type Container {
     and mount path /run/secrets/[secret-name]
     e.g. RUN --mount=type=secret,id=my-secret curl url?token=$(cat /run/secrets/my-secret)"
     """
-    secrets: [SecretID!]
+    secrets: [ID!]
   ): Container!
 
   "Retrieves this container's root filesystem. Mounts are not included."
   rootfs: Directory!
 
-  "Initializes this container from this DirectoryID."
-  withRootfs(directory: DirectoryID!): Container!
+  "Initializes this container from this ID."
+  withRootfs(directory: ID!): Container!
 
   """
   Retrieves a directory at the given path.
@@ -216,7 +213,7 @@ type Container {
     name: String!
 
     "The identifier of the secret value."
-    secret: SecretID!
+    secret: ID!
   ): Container!
 
   """
@@ -268,7 +265,7 @@ type Container {
     path: String!
 
     "Identifier of the mounted directory."
-    source: DirectoryID!
+    source: ID!
 
     """
     A user:group to set for the mounted directory and its contents.
@@ -290,7 +287,7 @@ type Container {
     path: String!
 
     "Identifier of the mounted file."
-    source: FileID!
+    source: ID!
 
     """
     A user or user:group to set for the mounted file.
@@ -322,10 +319,10 @@ type Container {
     path: String!
 
     "Identifier of the cache volume to mount."
-    cache: CacheID!
+    cache: ID!
 
     "Identifier of the directory to use as the cache volume's root."
-    source: DirectoryID
+    source: ID
 
     "Sharing mode of the cache volume."
     sharing: CacheSharingMode
@@ -354,7 +351,7 @@ type Container {
     path: String!
 
     "Identifier of the secret to mount."
-    source: SecretID!
+    source: ID!
 
     """
     A user:group to set for the mounted secret.
@@ -394,7 +391,7 @@ type Container {
     path: String!
 
     "Identifier of the file to copy."
-    source: FileID!
+    source: ID!
 
     """
     Permission given to the copied file (e.g., 0600).
@@ -454,7 +451,7 @@ type Container {
     path: String!
 
     "Identifier of the directory to write"
-    directory: DirectoryID!
+    directory: ID!
 
     """
     Patterns to exclude in the written directory (e.g., ["node_modules/**", ".gitignore", ".git/"]).
@@ -488,7 +485,7 @@ type Container {
     """
     Identifier of the socket to forward.
     """
-    source: SocketID!
+    source: ID!
 
     """
     A user:group to set for the mounted socket.
@@ -606,7 +603,7 @@ type Container {
     Identifiers for other platform specific containers.
     Used for multi-platform image.
     """
-    platformVariants: [ContainerID!]
+    platformVariants: [ID!]
 
     """
     Force each layer of the published image to use the specified compression algorithm.
@@ -642,7 +639,7 @@ type Container {
     Identifiers for other platform specific containers.
     Used for multi-platform image.
     """
-    platformVariants: [ContainerID!]
+    platformVariants: [ID!]
 
     """
     Force each layer of the exported image to use the specified compression algorithm.
@@ -671,7 +668,7 @@ type Container {
     """
     File to read the container from.
     """
-    source: FileID!
+    source: ID!
 
     """
     Identifies the tag to import from the archive, if the archive bundles
@@ -696,7 +693,7 @@ type Container {
     """
     The API key, password or token to authenticate to this registry.
     """
-    secret: SecretID!
+    secret: ID!
   ): Container!
 
   "Retrieves this container without the registry authentication of a given address."
@@ -767,7 +764,7 @@ type Container {
     "A name that can be used to reach the service from the container"
     alias: String!
     "Identifier of the service container"
-    service: ContainerID!
+    service: ID!
   ): Container!
 
   """

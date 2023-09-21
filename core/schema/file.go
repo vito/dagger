@@ -22,15 +22,12 @@ func (s *fileSchema) Schema() string {
 	return File
 }
 
-var fileIDResolver = idResolver[core.FileID, core.File]()
-
 func (s *fileSchema) Resolvers() Resolvers {
 	return Resolvers{
-		"FileID": fileIDResolver,
-		"Query": ObjectResolver{
+		"Query": CacheByID(s.objects, ObjectResolver{
 			"file": ToResolver(s.file),
-		},
-		"File": ToIDableObjectResolver(loader[core.File](s.queryCache), ObjectResolver{
+		}),
+		"File": CacheByID(s.objects, ObjectResolver{
 			"id":             ToResolver(s.id),
 			"sync":           ToResolver(s.sync),
 			"contents":       ToResolver(s.contents),
@@ -50,11 +47,11 @@ type fileArgs struct {
 }
 
 func (s *fileSchema) file(ctx *core.Context, parent any, args fileArgs) (*core.File, error) {
-	return args.ID.Decode()
+	return args.ID.Decode(s.objects)
 }
 
 func (s *fileSchema) id(ctx *core.Context, parent *core.File, args any) (core.FileID, error) {
-	return resourceid.FromProto[core.File](parent.ID), nil
+	return resourceid.FromProto[*core.File](parent.ID), nil
 }
 
 func (s *fileSchema) sync(ctx *core.Context, parent *core.File, _ any) (core.FileID, error) {
@@ -62,7 +59,7 @@ func (s *fileSchema) sync(ctx *core.Context, parent *core.File, _ any) (core.Fil
 	if err != nil {
 		return core.FileID{}, err
 	}
-	return resourceid.FromProto[core.File](parent.ID), nil
+	return resourceid.FromProto[*core.File](parent.ID), nil
 }
 
 func (s *fileSchema) contents(ctx *core.Context, file *core.File, args any) (string, error) {
