@@ -1403,7 +1403,7 @@ func TestServiceHostToContainer(t *testing.T) {
 
 		tunnel, err := c.Host().Tunnel(srv, dagger.HostTunnelOpts{
 			Native: true,
-			Ports: []dagger.PortForward{
+			Ports: []*dagger.PortForward{
 				{Backend: 32764, Frontend: 32764},
 			},
 		}).Start(ctx)
@@ -1478,7 +1478,7 @@ func TestServiceContainerToHost(t *testing.T) {
 	t.Run("simple", func(t *testing.T) {
 		t.Parallel()
 
-		host := c.Host().Service([]dagger.PortForward{
+		host := c.Host().Service([]*dagger.PortForward{
 			{Frontend: 80, Backend: port},
 		})
 
@@ -1496,7 +1496,7 @@ func TestServiceContainerToHost(t *testing.T) {
 	t.Run("using hostname", func(t *testing.T) {
 		t.Parallel()
 
-		host := c.Host().Service([]dagger.PortForward{
+		host := c.Host().Service([]*dagger.PortForward{
 			{Frontend: 80, Backend: port},
 		})
 
@@ -1515,7 +1515,7 @@ func TestServiceContainerToHost(t *testing.T) {
 	t.Run("using endpoint", func(t *testing.T) {
 		t.Parallel()
 
-		host := c.Host().Service([]dagger.PortForward{
+		host := c.Host().Service([]*dagger.PortForward{
 			{Frontend: 80, Backend: port},
 		})
 
@@ -1550,7 +1550,7 @@ func TestServiceContainerToHost(t *testing.T) {
 		port2, err := strconv.Atoi(port2Str)
 		require.NoError(t, err)
 
-		host := c.Host().Service([]dagger.PortForward{
+		host := c.Host().Service([]*dagger.PortForward{
 			{Frontend: 80, Backend: port},
 			{Frontend: 8000, Backend: port2},
 		})
