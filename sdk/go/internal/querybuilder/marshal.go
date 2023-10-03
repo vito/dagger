@@ -132,7 +132,7 @@ func marshalValue(ctx context.Context, v reflect.Value) (string, error) {
 				}
 				m, err := marshalValue(gctx, fv)
 				if err != nil {
-					return err
+					return fmt.Errorf("field %s: %w", name, err)
 				}
 				if m != `""` && m != "null" {
 					elems[i] = fmt.Sprintf("%s:%s", name, m)
@@ -141,7 +141,7 @@ func marshalValue(ctx context.Context, v reflect.Value) (string, error) {
 			})
 		}
 		if err := eg.Wait(); err != nil {
-			return "", err
+			return "", fmt.Errorf("type %s: %w", t.Name(), err)
 		}
 		nonNullElems := make([]string, 0, n)
 		for _, elem := range elems {
@@ -151,7 +151,7 @@ func marshalValue(ctx context.Context, v reflect.Value) (string, error) {
 		}
 		return fmt.Sprintf("{%s}", strings.Join(nonNullElems, ",")), nil
 	default:
-		panic(fmt.Errorf("unsupported argument of kind %s", t.Kind()))
+		return "", fmt.Errorf("unsupported argument of kind %s: %T", t.Kind(), v)
 	}
 }
 

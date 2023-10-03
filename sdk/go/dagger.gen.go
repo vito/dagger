@@ -73,33 +73,33 @@ type Void string
 // Key value object that represents a build argument.
 type BuildArg struct {
 	// The build argument name.
-	Name string `json:"name,omitempty"`
+	Name string `json:"name"`
 
 	// The build argument value.
-	Value string `json:"value,omitempty"`
+	Value string `json:"value"`
 }
 
 type FunctionCallInput struct {
 	// The name of the argument to the function
-	Name string `json:"name,omitempty"`
+	Name string `json:"name"`
 
 	// The value of the argument represented as a string of the JSON serialization.
-	Value JSON `json:"value,omitempty"`
+	Value JSON `json:"value"`
 }
 
 type ModuleEnvironmentVariable struct {
-	Name string `json:"name,omitempty"`
+	Name string `json:"name"`
 
-	Value string `json:"value,omitempty"`
+	Value string `json:"value"`
 }
 
 // Key value object that represents a Pipeline label.
 type PipelineLabel struct {
 	// Label name.
-	Name string `json:"name,omitempty"`
+	Name string `json:"name"`
 
 	// Label value.
-	Value string `json:"value,omitempty"`
+	Value string `json:"value"`
 }
 
 // Port forwarding rules for tunneling network traffic.
@@ -2631,7 +2631,7 @@ type HostServiceOpts struct {
 }
 
 // Creates a service that forwards traffic to a specified address via the host.
-func (r *Host) Service(ports []PortForward, opts ...HostServiceOpts) *Service {
+func (r *Host) Service(ports []*PortForward, opts ...HostServiceOpts) *Service {
 	q := r.q.Select("service")
 	for i := len(opts) - 1; i >= 0; i-- {
 		// `host` optional argument
@@ -2677,7 +2677,7 @@ type HostTunnelOpts struct {
 	// each port maps to a random port chosen by the host.
 	//
 	// If ports are given and native is true, the ports are additive.
-	Ports []PortForward
+	Ports []*PortForward
 }
 
 // Creates a tunnel that forwards traffic from the host to a service.
@@ -3677,6 +3677,14 @@ func (r *Service) XXX_GraphQLID(ctx context.Context) (string, error) {
 		return "", err
 	}
 	return string(id), nil
+}
+
+func (r *Service) MarshalJSON() ([]byte, error) {
+	id, err := r.ID(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(id)
 }
 
 // Retrieves the list of ports provided by the service.

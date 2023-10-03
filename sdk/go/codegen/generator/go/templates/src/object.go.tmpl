@@ -184,6 +184,10 @@ func (r *{{ $.Name | FormatName }}) UnmarshalJSON(bs []byte) error {
     *r = *dag.Directory(DirectoryOpts{
       ID: DirectoryID(id),
     })
+  {{ else if eq ($.Name | FormatName) "Service" }}
+    *r = *dag.Service(ServiceOpts{
+      ID: ServiceID(id),
+    })
   {{ else if eq ($.Name | FormatName) "Socket" }}
     *r = *dag.Socket(SocketOpts{
       ID: SocketID(id),
