@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 
 	"dagger.io/dagger"
@@ -14,12 +15,12 @@ import (
 	"github.com/opencontainers/go-digest"
 	"github.com/spf13/cobra"
 	"github.com/vito/progrock"
-	"golang.org/x/sync/errgroup"
 	"golang.org/x/term"
 )
 
 var (
-	serveFocus bool
+	serveFocus    bool
+	serveForwards []string
 )
 
 var serveCmd = &cobra.Command{
@@ -34,17 +35,11 @@ var serveCmd = &cobra.Command{
 
 func init() {
 	serveCmd.Flags().BoolVar(&serveFocus, "focus", false, "Only show output for focused commands.")
+	serveCmd.Flags().StringSliceVarP(&serveForwards, "port", "p", nil, "Forward a port from the service to the host.")
 }
 
 func Serve(ctx context.Context, engineClient *client.Client, _ *dagger.Module, _ *cobra.Command, args []string) (rerr error) {
-	eg := new(errgroup.Group)
-	for _, chain := range args {
-		eg.Go(func() error { return serve(ctx, chain, engineClient) })
-	}
-	return eg.Wait()
-}
-
-func serve(ctx context.Context, chain string, engineClient *client.Client) (rerr error) {
+	chain := args[0]
 	selectors := strings.Split(chain, ".")
 
 	query := ``
@@ -91,9 +86,34 @@ func serve(ctx context.Context, chain string, engineClient *client.Client) (rerr
 
 	svc := dag.Service(svcID)
 
-	tunnel, err := dag.Host().Tunnel(svc, dagger.HostTunnelOpts{
-		Native: true,
-	}).Start(ctx)
+	opts := dagger.HostTunnelOpts{
+		Native: len(serveForwards) == 0,
+	}
+	for _, f := range serveForwards {
+		ports, proto, ok := strings.Cut(f, "/")
+		if !ok {
+			proto = string(dagger.Tcp)
+		}
+		backStr, frontStr, ok := strings.Cut(ports, ":")
+		if !ok {
+			frontStr = backStr
+		}
+		back, err := strconv.Atoi(backStr)
+		if err != nil {
+			return err
+		}
+		front, err := strconv.Atoi(frontStr)
+		if err != nil {
+			return err
+		}
+		opts.Ports = append(opts.Ports, &dagger.PortForward{
+			Backend:  back,
+			Frontend: front,
+			Protocol: dagger.NetworkProtocol(proto),
+		})
+	}
+
+	tunnel, err := dag.Host().Tunnel(svc, opts).Start(ctx)
 	if err != nil {
 		return err
 	}
