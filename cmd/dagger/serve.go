@@ -18,13 +18,22 @@ import (
 	"golang.org/x/term"
 )
 
+var (
+	serveFocus bool
+)
+
 var serveCmd = &cobra.Command{
 	Use:                   "serve [CHAIN]",
 	DisableFlagsInUseLine: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		focus = serveFocus
 		return loadModCmdWrapper(Serve, "", true)(cmd, args)
 	},
 	Args: cobra.MinimumNArgs(1),
+}
+
+func init() {
+	serveCmd.Flags().BoolVar(&serveFocus, "focus", false, "Only show output for focused commands.")
 }
 
 func Serve(ctx context.Context, engineClient *client.Client, _ *dagger.Module, _ *cobra.Command, args []string) (rerr error) {
