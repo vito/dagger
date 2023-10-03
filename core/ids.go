@@ -56,6 +56,8 @@ func ResourceFromID(id string) (any, error) {
 		return TypeDefID(id).Decode()
 	case GeneratedCodeID.ResourceTypeName(""):
 		return GeneratedCodeID(id).Decode()
+	case ServiceID.ResourceTypeName(""):
+		return ServiceID(id).Decode()
 	}
 	return nil, fmt.Errorf("unknown resource type: %v", typeName)
 }
@@ -84,6 +86,8 @@ func ResourceToID(r any) (string, error) {
 	case *TypeDef:
 		id, err = r.ID()
 	case *GeneratedCode:
+		id, err = r.ID()
+	case *Service:
 		id, err = r.ID()
 	default:
 		return "", fmt.Errorf("unknown resource type: %T", r)

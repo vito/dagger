@@ -31,14 +31,14 @@ func (s *serviceSchema) Resolvers() Resolvers {
 		"Container": ObjectResolver{
 			"service": ToResolver(s.containerService),
 		},
-		"Service": ObjectResolver{
+		"Service": ToIDableObjectResolver(core.ServiceID.Decode, ObjectResolver{
 			"id":       ToResolver(s.id),
 			"hostname": ToResolver(s.hostname),
 			"ports":    ToResolver(s.ports),
 			"endpoint": ToResolver(s.endpoint),
 			"start":    ToResolver(s.start),
 			"stop":     ToResolver(s.stop),
-		},
+		}),
 	}
 }
 
