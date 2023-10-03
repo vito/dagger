@@ -19,8 +19,10 @@ import (
 )
 
 var (
-	serveFocus    bool
-	serveForwards []string
+	serveFocus         bool
+	serveForwards      []string
+	serveVarsInput     []string
+	serveVarsJSONInput string
 )
 
 var serveCmd = &cobra.Command{
@@ -36,6 +38,8 @@ var serveCmd = &cobra.Command{
 func init() {
 	serveCmd.Flags().BoolVar(&serveFocus, "focus", false, "Only show output for focused commands.")
 	serveCmd.Flags().StringSliceVarP(&serveForwards, "port", "p", nil, "Forward a port from the service to the host.")
+	serveCmd.Flags().StringSliceVar(&serveVarsInput, "var", nil, "query variable")
+	serveCmd.Flags().StringVar(&serveVarsJSONInput, "var-json", "", "json query variables (overrides --var)")
 }
 
 func Serve(ctx context.Context, engineClient *client.Client, _ *dagger.Module, _ *cobra.Command, args []string) (rerr error) {
@@ -62,12 +66,12 @@ func Serve(ctx context.Context, engineClient *client.Client, _ *dagger.Module, _
 	defer func() { vtx.Done(rerr) }()
 
 	vars := make(map[string]interface{})
-	if len(queryVarsJSONInput) > 0 {
-		if err := json.Unmarshal([]byte(queryVarsJSONInput), &vars); err != nil {
+	if len(serveVarsJSONInput) > 0 {
+		if err := json.Unmarshal([]byte(serveVarsJSONInput), &vars); err != nil {
 			return err
 		}
 	} else {
-		vars = getKVInput(queryVarsInput)
+		vars = getKVInput(serveVarsInput)
 	}
 
 	res := make(map[string]any)
