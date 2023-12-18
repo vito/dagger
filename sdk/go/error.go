@@ -10,7 +10,6 @@ import (
 // getCustomError parses a GraphQL error into a more specific error type.
 func getCustomError(err error) error {
 	var gqlErr *gqlerror.Error
-
 	if !errors.As(err, &gqlErr) {
 		return nil
 	}

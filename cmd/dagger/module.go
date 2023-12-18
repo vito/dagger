@@ -386,7 +386,7 @@ func updateModuleConfig(
 		return fmt.Errorf("failed to write module config: %w", err)
 	}
 
-	mod, err := modFlag.AsModule(ctx, dag)
+	mod, err := modFlag.AsUninitializedModule(ctx, dag)
 	if err != nil {
 		return fmt.Errorf("failed to load module: %w", err)
 	}
@@ -596,7 +596,6 @@ func loadModObjects(ctx context.Context, dag *dagger.Client, mod *dagger.Module)
 	}, &dagger.Response{
 		Data: &res,
 	})
-
 	if err != nil {
 		err = fmt.Errorf("query module objects: %w", err)
 	}

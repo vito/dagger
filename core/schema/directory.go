@@ -4,18 +4,14 @@ import (
 	"context"
 	"io/fs"
 
-	specs "github.com/opencontainers/image-spec/specs-go/v1"
+	"github.com/vito/dagql"
 
 	"github.com/dagger/dagger/core"
 	"github.com/dagger/dagger/core/pipeline"
 )
 
 type directorySchema struct {
-	*APIServer
-
-	host       *core.Host
-	svcs       *core.Services
-	buildCache *core.CacheMap[uint64, *core.Container]
+	srv *dagql.Server
 }
 
 var _ SchemaResolvers = &directorySchema{}
@@ -28,63 +24,55 @@ func (s *directorySchema) Schema() string {
 	return Directory
 }
 
-func (s *directorySchema) Resolvers() Resolvers {
-	rs := Resolvers{
-		"Query": ObjectResolver{
-			"directory": ToResolver(s.directory),
-		},
-	}
+func (s *directorySchema) Install() {
+	dagql.Fields[*core.Query]{
+		dagql.Func("directory", s.directory),
+	}.Install(s.srv)
 
-	ResolveIDable[core.Directory](rs, "Directory", ObjectResolver{
-		"sync":             ToResolver(s.sync),
-		"pipeline":         ToResolver(s.pipeline),
-		"entries":          ToResolver(s.entries),
-		"glob":             ToResolver(s.glob),
-		"file":             ToResolver(s.file),
-		"withFile":         ToResolver(s.withFile),
-		"withNewFile":      ToResolver(s.withNewFile),
-		"withoutFile":      ToResolver(s.withoutFile),
-		"directory":        ToResolver(s.subdirectory),
-		"withDirectory":    ToResolver(s.withDirectory),
-		"withTimestamps":   ToResolver(s.withTimestamps),
-		"withNewDirectory": ToResolver(s.withNewDirectory),
-		"withoutDirectory": ToResolver(s.withoutDirectory),
-		"diff":             ToResolver(s.diff),
-		"export":           ToResolver(s.export),
-		"dockerBuild":      ToResolver(s.dockerBuild),
-	})
-
-	return rs
+	dagql.Fields[*core.Directory]{
+		Syncer[*core.Directory](),
+		dagql.Func("pipeline", s.pipeline),
+		dagql.Func("entries", s.entries),
+		dagql.Func("glob", s.glob),
+		dagql.Func("file", s.file),
+		dagql.Func("withFile", s.withFile),
+		dagql.Func("withNewFile", s.withNewFile),
+		dagql.Func("withoutFile", s.withoutFile),
+		dagql.Func("directory", s.subdirectory),
+		dagql.Func("withDirectory", s.withDirectory),
+		dagql.Func("withTimestamps", s.withTimestamps),
+		dagql.Func("withNewDirectory", s.withNewDirectory),
+		dagql.Func("withoutDirectory", s.withoutDirectory),
+		dagql.Func("diff", s.diff),
+		dagql.Func("export", s.export).Impure(),
+		dagql.Func("dockerBuild", s.dockerBuild),
+	}.Install(s.srv)
 }
 
 type directoryPipelineArgs struct {
 	Name        string
-	Description string
-	Labels      []pipeline.Label
+	Description string                              `default:""`
+	Labels      []dagql.InputObject[pipeline.Label] `default:"[]"`
 }
 
 func (s *directorySchema) pipeline(ctx context.Context, parent *core.Directory, args directoryPipelineArgs) (*core.Directory, error) {
-	return parent.WithPipeline(ctx, args.Name, args.Description, args.Labels)
+	return parent.WithPipeline(ctx, args.Name, args.Description, collectInputsSlice(args.Labels))
 }
 
 type directoryArgs struct {
-	ID core.DirectoryID
+	ID dagql.Optional[core.DirectoryID]
 }
 
 func (s *directorySchema) directory(ctx context.Context, parent *core.Query, args directoryArgs) (*core.Directory, error) {
-	if args.ID != "" {
-		return args.ID.Decode()
+	if args.ID.Valid {
+		inst, err := args.ID.Value.Load(ctx, s.srv)
+		if err != nil {
+			return nil, err
+		}
+		return inst.Self, nil
 	}
-	platform := s.platform
-	return core.NewScratchDirectory(parent.PipelinePath(), platform), nil
-}
-
-func (s *directorySchema) sync(ctx context.Context, parent *core.Directory, _ any) (core.DirectoryID, error) {
-	_, err := parent.Evaluate(ctx, s.bk, s.svcs)
-	if err != nil {
-		return "", err
-	}
-	return parent.ID()
+	platform := parent.Platform
+	return core.NewScratchDirectory(parent, parent.PipelinePath(), platform), nil
 }
 
 type subdirectoryArgs struct {
@@ -92,31 +80,31 @@ type subdirectoryArgs struct {
 }
 
 func (s *directorySchema) subdirectory(ctx context.Context, parent *core.Directory, args subdirectoryArgs) (*core.Directory, error) {
-	return parent.Directory(ctx, s.bk, s.svcs, args.Path)
+	return parent.Directory(ctx, args.Path)
 }
 
 type withNewDirectoryArgs struct {
 	Path        string
-	Permissions fs.FileMode
+	Permissions int `default:"0644"` // FIXME(vito): verify this parses as expected, prob doesn't
 }
 
 func (s *directorySchema) withNewDirectory(ctx context.Context, parent *core.Directory, args withNewDirectoryArgs) (*core.Directory, error) {
-	return parent.WithNewDirectory(ctx, args.Path, args.Permissions)
+	return parent.WithNewDirectory(ctx, args.Path, fs.FileMode(args.Permissions))
 }
 
-type withDirectoryArgs struct {
+type WithDirectoryArgs struct {
 	Path      string
 	Directory core.DirectoryID
 
 	core.CopyFilter
 }
 
-func (s *directorySchema) withDirectory(ctx context.Context, parent *core.Directory, args withDirectoryArgs) (*core.Directory, error) {
-	dir, err := args.Directory.Decode()
+func (s *directorySchema) withDirectory(ctx context.Context, parent *core.Directory, args WithDirectoryArgs) (*core.Directory, error) {
+	dir, err := args.Directory.Load(ctx, s.srv)
 	if err != nil {
 		return nil, err
 	}
-	return parent.WithDirectory(ctx, args.Path, dir, args.CopyFilter, nil)
+	return parent.WithDirectory(ctx, args.Path, dir.Self, args.CopyFilter, nil)
 }
 
 type dirWithTimestampsArgs struct {
@@ -128,52 +116,58 @@ func (s *directorySchema) withTimestamps(ctx context.Context, parent *core.Direc
 }
 
 type entriesArgs struct {
-	Path string
+	Path dagql.Optional[dagql.String]
 }
 
-func (s *directorySchema) entries(ctx context.Context, parent *core.Directory, args entriesArgs) ([]string, error) {
-	return parent.Entries(ctx, s.bk, s.svcs, args.Path)
+func (s *directorySchema) entries(ctx context.Context, parent *core.Directory, args entriesArgs) (dagql.Array[dagql.String], error) {
+	ents, err := parent.Entries(ctx, args.Path.Value.String())
+	if err != nil {
+		return nil, err
+	}
+	return dagql.NewStringArray(ents...), nil
 }
 
 type globArgs struct {
 	Pattern string
 }
 
-func (s *directorySchema) glob(ctx context.Context, parent *core.Directory, args globArgs) ([]string, error) {
-	return parent.Glob(ctx, s.bk, s.svcs, ".", args.Pattern)
+func (s *directorySchema) glob(ctx context.Context, parent *core.Directory, args globArgs) (dagql.Array[dagql.String], error) {
+	ents, err := parent.Glob(ctx, ".", args.Pattern)
+	if err != nil {
+		return nil, err
+	}
+	return dagql.NewStringArray(ents...), nil
 }
 
 type dirFileArgs struct {
 	Path string
 }
 
-func (s *directorySchema) file(ctx context.Context, parent *core.Directory, args dirFileArgs) (_ *core.File, rerr error) {
-	return parent.File(ctx, s.bk, s.svcs, args.Path)
+func (s *directorySchema) file(ctx context.Context, parent *core.Directory, args dirFileArgs) (*core.File, error) {
+	return parent.File(ctx, args.Path)
 }
 
-type withNewFileArgs struct {
+func (s *directorySchema) withNewFile(ctx context.Context, parent *core.Directory, args struct {
 	Path        string
 	Contents    string
-	Permissions fs.FileMode
+	Permissions int `default:"0644"`
+}) (*core.Directory, error) {
+	return parent.WithNewFile(ctx, args.Path, []byte(args.Contents), fs.FileMode(args.Permissions), nil)
 }
 
-func (s *directorySchema) withNewFile(ctx context.Context, parent *core.Directory, args withNewFileArgs) (*core.Directory, error) {
-	return parent.WithNewFile(ctx, args.Path, []byte(args.Contents), args.Permissions, nil)
-}
-
-type withFileArgs struct {
+type WithFileArgs struct {
 	Path        string
 	Source      core.FileID
-	Permissions fs.FileMode
+	Permissions *int
 }
 
-func (s *directorySchema) withFile(ctx context.Context, parent *core.Directory, args withFileArgs) (*core.Directory, error) {
-	file, err := args.Source.Decode()
+func (s *directorySchema) withFile(ctx context.Context, parent *core.Directory, args WithFileArgs) (*core.Directory, error) {
+	file, err := args.Source.Load(ctx, s.srv)
 	if err != nil {
 		return nil, err
 	}
 
-	return parent.WithFile(ctx, args.Path, file, args.Permissions, nil)
+	return parent.WithFile(ctx, args.Path, file.Self, args.Permissions, nil)
 }
 
 type withoutDirectoryArgs struct {
@@ -197,19 +191,19 @@ type diffArgs struct {
 }
 
 func (s *directorySchema) diff(ctx context.Context, parent *core.Directory, args diffArgs) (*core.Directory, error) {
-	dir, err := args.Other.Decode()
+	dir, err := args.Other.Load(ctx, s.srv)
 	if err != nil {
 		return nil, err
 	}
-	return parent.Diff(ctx, dir)
+	return parent.Diff(ctx, dir.Self)
 }
 
 type dirExportArgs struct {
 	Path string
 }
 
-func (s *directorySchema) export(ctx context.Context, parent *core.Directory, args dirExportArgs) (bool, error) {
-	err := parent.Export(ctx, s.bk, s.host, s.svcs, args.Path)
+func (s *directorySchema) export(ctx context.Context, parent *core.Directory, args dirExportArgs) (dagql.Boolean, error) {
+	err := parent.Export(ctx, args.Path)
 	if err != nil {
 		return false, err
 	}
@@ -218,31 +212,32 @@ func (s *directorySchema) export(ctx context.Context, parent *core.Directory, ar
 }
 
 type dirDockerBuildArgs struct {
-	Platform   *specs.Platform
-	Dockerfile string
-	BuildArgs  []core.BuildArg
-	Target     string
-	Secrets    []core.SecretID
+	Platform   dagql.Optional[core.Platform]
+	Dockerfile string                             `default:"Dockerfile"`
+	Target     string                             `default:""`
+	BuildArgs  []dagql.InputObject[core.BuildArg] `default:"[]"`
+	Secrets    []core.SecretID                    `default:"[]"`
 }
 
 func (s *directorySchema) dockerBuild(ctx context.Context, parent *core.Directory, args dirDockerBuildArgs) (*core.Container, error) {
-	platform := s.platform
-	if args.Platform != nil {
-		platform = *args.Platform
+	platform := parent.Query.Platform
+	if args.Platform.Valid {
+		platform = args.Platform.Value
 	}
-	ctr, err := core.NewContainer("", parent.Pipeline, platform)
+	ctr, err := core.NewContainer(parent.Query, parent.Pipeline, platform)
 	if err != nil {
-		return ctr, err
+		return nil, err
+	}
+	secrets, err := dagql.LoadIDs(ctx, s.srv, args.Secrets)
+	if err != nil {
+		return nil, err
 	}
 	return ctr.Build(
 		ctx,
 		parent,
 		args.Dockerfile,
-		args.BuildArgs,
+		collectInputsSlice(args.BuildArgs),
 		args.Target,
-		args.Secrets,
-		s.bk,
-		s.svcs,
-		s.buildCache,
+		secrets,
 	)
 }

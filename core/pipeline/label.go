@@ -24,6 +24,10 @@ type Label struct {
 	Value string `json:"value"`
 }
 
+func (Label) TypeName() string {
+	return "PipelineLabel"
+}
+
 type Labels []Label
 
 func EngineLabel(engineName string) Label {

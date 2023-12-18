@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/dave/jennifer/jen"
 	. "github.com/dave/jennifer/jen" // nolint:revive,stylecheck
 	"github.com/iancoleman/strcase"
 	"golang.org/x/tools/go/packages"
@@ -331,12 +332,12 @@ func renderNameOrStruct(t types.Type) string {
 	return t.String()
 }
 
-var checkErrStatement = If(Err().Op("!=").Nil()).Block(
-	// fmt.Println(err.Error())
-	Qual("fmt", "Println").Call(Err().Dot("Error").Call()),
-	// os.Exit(2)
-	Qual("os", "Exit").Call(Lit(2)),
-)
+func checkErrStatement(label string) *jen.Statement {
+	return If(Err().Op("!=").Nil()).Block(
+		// panic(fmt.Errorf("%s: %w", label, Err())
+		Id("panic").Call(Qual("fmt", "Errorf").Call(Lit("%s: %w"), Lit(label), Err())),
+	)
+}
 
 // fillObjectFunctionCases recursively fills out the `cases` map with entries for object name -> `case` statement blocks
 // for each function in that object
@@ -425,7 +426,7 @@ func (ps *parseState) fillObjectFunctionCase(
 	statements = append(statements,
 		Var().Id(parentVarName).Id(objName),
 		Err().Op("=").Qual("json", "Unmarshal").Call(Id(parentJSONVar), Op("&").Id(parentVarName)),
-		checkErrStatement,
+		checkErrStatement("failed to unmarshal parent object"),
 	)
 
 	var fnCallArgs []Code
@@ -485,7 +486,7 @@ func (ps *parseState) fillObjectFunctionCase(
 					Index().Byte().Parens(Id(inputArgsVar).Index(Lit(spec.name))),
 					Op("&").Add(target),
 				),
-				checkErrStatement,
+				checkErrStatement("failed to unmarshal input arg "+spec.name),
 			))
 	}
 

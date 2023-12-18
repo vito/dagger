@@ -6,14 +6,22 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/dagger/dagger/core/resourceid"
-	"github.com/opencontainers/go-digest"
 	"github.com/pkg/errors"
+	"github.com/vektah/gqlparser/v2/ast"
+	"github.com/vito/dagql"
+	"github.com/vito/dagql/idproto"
 )
 
 // CacheVolume is a persistent volume with a globally scoped identifier.
 type CacheVolume struct {
 	Keys []string `json:"keys"`
+}
+
+func (*CacheVolume) Type() *ast.Type {
+	return &ast.Type{
+		NamedType: "CacheVolume",
+		NonNull:   true,
+	}
 }
 
 var ErrInvalidCacheVolumeID = errors.New("invalid cache ID; create one using cacheVolume")
@@ -28,10 +36,6 @@ func (cache *CacheVolume) Clone() *CacheVolume {
 	return &cp
 }
 
-func (cache *CacheVolume) Digest() (digest.Digest, error) {
-	return stableDigest(cache)
-}
-
 // Sum returns a checksum of the cache tokens suitable for use as a cache key.
 func (cache *CacheVolume) Sum() string {
 	hash := sha256.New()
@@ -42,19 +46,32 @@ func (cache *CacheVolume) Sum() string {
 	return base64.StdEncoding.EncodeToString(hash.Sum(nil))
 }
 
-func (cache *CacheVolume) ID() (CacheVolumeID, error) {
-	return resourceid.Encode(cache)
-}
-
 // CacheSharingMode is a string deriving from CacheSharingMode enum
 // it can take values: SHARED, PRIVATE, LOCKED
 type CacheSharingMode string
 
-const (
-	CacheSharingModeShared  CacheSharingMode = "SHARED"
-	CacheSharingModePrivate CacheSharingMode = "PRIVATE"
-	CacheSharingModeLocked  CacheSharingMode = "LOCKED"
+var CacheSharingModes = dagql.NewEnum[CacheSharingMode]()
+
+var (
+	CacheSharingModeShared  = CacheSharingModes.Register("SHARED")
+	CacheSharingModePrivate = CacheSharingModes.Register("PRIVATE")
+	CacheSharingModeLocked  = CacheSharingModes.Register("LOCKED")
 )
+
+func (proto CacheSharingMode) Type() *ast.Type {
+	return &ast.Type{
+		NamedType: "CacheSharingMode",
+		NonNull:   true,
+	}
+}
+
+func (proto CacheSharingMode) Decoder() dagql.InputDecoder {
+	return CacheSharingModes
+}
+
+func (proto CacheSharingMode) ToLiteral() *idproto.Literal {
+	return CacheSharingModes.Literal(proto)
+}
 
 // CacheSharingMode marshals to its lowercased value.
 //
