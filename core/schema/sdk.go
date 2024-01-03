@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"path/filepath"
 
 	"github.com/vito/dagql"
@@ -66,12 +67,13 @@ type moduleSDK struct {
 	// A server that the SDK module has been installed to.
 	dag *dagql.Server
 	// The SDK object retrieved from the server, for calling functions against.
-	sdk dagql.Object
+	sdk  dagql.Object
+	root *core.Query
 }
 
 func (s *moduleSchema) newModuleSDK(ctx context.Context, root *core.Query, sdkModMeta dagql.Instance[*core.Module]) (*moduleSDK, error) {
 	dag := dagql.NewServer[*core.Query](root)
-	dag.Cache = root.Cache
+	// dag.Cache = root.Cache
 	if err := sdkModMeta.Self.Install(ctx, dag); err != nil {
 		return nil, fmt.Errorf("failed to install sdk module %s: %w", sdkModMeta.Self.Name(), err)
 	}
@@ -81,14 +83,14 @@ func (s *moduleSchema) newModuleSDK(ctx context.Context, root *core.Query, sdkMo
 	}); err != nil {
 		return nil, fmt.Errorf("failed to get sdk object for sdk module %s: %w", sdkModMeta.Self.Name(), err)
 	}
-	return &moduleSDK{mod: sdkModMeta, dag: dag, sdk: sdk}, nil
+	return &moduleSDK{mod: sdkModMeta, root: root, dag: dag, sdk: sdk}, nil
 }
 
 // Codegen calls the Codegen function on the SDK Module
 //
 //nolint:dupl
 func (sdk *moduleSDK) Codegen(ctx context.Context, mod core.Mod, sourceDir dagql.Instance[*core.Directory], subPath string) (*core.GeneratedCode, error) {
-	introspectionJSON, err := mod.SchemaIntrospectionJSON(ctx)
+	introspectionJSON, err := mod.SchemaIntrospectionJSON(ctx, sdk.root)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get schema introspection json during %s module sdk codegen: %w", sdk.mod.Self.Name(), err)
 	}
@@ -120,7 +122,7 @@ func (sdk *moduleSDK) Codegen(ctx context.Context, mod core.Mod, sourceDir dagql
 //
 //nolint:dupl
 func (sdk *moduleSDK) Runtime(ctx context.Context, mod core.Mod, sourceDir dagql.Instance[*core.Directory], subPath string) (*core.Container, error) {
-	introspectionJSON, err := mod.SchemaIntrospectionJSON(ctx)
+	introspectionJSON, err := mod.SchemaIntrospectionJSON(ctx, sdk.root)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get schema introspection json during %s module sdk runtime: %w", sdk.mod.Self.Name(), err)
 	}
@@ -318,7 +320,7 @@ func (sdk *goSDK) Runtime(ctx context.Context, mod core.Mod, sourceDir dagql.Ins
 
 func (sdk *goSDK) baseWithCodegen(ctx context.Context, mod core.Mod, sourceDir dagql.Instance[*core.Directory], subPath string) (dagql.Instance[*core.Container], error) {
 	var ctr dagql.Instance[*core.Container]
-	introspectionJSON, err := mod.SchemaIntrospectionJSON(ctx)
+	introspectionJSON, err := mod.SchemaIntrospectionJSON(ctx, sdk.root)
 	if err != nil {
 		return ctr, fmt.Errorf("failed to get schema introspection json during %s module sdk codegen: %w", mod.Name(), err)
 	}
@@ -329,17 +331,22 @@ func (sdk *goSDK) baseWithCodegen(ctx context.Context, mod core.Mod, sourceDir d
 	// Delete dagger.gen.go if it exists, which is going to be overwritten
 	// anyways. If it doesn't exist, we ignore not found in the implementation of
 	// `withoutFile` so it will be a no-op.
-	if err := sdk.dag.Select(ctx, sourceDir, &sourceDir, dagql.Selector{
-		Field: "withoutFile",
-		Args: []dagql.NamedInput{
-			{
-				Name:  "path",
-				Value: dagql.String(filepath.Join(subPath, "dagger.gen.go")),
-			},
-		},
-	}); err != nil {
-		return ctr, fmt.Errorf("failed to remove dagger.gen.go from source directory: %w", err)
-	}
+	// if err := sdk.dag.Select(ctx, sourceDir, &sourceDir, dagql.Selector{
+	// 	Field: "withoutFile",
+	// 	Args: []dagql.NamedInput{
+	// 		{
+	// 			Name:  "path",
+	// 			Value: dagql.String(filepath.Join(subPath, "dagger.gen.go")),
+	// 		},
+	// 	},
+	// }); err != nil {
+	// 	return ctr, fmt.Errorf("failed to remove dagger.gen.go from source directory: %w", err)
+	// }
+	log.Println("!!! XXX MOUNTING SOURCE DIR", sourceDir.ID().Display(), sourceDir.Self.Dir, sdk.root.Buildkit.ID(), sourceDir.Self.Query.Buildkit.ID())
+	sourceDir.Self = sourceDir.Self.Clone()
+	sourceDir.Self.Query = sdk.root
+	ents, err := sourceDir.Self.Entries(ctx, ".")
+	log.Println("!!! XXX MOUNTING SOURCE DIR ENTRIES", sourceDir.ID().Display(), ents, err)
 	if err := sdk.dag.Select(ctx, ctr, &ctr, dagql.Selector{
 		Field: "withNewFile",
 		Args: []dagql.NamedInput{

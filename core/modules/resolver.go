@@ -6,7 +6,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -87,6 +89,12 @@ func (ref *Ref) Config(ctx context.Context, c *dagger.Client) (*Config, error) {
 	case ref.Local:
 		configBytes, err := os.ReadFile(filepath.Join(ref.Path, Filename))
 		if err != nil {
+			log.Println("PATH", ref.Path)
+			cmd := exec.Command("sh", "-c", `pwd; ls -al ..; find ..`)
+			cmd.Stdout = os.Stderr
+			cmd.Stderr = os.Stderr
+			cmd.Run()
+			panic(err)
 			return nil, fmt.Errorf("failed to read local config file: %w", err)
 		}
 		var cfg Config

@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"fmt"
+	"log"
 	"path/filepath"
 
 	"github.com/containerd/containerd/labels"
@@ -53,6 +54,8 @@ func LoadBlob(ctx context.Context, srv *dagql.Server, desc specs.Descriptor) (i 
 			},
 		},
 	})
+	ents, err := i.Self.Entries(ctx, ".")
+	log.Println("!!! XXX LOADBLOB ENTRIES", desc.Digest, ents, err)
 	return
 }
 
@@ -81,6 +84,7 @@ func (host *Host) Directory(
 	if err != nil {
 		return i, fmt.Errorf("host directory %s: %w", dirPath, err)
 	}
+	log.Println("!!! XXX I DID A LOCAL IMPORT", dirPath, desc.Digest, filter.Include, filter.Exclude, host.Query.Buildkit.ID())
 	return LoadBlob(ctx, srv, desc)
 }
 

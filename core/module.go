@@ -129,8 +129,8 @@ func (mod *Module) Objects(ctx context.Context, modID *idproto.ID) (loadedObject
 	return objs, nil
 }
 
-func (mod *Module) SchemaIntrospectionJSON(ctx context.Context) (string, error) {
-	return mod.Deps.SchemaIntrospectionJSON(ctx)
+func (mod *Module) SchemaIntrospectionJSON(ctx context.Context, root *Query) (string, error) {
+	return mod.Deps.SchemaIntrospectionJSON(ctx, root)
 }
 
 func (mod *Module) ModTypeFor(ctx context.Context, typeDef *TypeDef, checkDirectDeps bool) (ModType, bool, error) {
@@ -345,7 +345,7 @@ type Mod interface {
 	Install(context.Context, *dagql.Server) error
 
 	// The introspection json for this module's schema
-	SchemaIntrospectionJSON(context.Context) (string, error)
+	SchemaIntrospectionJSON(context.Context, *Query) (string, error)
 
 	// ModTypeFor returns the ModType for the given typedef based on this module's schema.
 	// The returned type will have any namespacing already applied.

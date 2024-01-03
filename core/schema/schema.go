@@ -76,7 +76,7 @@ func New(ctx context.Context, params InitializeArgs) (*APIServer, error) {
 
 	// the main client caller starts out with the core API loaded
 	root.InstallDefaultClientContext(
-		core.NewModDeps(root, []core.Mod{coreMod}),
+		core.NewModDeps([]core.Mod{coreMod}),
 	)
 
 	return &APIServer{
@@ -103,7 +103,7 @@ func (s *APIServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	schema, err := callContext.Deps.Schema(ctx)
+	schema, err := callContext.Deps.Schema(ctx, s.root)
 	if err != nil {
 		// TODO: technically this is not *always* bad request, should ideally be more specific and differentiate
 		errorOut(err, http.StatusBadRequest)

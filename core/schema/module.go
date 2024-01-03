@@ -316,7 +316,7 @@ func (s *moduleSchema) moduleWithSource(ctx context.Context, self *core.Module, 
 	self.SourceDirectorySubpath = sourceDirSubpath
 	self.DependenciesField = deps
 
-	self.Deps = core.NewModDeps(self.Query, self.Dependencies()).
+	self.Deps = core.NewModDeps(self.Dependencies()).
 		Append(self.Query.DefaultDeps.Mods...)
 
 	sdk, err := s.sdkForModule(ctx, self.Query, cfg.SDK, sourceDir, sourceDirSubpath)

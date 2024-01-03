@@ -279,4 +279,4 @@ require (
 
 // replace github.com/vito/progrock => ./progrock
 
-// replace github.com/vito/dagql => ./dagql
+replace github.com/vito/dagql => ./dagql

@@ -29,7 +29,6 @@ ModDeps represents a set of dependencies for a module or for a caller depending 
 particular set of modules to be served.
 */
 type ModDeps struct {
-	root *Query
 	Mods []Mod // TODO hide
 
 	// should not be read directly, call Schema and SchemaIntrospectionJSON instead
@@ -39,27 +38,26 @@ type ModDeps struct {
 	loadSchemaLock                sync.Mutex
 }
 
-func NewModDeps(root *Query, mods []Mod) *ModDeps {
+func NewModDeps(mods []Mod) *ModDeps {
 	return &ModDeps{
-		root: root,
 		Mods: mods,
 	}
 }
 
 func (d *ModDeps) Prepend(mods ...Mod) *ModDeps {
 	deps := append(mods, d.Mods...)
-	return NewModDeps(d.root, deps)
+	return NewModDeps(deps)
 }
 
 func (d *ModDeps) Append(mods ...Mod) *ModDeps {
 	deps := append([]Mod{}, d.Mods...)
 	deps = append(deps, mods...)
-	return NewModDeps(d.root, deps)
+	return NewModDeps(deps)
 }
 
 // The combined schema exposed by each mod in this set of dependencies
-func (d *ModDeps) Schema(ctx context.Context) (*dagql.Server, error) {
-	schema, _, err := d.lazilyLoadSchema(ctx)
+func (d *ModDeps) Schema(ctx context.Context, root *Query) (*dagql.Server, error) {
+	schema, _, err := d.lazilyLoadSchema(ctx, root)
 	if err != nil {
 		return nil, err
 	}
@@ -67,8 +65,8 @@ func (d *ModDeps) Schema(ctx context.Context) (*dagql.Server, error) {
 }
 
 // The introspection json for combined schema exposed by each mod in this set of dependencies
-func (d *ModDeps) SchemaIntrospectionJSON(ctx context.Context) (string, error) {
-	_, introspectionJSON, err := d.lazilyLoadSchema(ctx)
+func (d *ModDeps) SchemaIntrospectionJSON(ctx context.Context, root *Query) (string, error) {
+	_, introspectionJSON, err := d.lazilyLoadSchema(ctx, root)
 	if err != nil {
 		return "", err
 	}
@@ -87,7 +85,7 @@ func schemaIntrospectionJSON(ctx context.Context, dag *dagql.Server) (json.RawMe
 	return json.RawMessage(jsonBytes), nil
 }
 
-func (d *ModDeps) lazilyLoadSchema(ctx context.Context) (loadedSchema *dagql.Server, loadedIntrospectionJSON string, rerr error) {
+func (d *ModDeps) lazilyLoadSchema(ctx context.Context, root *Query) (loadedSchema *dagql.Server, loadedIntrospectionJSON string, rerr error) {
 	d.loadSchemaLock.Lock()
 	defer d.loadSchemaLock.Unlock()
 	if d.lazilyLoadedSchema != nil {
@@ -102,8 +100,8 @@ func (d *ModDeps) lazilyLoadSchema(ctx context.Context) (loadedSchema *dagql.Ser
 		d.loadSchemaErr = rerr
 	}()
 
-	dag := dagql.NewServer[*Query](d.root)
-	dag.Cache = d.root.Cache
+	dag := dagql.NewServer[*Query](root)
+	// dag.Cache = root.Cache // TODO figure out proper cache sharing
 	dag.RecordTo(TelemetryFunc())
 
 	dagintro.Install[*Query](dag)
@@ -183,9 +181,9 @@ func TelemetryFunc() dagql.TelemetryFunc {
 
 		return ctx, func(rerr error) {
 			if rerr != nil {
-				log.Println("!!! ID ERRORED", truncate(id.Display(), 100), rerr)
+				log.Println("!!! ID ERRORED", truncate(id.Display(), 200), rerr)
 			} else {
-				log.Println("!!! ID OK", truncate(id.Display(), 100))
+				log.Println("!!! ID OK", truncate(id.Display(), 200))
 			}
 			vtx.Done(rerr)
 			rec.Complete()

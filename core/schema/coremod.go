@@ -50,7 +50,7 @@ func (m *CoreMod) Install(ctx context.Context, dag *dagql.Server) error {
 	return nil
 }
 
-func (m *CoreMod) SchemaIntrospectionJSON(_ context.Context) (string, error) {
+func (m *CoreMod) SchemaIntrospectionJSON(_ context.Context, _ *core.Query) (string, error) {
 	return string(m.introspectionJSON), nil
 }
 

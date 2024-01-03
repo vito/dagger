@@ -114,7 +114,9 @@ func (obj *ModuleObjectType) ConvertToSDKInput(ctx context.Context, value dagql.
 	// needing to make calls to their own API).
 	switch x := value.(type) {
 	case DynamicID:
-		dag, err := obj.mod.Deps.Prepend(obj.mod).Schema(ctx) // TODO: this seems expensive
+		// XXX(vito) this seems expensive
+		// XXX(vito) which root should this use?
+		dag, err := obj.mod.Deps.Prepend(obj.mod).Schema(ctx, obj.mod.Query)
 		if err != nil {
 			return nil, fmt.Errorf("schema: %w", err)
 		}

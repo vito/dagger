@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/dagger/dagger/core/pipeline"
@@ -254,7 +255,7 @@ func (fn *ModuleFunction) Call(ctx context.Context, caller *idproto.ID, opts *Ca
 		return nil, fmt.Errorf("failed to convert return value: %w", err)
 	}
 
-	if err := fn.linkDependencyBlobs(ctx, result, returnValue, fn.metadata.ReturnType); err != nil {
+	if err := fn.linkDependencyBlobs(ctx, result, returnValueTyped, fn.metadata.ReturnType); err != nil {
 		return nil, fmt.Errorf("failed to link dependency blobs: %w", err)
 	}
 
@@ -271,6 +272,8 @@ func (fn *ModuleFunction) Call(ctx context.Context, caller *idproto.ID, opts *Ca
 // source without pruning the function call cache entry. That would result callers being able to evaluate the
 // result of a function call but hitting an error about missing content.
 func (fn *ModuleFunction) linkDependencyBlobs(ctx context.Context, cacheResult *buildkit.Result, value any, typeDef *TypeDef) error {
+	log.Println("!!! LINKING DEPENDENCY BLOBS", fmt.Sprintf("%T", value), typeDef.Kind)
+
 	switch typeDef.Kind {
 	case TypeDefKindString, TypeDefKindInteger,
 		TypeDefKindBoolean, TypeDefKindVoid:
@@ -302,7 +305,13 @@ func (fn *ModuleFunction) linkDependencyBlobs(ctx context.Context, cacheResult *
 			return nil
 		}
 
+		if inst, ok := value.(interface{ Inner() dagql.Typed }); ok {
+			value = inst.Inner()
+		}
+
 		if pbDefinitioner, ok := value.(HasPBDefinitions); ok {
+			log.Println("!!! LINKING STUFF", fmt.Sprintf("%T", pbDefinitioner))
+
 			pbDefs, err := pbDefinitioner.PBDefinitions()
 			if err != nil {
 				return fmt.Errorf("failed to get pb definitions: %w", err)

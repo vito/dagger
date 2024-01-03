@@ -49,7 +49,7 @@ func (s *hostSchema) Install() {
 			if err != nil {
 				return nil, fmt.Errorf("failed to marshal blob source: %s", err)
 			}
-			return core.NewDirectory(parent, blobDef.ToPB(), "", parent.Platform, nil), nil
+			return core.NewDirectory(parent, blobDef.ToPB(), "", parent.PipelinePath(), parent.Platform, nil), nil
 		}),
 	}.Install(s.srv)
 

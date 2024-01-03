@@ -1,0 +1,6 @@
+#!/usr/bin/env sh
+
+./hack/dev gotestsum -f testname ./core/integration/ \
+  "$@" \
+  -skip 'TestDaggerRun|Shell|WaitsForEngine|RemoteCache|ContainerPublish|ExecFromScratch|MultiPlatformPublish|ExecAndPush|ContainerMediaTypes|ContainerForceCompression|PlatformCrossCompile|TestContainerWithRegistryAuth' 2>&1 | \
+  tee /tmp/most.log.$(date +%s)
