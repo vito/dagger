@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"go/format"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -3587,7 +3588,7 @@ class Test:
 				t.Parallel()
 
 				var logs safeBuffer
-				c, ctx := connect(t, dagger.WithLogOutput(&logs))
+				c, ctx := connect(t, dagger.WithLogOutput(io.MultiWriter(&logs, newTWriter(t))))
 
 				ctr := c.Container().From(golangImage).
 					WithMountedFile(testCLIBinPath, daggerCliFile(t, c)).
@@ -3598,6 +3599,7 @@ class Test:
 				_, err := ctr.With(daggerCall("foo")).Stdout(ctx)
 				require.Error(t, err)
 
+				time.Sleep(60 * time.Second)
 				require.NoError(t, c.Close())
 
 				t.Log(logs.String())

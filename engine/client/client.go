@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -839,7 +840,28 @@ type progrockAttachable struct {
 }
 
 func (a progrockAttachable) Register(srv *grpc.Server) {
-	progrock.RegisterProgressServiceServer(srv, a.recv)
+	progrock.RegisterProgressServiceServer(srv, &debugProgrockServer{a.recv})
+}
+
+type debugProgrockServer struct {
+	*progrock.RPCReceiver
+}
+
+func (d *debugProgrockServer) WriteUpdates(s progrock.ProgressService_WriteUpdatesServer) error {
+	return d.RPCReceiver.WriteUpdates(&debugUpdatesServer{s})
+}
+
+type debugUpdatesServer struct {
+	progrock.ProgressService_WriteUpdatesServer
+}
+
+func (d *debugUpdatesServer) Recv() (*progrock.StatusUpdate, error) {
+	up, err := d.ProgressService_WriteUpdatesServer.Recv()
+	if err != nil {
+		return nil, err
+	}
+	log.Print("CHECK THIS UPDATE: ", up)
+	return up, nil
 }
 
 const (
