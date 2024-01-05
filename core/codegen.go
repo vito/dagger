@@ -1,14 +1,13 @@
 package core
 
 import (
-	"github.com/dagger/dagger/core/resourceid"
-	"github.com/opencontainers/go-digest"
+	"github.com/vektah/gqlparser/v2/ast"
 )
 
 type GeneratedCode struct {
-	Code              *Directory `json:"code"`
-	VCSIgnoredPaths   []string   `json:"vcsIgnoredPaths,omitempty"`
-	VCSGeneratedPaths []string   `json:"vcsGeneratedPaths,omitempty"`
+	Code              *Directory `field:"true"`
+	VCSIgnoredPaths   []string   `field:"true" name:"vcsIgnoredPaths"`
+	VCSGeneratedPaths []string   `field:"true" name:"vcsGeneratedPaths"`
 }
 
 func NewGeneratedCode(code *Directory) *GeneratedCode {
@@ -17,12 +16,11 @@ func NewGeneratedCode(code *Directory) *GeneratedCode {
 	}
 }
 
-func (code *GeneratedCode) ID() (GeneratedCodeID, error) {
-	return resourceid.Encode(code)
-}
-
-func (code *GeneratedCode) Digest() (digest.Digest, error) {
-	return stableDigest(code)
+func (*GeneratedCode) Type() *ast.Type {
+	return &ast.Type{
+		NamedType: "GeneratedCode",
+		NonNull:   true,
+	}
 }
 
 func (code GeneratedCode) Clone() *GeneratedCode {

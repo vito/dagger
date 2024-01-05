@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"dagger.io/dagger"
+	"github.com/vektah/gqlparser/v2/ast"
 )
 
 // Filename is the name of the module config file.
@@ -16,23 +17,23 @@ const Filename = "dagger.json"
 // Config is the module config loaded from dagger.json.
 type Config struct {
 	// The name of the module.
-	Name string `json:"name"`
+	Name string `json:"name" field:"true"`
 
 	// The root directory of the module's project, which may be above the module
 	// source code.
-	Root string `json:"root,omitempty"`
+	Root string `json:"root,omitempty" field:"true"`
 
 	// Either the name of a built-in SDK ('go', 'python', etc.) OR a module reference pointing to the SDK's module implementation.
-	SDK string `json:"sdk,omitempty"`
+	SDK string `json:"sdk" field:"true"`
 
 	// Include only these file globs when loading the module root.
-	Include []string `json:"include,omitempty"`
+	Include []string `json:"include,omitempty" field:"true"`
 
 	// Exclude these file globs when loading the module root.
-	Exclude []string `json:"exclude,omitempty"`
+	Exclude []string `json:"exclude,omitempty" field:"true"`
 
 	// Modules that this module depends on.
-	Dependencies []string `json:"dependencies,omitempty"`
+	Dependencies []string `json:"dependencies,omitempty" field:"true"`
 }
 
 func NewConfig(name, sdkNameOrRef, rootPath string) *Config {
@@ -42,6 +43,13 @@ func NewConfig(name, sdkNameOrRef, rootPath string) *Config {
 		SDK:  sdkNameOrRef,
 	}
 	return cfg
+}
+
+func (cfg *Config) Type() *ast.Type {
+	return &ast.Type{
+		NamedType: "ModuleConfig",
+		NonNull:   true,
+	}
 }
 
 func (cfg *Config) RootAndSubpath(modSourceDir string) (string, string, error) {

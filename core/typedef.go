@@ -1,29 +1,42 @@
 package core
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
 	"fmt"
+	"log"
+	"path/filepath"
 	"strings"
 
-	"github.com/dagger/dagger/core/resourceid"
 	"github.com/iancoleman/strcase"
-	"github.com/opencontainers/go-digest"
+	"github.com/vektah/gqlparser/v2/ast"
+	"github.com/vito/dagql"
+	"github.com/vito/dagql/idproto"
 )
 
 type Function struct {
 	// Name is the standardized name of the function (lowerCamelCase), as used for the resolver in the graphql schema
-	Name        string         `json:"name"`
-	Description string         `json:"description"`
-	Args        []*FunctionArg `json:"args"`
-	ReturnType  *TypeDef       `json:"returnType"`
+	Name        string         `field:"true"`
+	Description string         `field:"true"`
+	Args        []*FunctionArg `field:"true"`
+	ReturnType  *TypeDef       `field:"true"`
 
 	// Below are not in public API
 
 	// OriginalName of the parent object
-	ParentOriginalName string `json:"parentOriginalName,omitempty"`
+	ParentOriginalName string
 
 	// The original name of the function as provided by the SDK that defined it, used
 	// when invoking the SDK so it doesn't need to think as hard about case conversions
-	OriginalName string `json:"originalName,omitempty"`
+	OriginalName string
+}
+
+func (*Function) Type() *ast.Type {
+	return &ast.Type{
+		NamedType: "Function",
+		NonNull:   true,
+	}
 }
 
 func NewFunction(name string, returnType *TypeDef) *Function {
@@ -32,14 +45,6 @@ func NewFunction(name string, returnType *TypeDef) *Function {
 		ReturnType:   returnType,
 		OriginalName: name,
 	}
-}
-
-func (fn *Function) ID() (FunctionID, error) {
-	return resourceid.Encode(fn)
-}
-
-func (fn *Function) Digest() (digest.Digest, error) {
-	return stableDigest(fn)
 }
 
 func (fn Function) Clone() *Function {
@@ -60,7 +65,7 @@ func (fn *Function) WithDescription(desc string) *Function {
 	return fn
 }
 
-func (fn *Function) WithArg(name string, typeDef *TypeDef, desc string, defaultValue any) *Function {
+func (fn *Function) WithArg(name string, typeDef *TypeDef, desc string, defaultValue JSON) *Function {
 	fn = fn.Clone()
 	fn.Args = append(fn.Args, &FunctionArg{
 		Name:         strcase.ToLowerCamel(name),
@@ -116,17 +121,108 @@ func (fn *Function) IsSubtypeOf(otherFn *Function) bool {
 	return true
 }
 
+func (fn *Function) LookupArg(name string) (*FunctionArg, bool) {
+	for _, arg := range fn.Args {
+		if arg.Name == name {
+			return arg, true
+		}
+	}
+	return nil, false
+}
+
 type FunctionArg struct {
 	// Name is the standardized name of the argument (lowerCamelCase), as used for the resolver in the graphql schema
-	Name         string   `json:"name"`
-	Description  string   `json:"description"`
-	TypeDef      *TypeDef `json:"typeDef"`
-	DefaultValue any      `json:"defaultValue"`
+	Name         string   `field:"true"`
+	Description  string   `field:"true"`
+	TypeDef      *TypeDef `field:"true"`
+	DefaultValue JSON     `field:"true"`
 
 	// Below are not in public API
 
 	// The original name of the argument as provided by the SDK that defined it.
-	OriginalName string `json:"originalName,omitempty"`
+	OriginalName string
+}
+
+// Type returns the GraphQL FunctionArg! type.
+func (*FunctionArg) Type() *ast.Type {
+	return &ast.Type{
+		NamedType: "FunctionArg",
+		NonNull:   true,
+	}
+}
+
+type DynamicID struct {
+	Object *ObjectTypeDef
+	ID     *idproto.ID
+}
+
+var _ dagql.ScalarType = DynamicID{}
+
+func (d DynamicID) TypeName() string {
+	return fmt.Sprintf("%sID", d.Object.Name)
+}
+
+var _ dagql.InputDecoder = DynamicID{}
+
+func (d DynamicID) DecodeInput(val any) (dagql.Input, error) {
+	switch x := val.(type) {
+	case string:
+		var idp idproto.ID
+		if err := idp.Decode(x); err != nil {
+			return nil, fmt.Errorf("decode %q ID: %w", d.Object.Name, err)
+		}
+		d.ID = &idp
+		return d, nil
+	default:
+		return nil, fmt.Errorf("expected string, got %T", val)
+	}
+}
+
+var _ dagql.Input = DynamicID{}
+
+func (d DynamicID) ToLiteral() *idproto.Literal {
+	return &idproto.Literal{
+		Value: &idproto.Literal_Id{
+			Id: d.ID,
+		},
+	}
+}
+
+func (d DynamicID) Type() *ast.Type {
+	return &ast.Type{
+		NamedType: d.TypeName(),
+		NonNull:   true,
+	}
+}
+
+func (d DynamicID) Decoder() dagql.InputDecoder {
+	return DynamicID{
+		Object: d.Object,
+	}
+}
+
+func (i DynamicID) MarshalJSON() ([]byte, error) {
+	if i.ID == nil {
+		panic("MARSHAL NULL DYNAMICID")
+	}
+	log.Println("!!! MARSHALING DYNAMICID", i.ID.Display())
+	enc, err := i.ID.Encode()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(enc)
+}
+
+type DynamicObject struct {
+	Object ObjectTypeDef
+	Fields map[string]any
+}
+
+func (obj *DynamicObject) Type() *ast.Type {
+	return &ast.Type{
+		NamedType: obj.Object.Name,
+		NonNull:   true,
+	}
 }
 
 func (arg FunctionArg) Clone() *FunctionArg {
@@ -138,30 +234,77 @@ func (arg FunctionArg) Clone() *FunctionArg {
 	return &cp
 }
 
-func (arg *FunctionArg) ID() (FunctionArgID, error) {
-	return resourceid.Encode(arg)
-}
-
 type TypeDef struct {
-	Kind        TypeDefKind       `json:"kind"`
-	Optional    bool              `json:"optional"`
-	AsList      *ListTypeDef      `json:"asList"`
-	AsObject    *ObjectTypeDef    `json:"asObject"`
-	AsInterface *InterfaceTypeDef `json:"asInterface"`
+	Kind        TypeDefKind                       `field:"true"`
+	Optional    bool                              `field:"true"`
+	AsList      dagql.Nullable[*ListTypeDef]      `field:"true"`
+	AsObject    dagql.Nullable[*ObjectTypeDef]    `field:"true"`
+	AsInterface dagql.Nullable[*InterfaceTypeDef] `field:"true"`
 }
 
-func (typeDef *TypeDef) ID() (TypeDefID, error) {
-	return resourceid.Encode(typeDef)
+func (*TypeDef) Type() *ast.Type {
+	return &ast.Type{
+		NamedType: "TypeDef",
+		NonNull:   true,
+	}
 }
 
-func (typeDef *TypeDef) Digest() (digest.Digest, error) {
-	return stableDigest(typeDef)
+func (t TypeDef) ToTyped() dagql.Typed {
+	var typed dagql.Typed
+	switch t.Kind {
+	case TypeDefKindString:
+		typed = dagql.String("")
+	case TypeDefKindInteger:
+		typed = dagql.Int(0)
+	case TypeDefKindBoolean:
+		typed = dagql.Boolean(false)
+	case TypeDefKindList:
+		typed = dagql.DynamicArrayOutput{Elem: t.AsList.Value.ElementTypeDef.ToTyped()}
+	case TypeDefKindObject:
+		typed = &DynamicObject{Object: *t.AsObject.Value}
+	case TypeDefKindVoid:
+		typed = Void{}
+	default:
+		panic(fmt.Sprintf("unknown type kind: %s", t.Kind))
+	}
+	if t.Optional {
+		typed = dagql.DynamicNullable{Elem: typed}
+	}
+	return typed
+}
+
+func (t TypeDef) ToInput() dagql.Input {
+	var typed dagql.Input
+	switch t.Kind {
+	case TypeDefKindString:
+		typed = dagql.String("")
+	case TypeDefKindInteger:
+		typed = dagql.Int(0)
+	case TypeDefKindBoolean:
+		typed = dagql.Boolean(false)
+	case TypeDefKindList:
+		typed = dagql.DynamicArrayInput{Elem: t.AsList.Value.ElementTypeDef.ToInput()}
+	case TypeDefKindObject:
+		typed = DynamicID{Object: *t.AsObject.Value}
+	case TypeDefKindVoid:
+		typed = Void{}
+	default:
+		panic(fmt.Sprintf("unknown type kind: %s", t.Kind))
+	}
+	if t.Optional {
+		typed = dagql.DynamicOptional{Elem: typed}
+	}
+	return typed
+}
+
+func (t TypeDef) ToType() *ast.Type {
+	return t.ToTyped().Type()
 }
 
 func (typeDef *TypeDef) Underlying() *TypeDef {
 	switch typeDef.Kind {
 	case TypeDefKindList:
-		return typeDef.AsList.ElementTypeDef.Underlying()
+		return typeDef.AsList.Value.ElementTypeDef.Underlying()
 	default:
 		return typeDef
 	}
@@ -169,14 +312,14 @@ func (typeDef *TypeDef) Underlying() *TypeDef {
 
 func (typeDef TypeDef) Clone() *TypeDef {
 	cp := typeDef
-	if typeDef.AsList != nil {
-		cp.AsList = typeDef.AsList.Clone()
+	if typeDef.AsList.Valid {
+		cp.AsList.Value = typeDef.AsList.Value.Clone()
 	}
-	if typeDef.AsObject != nil {
-		cp.AsObject = typeDef.AsObject.Clone()
+	if typeDef.AsObject.Valid {
+		cp.AsObject.Value = typeDef.AsObject.Value.Clone()
 	}
 	if typeDef.AsInterface != nil {
-		cp.AsInterface = typeDef.AsInterface.Clone()
+		cp.AsInterface.Value = typeDef.AsInterface.Value.Clone()
 	}
 	return &cp
 }
@@ -189,15 +332,15 @@ func (typeDef *TypeDef) WithKind(kind TypeDefKind) *TypeDef {
 
 func (typeDef *TypeDef) WithListOf(elem *TypeDef) *TypeDef {
 	typeDef = typeDef.WithKind(TypeDefKindList)
-	typeDef.AsList = &ListTypeDef{
+	typeDef.AsList = dagql.NonNull(&ListTypeDef{
 		ElementTypeDef: elem,
-	}
+	})
 	return typeDef
 }
 
 func (typeDef *TypeDef) WithObject(name, desc string) *TypeDef {
 	typeDef = typeDef.WithKind(TypeDefKindObject)
-	typeDef.AsObject = NewObjectTypeDef(name, desc)
+	typeDef.AsObject = dagql.NonNull(NewObjectTypeDef(name, desc))
 	return typeDef
 }
 
@@ -214,11 +357,11 @@ func (typeDef *TypeDef) WithOptional(optional bool) *TypeDef {
 }
 
 func (typeDef *TypeDef) WithObjectField(name string, fieldType *TypeDef, desc string) (*TypeDef, error) {
-	if typeDef.AsObject == nil {
+	if !typeDef.AsObject.Valid {
 		return nil, fmt.Errorf("cannot add function to non-object type: %s", typeDef.Kind)
 	}
 	typeDef = typeDef.Clone()
-	typeDef.AsObject.Fields = append(typeDef.AsObject.Fields, &FieldTypeDef{
+	typeDef.AsObject.Value.Fields = append(typeDef.AsObject.Value.Fields, &FieldTypeDef{
 		Name:         strcase.ToLowerCamel(name),
 		OriginalName: name,
 		Description:  desc,
@@ -233,11 +376,11 @@ func (typeDef *TypeDef) WithFunction(fn *Function) (*TypeDef, error) {
 	switch typeDef.Kind {
 	case TypeDefKindObject:
 		fn.ParentOriginalName = typeDef.AsObject.OriginalName
-		typeDef.AsObject.Functions = append(typeDef.AsObject.Functions, fn)
+		typeDef.AsObject.Value.Functions = append(typeDef.AsObject.Value.Functions, fn)
 		return typeDef, nil
 	case TypeDefKindInterface:
 		fn.ParentOriginalName = typeDef.AsInterface.OriginalName
-		typeDef.AsInterface.Functions = append(typeDef.AsInterface.Functions, fn)
+		typeDef.AsInterface.Value.Functions = append(typeDef.AsInterface.Value.Functions, fn)
 		return typeDef, nil
 	default:
 		return nil, fmt.Errorf("cannot add function to type: %s", typeDef.Kind)
@@ -245,14 +388,14 @@ func (typeDef *TypeDef) WithFunction(fn *Function) (*TypeDef, error) {
 }
 
 func (typeDef *TypeDef) WithObjectConstructor(fn *Function) (*TypeDef, error) {
-	if typeDef.AsObject == nil {
+	if !typeDef.AsObject.Valid {
 		return nil, fmt.Errorf("cannot add constructor function to non-object type: %s", typeDef.Kind)
 	}
 
 	typeDef = typeDef.Clone()
 	fn = fn.Clone()
-	fn.ParentOriginalName = typeDef.AsObject.OriginalName
-	typeDef.AsObject.Constructor = fn
+	fn.ParentOriginalName = typeDef.AsObject.Value.OriginalName
+	typeDef.AsObject.Value.Constructor = dagql.NonNull(fn)
 	return typeDef, nil
 }
 
@@ -296,22 +439,33 @@ func (typeDef *TypeDef) IsSubtypeOf(otherDef *TypeDef) bool {
 
 type ObjectTypeDef struct {
 	// Name is the standardized name of the object (CamelCase), as used for the object in the graphql schema
-	Name        string          `json:"name"`
-	Description string          `json:"description"`
-	Fields      []*FieldTypeDef `json:"fields"`
-	Functions   []*Function     `json:"functions"`
-	Constructor *Function       `json:"constructor"`
+	Name        string                    `field:"true"`
+	Description string                    `field:"true"`
+	Fields      []*FieldTypeDef           `field:"true"`
+	Functions   []*Function               `field:"true"`
+	Constructor dagql.Nullable[*Function] `field:"true"`
+
 	// SourceModuleName is currently only set when returning the TypeDef from the Objects field on Module
-	SourceModuleName string `json:"sourceModuleName"`
+	SourceModuleName string `field:"true"`
 
 	// Below are not in public API
 
 	// The original name of the object as provided by the SDK that defined it, used
 	// when invoking the SDK so it doesn't need to think as hard about case conversions
-	OriginalName string `json:"originalName,omitempty"`
+	OriginalName string
+}
+
+func (*ObjectTypeDef) Type() *ast.Type {
+	return &ast.Type{
+		NamedType: "ObjectTypeDef",
+		NonNull:   true,
+	}
 }
 
 func NewObjectTypeDef(name, description string) *ObjectTypeDef {
+	if name == "" {
+		panic("WHY WOULD I HAVE NO NAME")
+	}
 	return &ObjectTypeDef{
 		Name:         strcase.ToCamel(name),
 		OriginalName: name,
@@ -332,8 +486,8 @@ func (obj ObjectTypeDef) Clone() *ObjectTypeDef {
 		cp.Functions[i] = fn.Clone()
 	}
 
-	if cp.Constructor != nil {
-		cp.Constructor = obj.Constructor.Clone()
+	if cp.Constructor.Valid {
+		cp.Constructor.Value = obj.Constructor.Value.Clone()
 	}
 
 	return &cp
@@ -394,15 +548,22 @@ func (obj *ObjectTypeDef) IsSubtypeOf(iface *InterfaceTypeDef) bool {
 }
 
 type FieldTypeDef struct {
-	Name        string   `json:"name"`
-	Description string   `json:"description"`
-	TypeDef     *TypeDef `json:"typeDef"`
+	Name        string   `field:"true"`
+	Description string   `field:"true"`
+	TypeDef     *TypeDef `field:"true"`
 
 	// Below are not in public API
 
 	// The original name of the object as provided by the SDK that defined it, used
 	// when invoking the SDK so it doesn't need to think as hard about case conversions
-	OriginalName string `json:"originalName,omitempty"`
+	OriginalName string
+}
+
+func (*FieldTypeDef) Type() *ast.Type {
+	return &ast.Type{
+		NamedType: "FieldTypeDef",
+		NonNull:   true,
+	}
 }
 
 func (typeDef FieldTypeDef) Clone() *FieldTypeDef {
@@ -433,6 +594,13 @@ func NewInterfaceTypeDef(name, description string) *InterfaceTypeDef {
 		Name:         strcase.ToCamel(name),
 		OriginalName: name,
 		Description:  description,
+	}
+}
+
+func (*InterfaceTypeDef) Type() *ast.Type {
+	return &ast.Type{
+		NamedType: "InterfaceTypeDef",
+		NonNull:   true,
 	}
 }
 
@@ -472,7 +640,14 @@ func (iface *InterfaceTypeDef) IsSubtypeOf(otherIface *InterfaceTypeDef) bool {
 }
 
 type ListTypeDef struct {
-	ElementTypeDef *TypeDef `json:"elementTypeDef"`
+	ElementTypeDef *TypeDef `field:"true"`
+}
+
+func (*ListTypeDef) Type() *ast.Type {
+	return &ast.Type{
+		NamedType: "ListTypeDef",
+		NonNull:   true,
+	}
 }
 
 func (typeDef ListTypeDef) Clone() *ListTypeDef {
@@ -489,32 +664,70 @@ func (k TypeDefKind) String() string {
 	return string(k)
 }
 
-const (
-	TypeDefKindString    TypeDefKind = "StringKind"
-	TypeDefKindInteger   TypeDefKind = "IntegerKind"
-	TypeDefKindBoolean   TypeDefKind = "BooleanKind"
-	TypeDefKindList      TypeDefKind = "ListKind"
-	TypeDefKindObject    TypeDefKind = "ObjectKind"
-	TypeDefKindInterface TypeDefKind = "InterfaceKind"
-	TypeDefKindVoid      TypeDefKind = "VoidKind"
+var TypeDefKinds = dagql.NewEnum[TypeDefKind]()
+
+var (
+	TypeDefKindString    = TypeDefKinds.Register("StringKind")
+	TypeDefKindInteger   = TypeDefKinds.Register("IntegerKind")
+	TypeDefKindBoolean   = TypeDefKinds.Register("BooleanKind")
+	TypeDefKindList      = TypeDefKinds.Register("ListKind")
+	TypeDefKindObject    = TypeDefKinds.Register("ObjectKind")
+	TypeDefKindInterface = TypeDefKinds.Register("ObjectKind")
+	TypeDefKindVoid      = TypeDefKinds.Register("VoidKind")
 )
 
+func (proto TypeDefKind) Type() *ast.Type {
+	return &ast.Type{
+		NamedType: "TypeDefKind",
+		NonNull:   true,
+	}
+}
+
+func (proto TypeDefKind) Decoder() dagql.InputDecoder {
+	return TypeDefKinds
+}
+
+func (proto TypeDefKind) ToLiteral() *idproto.Literal {
+	return TypeDefKinds.Literal(proto)
+}
+
 type FunctionCall struct {
-	Name       string       `json:"name"`
-	ParentName string       `json:"parentName"`
-	Parent     any          `json:"parent"`
-	InputArgs  []*CallInput `json:"inputArgs"`
+	Query *Query
+
+	Name       string `field:"true"`
+	ParentName string `field:"true"`
+	Parent     JSON
+	InputArgs  []*FunctionCallArgValue `field:"true"`
 }
 
-func (fnCall *FunctionCall) Digest() (digest.Digest, error) {
-	return stableDigest(fnCall)
+func (*FunctionCall) Type() *ast.Type {
+	return &ast.Type{
+		NamedType: "FunctionCall",
+		NonNull:   true,
+	}
 }
 
-type CallInput struct {
-	Name  string `json:"name"`
-	Value any    `json:"value"`
+func (fnCall *FunctionCall) ReturnValue(ctx context.Context, val JSON) error {
+	// The return is implemented by exporting the result back to the caller's
+	// filesystem. This ensures that the result is cached as part of the module
+	// function's Exec while also keeping SDKs as agnostic as possible to the
+	// format + location of that result.
+	return fnCall.Query.Buildkit.IOReaderExport(
+		ctx,
+		bytes.NewReader(val),
+		filepath.Join(modMetaDirPath, modMetaOutputPath),
+		0600,
+	)
 }
 
-func (callInput *CallInput) Digest() (digest.Digest, error) {
-	return stableDigest(callInput)
+type FunctionCallArgValue struct {
+	Name  string `field:"true"`
+	Value JSON   `field:"true"`
+}
+
+func (*FunctionCallArgValue) Type() *ast.Type {
+	return &ast.Type{
+		NamedType: "FunctionCallArgValue",
+		NonNull:   true,
+	}
 }

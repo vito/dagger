@@ -1,19 +1,20 @@
 package schema
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
 
 	"github.com/dagger/dagger/core"
 	"github.com/dagger/dagger/core/modules"
+	"github.com/vito/dagql"
+	"golang.org/x/sync/errgroup"
 )
 
 type moduleSchema struct {
-	*APIServer
+	dag *dagql.Server
 }
 
 var _ SchemaResolvers = &moduleSchema{}
@@ -26,74 +27,69 @@ func (s *moduleSchema) Schema() string {
 	return strings.Join([]string{Module, TypeDef, InternalSDK}, "\n")
 }
 
-func (s *moduleSchema) Resolvers() Resolvers {
-	rs := Resolvers{
-		"Query": ObjectResolver{
-			"module":              ToResolver(s.module),
-			"currentModule":       ToResolver(s.currentModule),
-			"function":            ToResolver(s.function),
-			"currentFunctionCall": ToResolver(s.currentFunctionCall),
-			"typeDef":             ToResolver(s.typeDef),
-			"generatedCode":       ToResolver(s.generatedCode),
-			"moduleConfig":        ToResolver(s.moduleConfig),
-			"currentTypeDefs":     ToResolver(s.currentTypeDefs),
-		},
-		"Directory": ObjectResolver{
-			"asModule": ToResolver(s.directoryAsModule),
-		},
-		"FunctionCall": ObjectResolver{
-			"returnValue": ToVoidResolver(s.functionCallReturnValue),
-			"parent":      ToResolver(s.functionCallParent),
-		},
-	}
+func (s *moduleSchema) Install() {
+	dagql.Fields[*core.Query]{
+		dagql.Func("module", s.module),
+		dagql.Func("currentModule", s.currentModule).Impure(),
+		dagql.Func("function", s.function),
+		dagql.Func("currentFunctionCall", s.currentFunctionCall).Impure(),
+		dagql.Func("typeDef", s.typeDef),
+		dagql.Func("generatedCode", s.generatedCode),
+		dagql.Func("moduleConfig", s.moduleConfig),
+		dagql.Func("currentTypeDefs", s.currentTypeDefs).Impure(),
+	}.Install(s.dag)
 
-	ResolveIDable[core.Module](rs, "Module", ObjectResolver{
-		"dependencies":  ToResolver(s.moduleDependencies),
-		"objects":       ToResolver(s.moduleObjects),
-		"interfaces":    ToResolver(s.moduleInterfaces),
-		"withObject":    ToResolver(s.moduleWithObject),
-		"withInterface": ToResolver(s.moduleWithInterface),
-		"generatedCode": ToResolver(s.moduleGeneratedCode),
-		"serve":         ToVoidResolver(s.moduleServe),
-	})
+	dagql.Fields[*core.Directory]{
+		dagql.NodeFunc("asModule", s.directoryAsModule),
+	}.Install(s.dag)
 
-	ResolveIDable[core.Function](rs, "Function", ObjectResolver{
-		"withDescription": ToResolver(s.functionWithDescription),
-		"withArg":         ToResolver(s.functionWithArg),
-	})
+	dagql.Fields[*core.FunctionCall]{
+		dagql.Func("returnValue", s.functionCallReturnValue).Impure(),
+		dagql.Func("parent", s.functionCallParent),
+	}.Install(s.dag)
 
-	ResolveIDable[core.FunctionArg](rs, "FunctionArg", ObjectResolver{})
+	dagql.Fields[*core.Module]{
+		dagql.NodeFunc("initialize", s.moduleInitialize),
+		dagql.Func("withSource", s.moduleWithSource),
+		dagql.Func("withObject", s.moduleWithObject),
+		dagql.Func("withInterface", s.moduleWithInterface),
+		dagql.NodeFunc("serve", s.moduleServe).Impure(),
+	}.Install(s.dag)
 
-	ResolveIDable[core.TypeDef](rs, "TypeDef", ObjectResolver{
-		"kind":            ToResolver(s.typeDefKind),
-		"withOptional":    ToResolver(s.typeDefWithOptional),
-		"withKind":        ToResolver(s.typeDefWithKind),
-		"withListOf":      ToResolver(s.typeDefWithListOf),
-		"withObject":      ToResolver(s.typeDefWithObject),
-		"withInterface":   ToResolver(s.typeDefWithInterface),
-		"withField":       ToResolver(s.typeDefWithObjectField),
-		"withFunction":    ToResolver(s.typeDefWithFunction),
-		"withConstructor": ToResolver(s.typeDefWithObjectConstructor),
-	})
+	dagql.Fields[*modules.Config]{}.Install(s.dag)
 
-	ResolveIDable[core.GeneratedCode](rs, "GeneratedCode", ObjectResolver{
-		"withVCSIgnoredPaths":   ToResolver(s.generatedCodeWithVCSIgnoredPaths),
-		"withVCSGeneratedPaths": ToResolver(s.generatedCodeWithVCSGeneratedPaths),
-	})
+	dagql.Fields[*core.Function]{
+		dagql.Func("withDescription", s.functionWithDescription),
+		dagql.Func("withArg", s.functionWithArg),
+	}.Install(s.dag)
 
-	return rs
+	dagql.Fields[*core.FunctionArg]{}.Install(s.dag)
+
+	dagql.Fields[*core.FunctionCallArgValue]{}.Install(s.dag)
+
+	dagql.Fields[*core.TypeDef]{
+		dagql.Func("kind", s.typeDefKind),
+		dagql.Func("withOptional", s.typeDefWithOptional),
+		dagql.Func("withKind", s.typeDefWithKind),
+		dagql.Func("withListOf", s.typeDefWithListOf),
+		dagql.Func("withObject", s.typeDefWithObject),
+		dagql.Func("withInterface", s.typeDefWithInterface),
+		dagql.Func("withField", s.typeDefWithObjectField),
+		dagql.Func("withFunction", s.typeDefWithObjectFunction),
+		dagql.Func("withConstructor", s.typeDefWithObjectConstructor),
+	}.Install(s.dag)
+	dagql.Fields[*core.ObjectTypeDef]{}.Install(s.dag)
+	dagql.Fields[*core.FieldTypeDef]{}.Install(s.dag)
+	dagql.Fields[*core.ListTypeDef]{}.Install(s.dag)
+
+	dagql.Fields[*core.GeneratedCode]{
+		dagql.Func("withVCSIgnoredPaths", s.generatedCodeWithVCSIgnoredPaths),
+		dagql.Func("withVCSGeneratedPaths", s.generatedCodeWithVCSGeneratedPaths),
+	}.Install(s.dag)
 }
 
-func (s *moduleSchema) typeDef(ctx context.Context, _ *core.Query, args struct {
-	ID   core.TypeDefID
-	Kind core.TypeDefKind
-}) (*core.TypeDef, error) {
-	if args.ID != "" {
-		return args.ID.Decode()
-	}
-	return &core.TypeDef{
-		Kind: args.Kind,
-	}, nil
+func (s *moduleSchema) typeDef(ctx context.Context, _ *core.Query, args struct{}) (*core.TypeDef, error) {
+	return &core.TypeDef{}, nil
 }
 
 func (s *moduleSchema) typeDefWithOptional(ctx context.Context, def *core.TypeDef, args struct {
@@ -111,17 +107,20 @@ func (s *moduleSchema) typeDefWithKind(ctx context.Context, def *core.TypeDef, a
 func (s *moduleSchema) typeDefWithListOf(ctx context.Context, def *core.TypeDef, args struct {
 	ElementType core.TypeDefID
 }) (*core.TypeDef, error) {
-	elemType, err := args.ElementType.Decode()
+	elemType, err := args.ElementType.Load(ctx, s.dag)
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode element type: %w", err)
 	}
-	return def.WithListOf(elemType), nil
+	return def.WithListOf(elemType.Self), nil
 }
 
 func (s *moduleSchema) typeDefWithObject(ctx context.Context, def *core.TypeDef, args struct {
 	Name        string
-	Description string
+	Description string `default:""`
 }) (*core.TypeDef, error) {
+	if args.Name == "" {
+		return nil, fmt.Errorf("object type def must have a name")
+	}
 	return def.WithObject(args.Name, args.Description), nil
 }
 
@@ -135,19 +134,19 @@ func (s *moduleSchema) typeDefWithInterface(ctx context.Context, def *core.TypeD
 func (s *moduleSchema) typeDefWithObjectField(ctx context.Context, def *core.TypeDef, args struct {
 	Name        string
 	TypeDef     core.TypeDefID
-	Description string
+	Description string `default:""`
 }) (*core.TypeDef, error) {
-	fieldType, err := args.TypeDef.Decode()
+	fieldType, err := args.TypeDef.Load(ctx, s.dag)
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode element type: %w", err)
 	}
-	return def.WithObjectField(args.Name, fieldType, args.Description)
+	return def.WithObjectField(args.Name, fieldType.Self, args.Description)
 }
 
 func (s *moduleSchema) typeDefWithFunction(ctx context.Context, def *core.TypeDef, args struct {
 	Function core.FunctionID
 }) (*core.TypeDef, error) {
-	fn, err := args.Function.Decode()
+	fn, err := args.Function.Load(ctx, s.dag)
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode element type: %w", err)
 	}
@@ -157,10 +156,11 @@ func (s *moduleSchema) typeDefWithFunction(ctx context.Context, def *core.TypeDe
 func (s *moduleSchema) typeDefWithObjectConstructor(ctx context.Context, def *core.TypeDef, args struct {
 	Function core.FunctionID
 }) (*core.TypeDef, error) {
-	fn, err := args.Function.Decode()
+	inst, err := args.Function.Load(ctx, s.dag)
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode element type: %w", err)
 	}
+	fn := inst.Self.Clone()
 	// Constructors are invoked by setting the ObjectName to the name of the object its constructing and the
 	// FunctionName to "", so ignore the name of the function.
 	fn.Name = ""
@@ -168,18 +168,18 @@ func (s *moduleSchema) typeDefWithObjectConstructor(ctx context.Context, def *co
 	return def.WithObjectConstructor(fn)
 }
 
-func (s *moduleSchema) typeDefKind(ctx context.Context, def *core.TypeDef, args any) (string, error) {
-	return def.Kind.String(), nil
+func (s *moduleSchema) typeDefKind(ctx context.Context, def *core.TypeDef, args struct{}) (dagql.String, error) {
+	return dagql.NewString(def.Kind.String()), nil
 }
 
 func (s *moduleSchema) generatedCode(ctx context.Context, _ *core.Query, args struct {
 	Code core.DirectoryID
 }) (*core.GeneratedCode, error) {
-	dir, err := args.Code.Decode()
+	dir, err := args.Code.Load(ctx, s.dag)
 	if err != nil {
 		return nil, err
 	}
-	return core.NewGeneratedCode(dir), nil
+	return core.NewGeneratedCode(dir.Self), nil
 }
 
 func (s *moduleSchema) generatedCodeWithVCSIgnoredPaths(ctx context.Context, code *core.GeneratedCode, args struct {
@@ -194,22 +194,22 @@ func (s *moduleSchema) generatedCodeWithVCSGeneratedPaths(ctx context.Context, c
 	return code.WithVCSGeneratedPaths(args.Paths), nil
 }
 
-func (s *moduleSchema) module(ctx context.Context, query *core.Query, _ any) (*core.Module, error) {
-	return &core.Module{}, nil
+func (s *moduleSchema) module(ctx context.Context, query *core.Query, _ struct{}) (*core.Module, error) {
+	return query.NewModule(), nil
 }
 
 type moduleConfigArgs struct {
 	SourceDirectory core.DirectoryID
-	Subpath         string
+	Subpath         string `default:""`
 }
 
 func (s *moduleSchema) moduleConfig(ctx context.Context, query *core.Query, args moduleConfigArgs) (*modules.Config, error) {
-	srcDir, err := args.SourceDirectory.Decode()
+	srcDir, err := args.SourceDirectory.Load(ctx, s.dag)
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode source directory: %w", err)
 	}
 
-	_, cfg, err := core.LoadModuleConfig(ctx, s.bk, s.services, srcDir, args.Subpath)
+	_, cfg, err := core.LoadModuleConfig(ctx, srcDir.Self, args.Subpath)
 	return cfg, err
 }
 
@@ -217,11 +217,11 @@ func (s *moduleSchema) function(ctx context.Context, _ *core.Query, args struct 
 	Name       string
 	ReturnType core.TypeDefID
 }) (*core.Function, error) {
-	returnType, err := args.ReturnType.Decode()
+	returnType, err := args.ReturnType.Load(ctx, s.dag)
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode return type: %w", err)
 	}
-	return core.NewFunction(args.Name, returnType), nil
+	return core.NewFunction(args.Name, returnType.Self), nil
 }
 
 func (s *moduleSchema) functionWithDescription(ctx context.Context, fn *core.Function, args struct {
@@ -233,155 +233,190 @@ func (s *moduleSchema) functionWithDescription(ctx context.Context, fn *core.Fun
 func (s *moduleSchema) functionWithArg(ctx context.Context, fn *core.Function, args struct {
 	Name         string
 	TypeDef      core.TypeDefID
-	Description  string
-	DefaultValue any
+	Description  string    `default:""`
+	DefaultValue core.JSON `default:""`
 }) (*core.Function, error) {
-	argType, err := args.TypeDef.Decode()
+	argType, err := args.TypeDef.Load(ctx, s.dag)
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode arg type: %w", err)
 	}
-	return fn.WithArg(args.Name, argType, args.Description, args.DefaultValue), nil
+	return fn.WithArg(args.Name, argType.Self, args.Description, args.DefaultValue), nil
 }
 
-func (s *moduleSchema) functionCallParent(ctx context.Context, fnCall *core.FunctionCall, _ any) (any, error) {
-	if fnCall.Parent == nil {
-		return struct{}{}, nil
-	}
+func (s *moduleSchema) functionCallParent(ctx context.Context, fnCall *core.FunctionCall, _ struct{}) (core.JSON, error) {
 	return fnCall.Parent, nil
 }
 
-type asModuleArgs struct {
-	SourceSubpath string
-}
-
-func (s *moduleSchema) directoryAsModule(ctx context.Context, sourceDir *core.Directory, args asModuleArgs) (_ *core.Module, rerr error) {
-	modMeta, err := core.ModuleFromConfig(ctx, s.bk, s.services, sourceDir, args.SourceSubpath)
+func (s *moduleSchema) moduleWithSource(ctx context.Context, self *core.Module, args struct {
+	Directory core.DirectoryID
+	Subpath   string `default:""`
+}) (_ *core.Module, rerr error) {
+	sourceDir, err := args.Directory.Load(ctx, s.dag)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create module from config: %w", err)
-	}
-
-	mod, err := s.GetOrAddModFromMetadata(ctx, modMeta, sourceDir.PipelinePath())
-	if err != nil {
-		return nil, fmt.Errorf("failed to add module to dag: %w", err)
+		return nil, err
 	}
 
-	return mod.metadata, nil
-}
+	configPath, cfg, err := core.LoadModuleConfig(ctx, sourceDir.Self, args.Subpath)
+	if err != nil {
+		return nil, err
+	}
 
-func (s *moduleSchema) moduleObjects(ctx context.Context, modMeta *core.Module, _ any) ([]*core.TypeDef, error) {
-	mod, err := s.GetOrAddModFromMetadata(ctx, modMeta, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get module: %w", err)
+	// Reposition the root of the sourceDir in case it's pointing to a subdir of current sourceDir
+	if filepath.Clean(cfg.Root) != "." {
+		rootPath := filepath.Join(filepath.Dir(configPath), cfg.Root)
+		if rootPath != filepath.Dir(configPath) {
+			configPathAbs, err := filepath.Abs(configPath)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get config absolute path: %w", err)
+			}
+			rootPathAbs, err := filepath.Abs(rootPath)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get root absolute path: %w", err)
+			}
+			configPath, err = filepath.Rel(rootPathAbs, configPathAbs)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get config relative to root: %w", err)
+			}
+			if strings.HasPrefix(configPath, "../") {
+				// this likely shouldn't happen, a client shouldn't submit a
+				// module config that escapes the module root
+				return nil, fmt.Errorf("module subpath is not under module root")
+			}
+			if rootPath != "." {
+				err = s.dag.Select(ctx, sourceDir, &sourceDir, dagql.Selector{
+					Field: "directory",
+					Args: []dagql.NamedInput{
+						{Name: "path", Value: dagql.String(rootPath)},
+					},
+				})
+				if err != nil {
+					return nil, fmt.Errorf("failed to get root directory: %w", err)
+				}
+			}
+		}
 	}
-	objs, err := mod.Objects(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get module objects: %w", err)
-	}
-	typeDefs := make([]*core.TypeDef, 0, len(objs))
-	for _, obj := range objs {
-		typeDefs = append(typeDefs, obj.typeDef)
-	}
-	return typeDefs, nil
-}
 
-func (s *moduleSchema) moduleInterfaces(ctx context.Context, modMeta *core.Module, _ any) ([]*core.TypeDef, error) {
-	mod, err := s.GetOrAddModFromMetadata(ctx, modMeta, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get module: %w", err)
-	}
-	ifaces, err := mod.Interfaces(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get module objects: %w", err)
-	}
-	typeDefs := make([]*core.TypeDef, 0, len(ifaces))
-	for _, iface := range ifaces {
-		typeDefs = append(typeDefs, &core.TypeDef{
-			Kind:        core.TypeDefKindInterface,
-			AsInterface: iface.typeDef,
+	sourceDirSubpath := filepath.Dir(configPath)
+
+	var eg errgroup.Group
+	deps := make([]dagql.Instance[*core.Module], len(cfg.Dependencies))
+	for i, depRef := range cfg.Dependencies {
+		i, depRef := i, depRef
+		eg.Go(func() error {
+			dep, err := core.LoadRef(ctx, s.dag, sourceDir, sourceDirSubpath, depRef)
+			if err != nil {
+				return err
+			}
+			deps[i] = dep
+			return nil
 		})
 	}
-	return typeDefs, nil
-}
-
-func (s *moduleSchema) currentModule(ctx context.Context, _, _ any) (*core.Module, error) {
-	mod, err := s.APIServer.CurrentModule(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get current module: %w", err)
+	if err := eg.Wait(); err != nil {
+		if errors.Is(err, dagql.ErrCacheMapRecursiveCall) {
+			err = fmt.Errorf("module %s has a circular dependency: %w", cfg.Name, err)
+		}
+		return nil, err
 	}
-	return mod.metadata, nil
+
+	self = self.Clone()
+	self.NameField = cfg.Name
+	self.DependencyConfig = cfg.Dependencies
+	self.SDKConfig = cfg.SDK
+	self.SourceDirectory = sourceDir
+	self.SourceDirectorySubpath = sourceDirSubpath
+	self.DependenciesField = deps
+
+	self.Deps = core.NewModDeps(self.Query, self.Dependencies()).
+		Append(self.Query.DefaultDeps.Mods...)
+
+	sdk, err := s.sdkForModule(ctx, self.Query, cfg.SDK, sourceDir, sourceDirSubpath)
+	if err != nil {
+		return nil, err
+	}
+
+	self.GeneratedCode, err = sdk.Codegen(ctx, self, sourceDir, sourceDirSubpath)
+	if err != nil {
+		return nil, err
+	}
+
+	self.Runtime, err = sdk.Runtime(ctx, self, sourceDir, sourceDirSubpath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get module runtime: %w", err)
+	}
+
+	return self, nil
 }
 
-func (s *moduleSchema) currentTypeDefs(ctx context.Context, _, _ any) ([]*core.TypeDef, error) {
-	deps, err := s.APIServer.CurrentServedDeps(ctx)
+func (s *moduleSchema) moduleInitialize(ctx context.Context, inst dagql.Instance[*core.Module], args struct{}) (*core.Module, error) {
+	return inst.Self.Initialize(ctx, inst, dagql.CurrentID(ctx))
+}
+
+type asModuleArgs struct {
+	SourceSubpath string `default:""`
+}
+
+func (s *moduleSchema) directoryAsModule(ctx context.Context, sourceDir dagql.Instance[*core.Directory], args asModuleArgs) (inst dagql.Instance[*core.Module], rerr error) {
+	rerr = s.dag.Select(ctx, s.dag.Root(), &inst, dagql.Selector{
+		Field: "module",
+	}, dagql.Selector{
+		Field: "withSource",
+		Args: []dagql.NamedInput{
+			{Name: "directory", Value: dagql.NewID[*core.Directory](sourceDir.ID())},
+			{Name: "subpath", Value: dagql.String(args.SourceSubpath)},
+		},
+	}, dagql.Selector{
+		Field: "initialize",
+	})
+	return
+}
+
+func (s *moduleSchema) currentModule(ctx context.Context, self *core.Query, _ struct{}) (inst dagql.Instance[*core.Module], err error) {
+	id, err := self.CurrentModule(ctx)
+	if err != nil {
+		return inst, err
+	}
+	return id.Load(ctx, s.dag)
+}
+
+func (s *moduleSchema) currentFunctionCall(ctx context.Context, self *core.Query, _ struct{}) (*core.FunctionCall, error) {
+	return self.CurrentFunctionCall(ctx)
+}
+
+func (s *moduleSchema) moduleServe(ctx context.Context, modMeta dagql.Instance[*core.Module], _ struct{}) (dagql.Nullable[core.Void], error) {
+	return dagql.Null[core.Void](), modMeta.Self.Query.ServeModuleToMainClient(ctx, modMeta)
+}
+
+func (s *moduleSchema) currentTypeDefs(ctx context.Context, self *core.Query, _ struct{}) ([]*core.TypeDef, error) {
+	deps, err := self.CurrentServedDeps(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get current module: %w", err)
 	}
 	return deps.TypeDefs(ctx)
 }
 
-func (s *moduleSchema) currentFunctionCall(ctx context.Context, _ *core.Query, _ any) (*core.FunctionCall, error) {
-	return s.APIServer.CurrentFunctionCall(ctx)
-}
-
-func (s *moduleSchema) moduleServe(ctx context.Context, modMeta *core.Module, _ any) error {
-	return s.APIServer.ServeModuleToMainClient(ctx, modMeta)
-}
-
-func (s *moduleSchema) functionCallReturnValue(ctx context.Context, fnCall *core.FunctionCall, args struct{ Value any }) error {
+func (s *moduleSchema) functionCallReturnValue(ctx context.Context, fnCall *core.FunctionCall, args struct {
+	Value core.JSON
+}) (dagql.Nullable[core.Void], error) {
 	// TODO: error out if caller is not coming from a module
-
-	valueBytes, err := json.Marshal(args.Value)
-	if err != nil {
-		return fmt.Errorf("failed to marshal function return value: %w", err)
-	}
-
-	// The return is implemented by exporting the result back to the caller's filesystem. This ensures that
-	// the result is cached as part of the module function's Exec while also keeping SDKs as agnostic as possible
-	// to the format + location of that result.
-	return s.bk.IOReaderExport(ctx, bytes.NewReader(valueBytes), filepath.Join(modMetaDirPath, modMetaOutputPath), 0600)
+	return dagql.Null[core.Void](), fnCall.ReturnValue(ctx, args.Value)
 }
 
 func (s *moduleSchema) moduleWithObject(ctx context.Context, modMeta *core.Module, args struct {
 	Object core.TypeDefID
 }) (_ *core.Module, rerr error) {
-	def, err := args.Object.Decode()
+	def, err := args.Object.Load(ctx, s.dag)
 	if err != nil {
 		return nil, err
 	}
-	return modMeta.WithObject(def)
+	return modMeta.WithObject(ctx, def.Self)
 }
 
 func (s *moduleSchema) moduleWithInterface(ctx context.Context, modMeta *core.Module, args struct {
 	Iface core.TypeDefID
 }) (_ *core.Module, rerr error) {
-	def, err := args.Iface.Decode()
+	def, err := args.Iface.Load(ctx, s.dag)
 	if err != nil {
 		return nil, err
 	}
-	return modMeta.WithInterface(def)
-}
-
-func (s *moduleSchema) moduleDependencies(ctx context.Context, modMeta *core.Module, _ any) ([]*core.Module, error) {
-	mod, err := s.GetOrAddModFromMetadata(ctx, modMeta, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get module: %w", err)
-	}
-	modMetas := make([]*core.Module, 0, len(mod.Dependencies()))
-	for _, dep := range mod.Dependencies() {
-		// only include user modules, not core
-		userMod, ok := dep.(*UserMod)
-		if !ok {
-			continue
-		}
-		modMetas = append(modMetas, userMod.metadata)
-	}
-	return modMetas, nil
-}
-
-func (s *moduleSchema) moduleGeneratedCode(ctx context.Context, modMeta *core.Module, _ any) (*core.GeneratedCode, error) {
-	mod, err := s.GetOrAddModFromMetadata(ctx, modMeta, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get module: %w", err)
-	}
-	return mod.Codegen(ctx)
+	return modMeta.WithInterface(ctx, def)
 }

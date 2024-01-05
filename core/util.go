@@ -54,7 +54,7 @@ func defToState(def *pb.Definition) (llb.State, error) {
 	return llb.NewState(defop), nil
 }
 
-func resolveUIDGID(ctx context.Context, fsSt llb.State, bk *buildkit.Client, platform specs.Platform, owner string) (*Ownership, error) {
+func resolveUIDGID(ctx context.Context, fsSt llb.State, bk *buildkit.Client, platform Platform, owner string) (*Ownership, error) {
 	uidOrName, gidOrName, hasGroup := strings.Cut(owner, ":")
 
 	var uid, gid int
@@ -74,7 +74,7 @@ func resolveUIDGID(ctx context.Context, fsSt llb.State, bk *buildkit.Client, pla
 
 	var fs fs.FS
 	if uname != "" || gname != "" {
-		fs, err = reffs.OpenState(ctx, bk, fsSt, llb.Platform(platform))
+		fs, err = reffs.OpenState(ctx, bk, fsSt, llb.Platform(platform.Spec()))
 		if err != nil {
 			return nil, fmt.Errorf("open fs state for name->id: %w", err)
 		}
@@ -288,4 +288,8 @@ func resolveProvenance(ctx context.Context, bk *buildkit.Client, st llb.State) (
 		return nil, errors.Errorf("no provenance was resolved")
 	}
 	return p, nil
+}
+
+func ptr[T any](v T) *T {
+	return &v
 }

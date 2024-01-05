@@ -1,93 +1,102 @@
-package schema
+package core
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 
-	"github.com/dagger/dagger/core"
-	"github.com/dagger/dagger/core/resourceid"
 	"github.com/dagger/graphql"
 	"github.com/vektah/gqlparser/v2/ast"
+	"github.com/vito/dagql"
+	"github.com/vito/dagql/idproto"
 )
 
 type InterfaceType struct {
-	api       *APIServer
-	sourceMod *UserMod
-	typeDef   *core.InterfaceTypeDef
+	mod   *Module
+	modID *idproto.ID
+
+	// the type def metadata, with namespacing already applied
+	typeDef *InterfaceTypeDef
+
+	// should not be read directly, call Fields() and Functions() instead
+	lazyLoadedFields    []*UserModField
+	lazyLoadedFunctions []*ModuleFunction
+	loadErr             error
+	loadLock            sync.Mutex
 }
 
 var _ ModType = (*InterfaceType)(nil)
 
-func newModIface(ctx context.Context, mod *UserMod, typeDef *core.TypeDef) (*InterfaceType, error) {
-	if typeDef.Kind != core.TypeDefKindInterface {
+func newModIface(mod *Module, modID *idproto.ID, typeDef *TypeDef) (*InterfaceType, error) {
+	if typeDef.Kind != TypeDefKindInterface {
 		return nil, fmt.Errorf("expected interface type def, got %s", typeDef.Kind)
 	}
 	iface := &InterfaceType{
-		api:       mod.api,
-		sourceMod: mod,
-		typeDef:   typeDef.AsInterface,
+		mod:     mod,
+		modID:   modID,
+		typeDef: typeDef.AsInterface.Value,
 	}
 	return iface, nil
 }
 
-func (iface *InterfaceType) ConvertFromSDKResult(ctx context.Context, value any) (any, error) {
+func (iface *InterfaceType) ConvertFromSDKResult(ctx context.Context, value any) (dagql.Typed, error) {
 	if value == nil {
 		return nil, nil
 	}
 
 	switch value := value.(type) {
-	case string:
-		if value == "" {
-			return nil, nil
-		}
+	// case string:
+	// 	if value == "" {
+	// 		return nil, nil
+	// 	}
 
-		// TODO: this needs to handle core IDs too; need a common func for decoding both those and mod objects?
+	// 	// TODO: this needs to handle core IDs too; need a common func for decoding both those and mod objects?
 
-		modObjData, err := resourceid.DecodeModuleID(value, "")
-		if err != nil {
-			return nil, fmt.Errorf("failed to decode id: %w", err)
-		}
-		objMap := modObjData.Data
-		modDgst := modObjData.ModDigest
-		typeName := modObjData.TypeName
+	// 	// modObjData, err := resourceid.DecodeModuleID(value, "")
+	// 	// if err != nil {
+	// 	// 	return nil, fmt.Errorf("failed to decode id: %w", err)
+	// 	// }
+	// 	// objMap := modObjData.Data
+	// 	// modDgst := modObjData.ModDigest
+	// 	// typeName := modObjData.TypeName
 
-		sourceMod, err := iface.api.GetModFromDagDigest(ctx, modDgst)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get source mod %s: %w", modDgst, err)
-		}
+	// 	sourceMod, err := iface.api.GetModFromDagDigest(ctx, modDgst)
+	// 	if err != nil {
+	// 		return nil, fmt.Errorf("failed to get source mod %s: %w", modDgst, err)
+	// 	}
 
-		modType, ok, err := sourceMod.ModTypeFor(ctx, &core.TypeDef{
-			Kind: core.TypeDefKindObject,
-			AsObject: &core.ObjectTypeDef{
-				Name: typeName,
-			},
-		}, false)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get mod type for %s: %w", typeName, err)
-		}
-		if !ok {
-			return nil, fmt.Errorf("failed to find mod type for %s", typeName)
-		}
+	// 	modType, ok, err := sourceMod.ModTypeFor(ctx, &TypeDef{
+	// 		Kind: TypeDefKindObject,
+	// 		AsObject: &ObjectTypeDef{
+	// 			Name: typeName,
+	// 		},
+	// 	}, false)
+	// 	if err != nil {
+	// 		return nil, fmt.Errorf("failed to get mod type for %s: %w", typeName, err)
+	// 	}
+	// 	if !ok {
+	// 		return nil, fmt.Errorf("failed to find mod type for %s", typeName)
+	// 	}
 
-		// Verify that the object provided actually implements the interface. This is also enforced
-		// by only adding "As*" fields to objects in a schema once they implement the interface, but
-		// in theory an SDK could provide arbitrary IDs of objects here, so we need to check again to
-		// be fully robust.
-		if ok := modType.TypeDef().IsSubtypeOf(iface.TypeDef()); !ok {
-			return nil, fmt.Errorf("object %s does not implement interface %s", typeName, iface.typeDef.Name)
-		}
+	// 	// Verify that the object provided actually implements the interface. This is also enforced
+	// 	// by only adding "As*" fields to objects in a schema once they implement the interface, but
+	// 	// in theory an SDK could provide arbitrary IDs of objects here, so we need to check again to
+	// 	// be fully robust.
+	// 	if ok := modType.TypeDef().IsSubtypeOf(iface.TypeDef()); !ok {
+	// 		return nil, fmt.Errorf("object %s does not implement interface %s", typeName, iface.typeDef.Name)
+	// 	}
 
-		convertedValue, err := modType.ConvertFromSDKResult(ctx, objMap)
-		if err != nil {
-			return nil, fmt.Errorf("failed to convert from sdk result: %w", err)
-		}
+	// 	convertedValue, err := modType.ConvertFromSDKResult(ctx, objMap)
+	// 	if err != nil {
+	// 		return nil, fmt.Errorf("failed to convert from sdk result: %w", err)
+	// 	}
 
-		return &interfaceRuntimeValue{
-			Value:          convertedValue,
-			UnderlyingType: modType,
-			IfaceType:      iface,
-		}, nil
+	// 	return &interfaceRuntimeValue{
+	// 		Value:          convertedValue,
+	// 		UnderlyingType: modType,
+	// 		IfaceType:      iface,
+	// 	}, nil
 
 	case *interfaceRuntimeValue:
 		return &interfaceRuntimeValue{
@@ -101,34 +110,35 @@ func (iface *InterfaceType) ConvertFromSDKResult(ctx context.Context, value any)
 	}
 }
 
-func (iface *InterfaceType) ConvertToSDKInput(ctx context.Context, value any) (any, error) {
+func (iface *InterfaceType) ConvertToSDKInput(ctx context.Context, value dagql.Typed) (any, error) {
 	if value == nil {
 		return nil, nil
 	}
 
 	switch value := value.(type) {
-	case string:
-		return value, nil
+	// case string:
+	// 	return value, nil
 
 	case *interfaceRuntimeValue:
 		// NOTE: kludge to deal with inconsistency in how user mod objects are currently provided SDKs.
 		// For interfaces specifically, we actually do need to provide the object ID rather than the json
 		// serialization of the object directly. Otherwise we'll lose track of what the underlying object
 		// is.
-		userModObj, isUserModObj := value.UnderlyingType.(*UserModObject)
-		if isUserModObj {
-			convertedValue, err := userModObj.ConvertToID(ctx, value.Value)
-			if err != nil {
-				return nil, fmt.Errorf("failed to convert to id: %w", err)
-			}
-			return convertedValue, nil
-		}
+		return value.UnderlyingType.ID().Encode()
+		// userModObj, isUserModObj := value.UnderlyingType.(dagql.Object)
+		// if isUserModObj {
+		// 	convertedValue, err := userModObj.ConvertToID(ctx, value.Value)
+		// 	if err != nil {
+		// 		return nil, fmt.Errorf("failed to convert to id: %w", err)
+		// 	}
+		// 	return convertedValue, nil
+		// }
 
-		convertedValue, err := value.UnderlyingType.ConvertToSDKInput(ctx, value.Value)
-		if err != nil {
-			return nil, fmt.Errorf("failed to convert to sdk input: %w", err)
-		}
-		return convertedValue, nil
+		// convertedValue, err := value.UnderlyingType.ConvertToSDKInput(ctx, value.Value)
+		// if err != nil {
+		// 	return nil, fmt.Errorf("failed to convert to sdk input: %w", err)
+		// }
+		// return convertedValue, nil
 
 	default:
 		return nil, fmt.Errorf("unexpected interface value type for conversion to sdk input %T", value)
@@ -136,13 +146,13 @@ func (iface *InterfaceType) ConvertToSDKInput(ctx context.Context, value any) (a
 }
 
 func (iface *InterfaceType) SourceMod() Mod {
-	return iface.sourceMod
+	return iface.mod
 }
 
-func (iface *InterfaceType) TypeDef() *core.TypeDef {
-	return &core.TypeDef{
-		Kind:        core.TypeDefKindInterface,
-		AsInterface: iface.typeDef.Clone(),
+func (iface *InterfaceType) TypeDef() *TypeDef {
+	return &TypeDef{
+		Kind:        TypeDefKindInterface,
+		AsInterface: dagql.NonNull(iface.typeDef.Clone()),
 	}
 }
 
@@ -239,7 +249,7 @@ func (iface *InterfaceType) Schema(ctx context.Context) (*ast.SchemaDocument, Re
 			Type:        returnASTType,
 		}
 
-		argTypeDefsByName := map[string]*core.TypeDef{}
+		argTypeDefsByName := map[string]*TypeDef{}
 		for _, argMetadata := range fnTypeDef.Args {
 			argMetadata := argMetadata
 			argTypeDefsByName[argMetadata.Name] = argMetadata.TypeDef
@@ -297,7 +307,7 @@ func (iface *InterfaceType) Schema(ctx context.Context) (*ast.SchemaDocument, Re
 				return nil, fmt.Errorf("failed to get callable for %s.%s: %w", ifaceName, fieldDef.Name, err)
 			}
 
-			var callInputs []*core.CallInput
+			var callInputs []*CallInput
 			for k, rawArgVal := range p.Args {
 				callableArgType, err := callable.ArgType(k)
 				if err != nil {
@@ -346,7 +356,7 @@ func (iface *InterfaceType) Schema(ctx context.Context) (*ast.SchemaDocument, Re
 					argVal = argList
 				}
 
-				callInputs = append(callInputs, &core.CallInput{
+				callInputs = append(callInputs, &CallInput{
 					Name:  k,
 					Value: argVal,
 				})
@@ -360,7 +370,7 @@ func (iface *InterfaceType) Schema(ctx context.Context) (*ast.SchemaDocument, Re
 				return nil, fmt.Errorf("failed to call interface function %s.%s: %w", ifaceName, fieldDef.Name, err)
 			}
 
-			if fnTypeDef.ReturnType.Underlying().Kind != core.TypeDefKindInterface {
+			if fnTypeDef.ReturnType.Underlying().Kind != TypeDefKindInterface {
 				return res, nil
 			}
 
@@ -417,8 +427,12 @@ func (iface *InterfaceType) Schema(ctx context.Context) (*ast.SchemaDocument, Re
 
 type interfaceRuntimeValue struct {
 	Value          any
-	UnderlyingType ModType
+	UnderlyingType dagql.Object
 	IfaceType      *InterfaceType
+}
+
+func (v *interfaceRuntimeValue) Type() *ast.Type {
+	panic("idk")
 }
 
 // allow default graphql resolver to use this object transparently:
