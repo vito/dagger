@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -61,10 +62,15 @@ func NewDaggerServer(
 
 	clientConn := caller.Conn()
 	progClient := progrock.NewProgressServiceClient(clientConn)
-	progUpdates, err := progClient.WriteUpdates(ctx)
+
+	// Progress updates get their own ctx so it can properly drain when the
+	// server is shutting down.
+	progUpdates, err := progClient.WriteUpdates(context.Background())
 	if err != nil {
 		return nil, err
 	}
+
+	log.Println("!!! XXX HOOKING UP PROGROCK FORWARDER", bkClient.ID(), serverID, caller.Name())
 
 	progWriter, progCleanup, err := buildkit.ProgrockForwarder(bkClient.ProgSockPath, progrock.MultiWriter{
 		progrock.NewRPCWriter(clientConn, progUpdates),
@@ -96,15 +102,19 @@ func NewDaggerServer(
 	go func() {
 		defer func() {
 			// drain channel on error
-			for range statusCh {
+			for x := range statusCh {
+				log.Println("!!! XXX BKFORWARD DRAINING", x)
 			}
 		}()
 		for {
 			status, ok := <-statusCh
 			if !ok {
+				log.Println("!!! XXX BKFORWARD DONE")
 				return
 			}
-			err := srv.recorder.Record(buildkit.BK2Progrock(status))
+			prog := buildkit.BK2Progrock(status)
+			err := srv.recorder.Record(prog)
+			log.Println("!!! XXX BKFORWARD RECORDED", err, prog)
 			if err != nil {
 				bklog.G(ctx).WithError(err).Error("failed to record status update")
 				return
@@ -139,6 +149,7 @@ func (srv *DaggerServer) Close() {
 		close(srv.doneCh)
 	})
 
+	log.Println("!!! XXX DAGGERSERVER CLOSING PROGROCK RECORDER")
 	// mark all groups completed
 	srv.recorder.Complete()
 	// close the recorder so the UI exits

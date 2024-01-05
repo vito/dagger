@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"runtime"
 	"runtime/debug"
 	"sync"
@@ -278,6 +279,7 @@ func (e *BuildkitController) Session(stream controlapi.Control_SessionServer) (r
 		// delete the server after the initial client who created it exits
 		defer func() {
 			bklog.G(ctx).Debug("removing server")
+			log.Println("!!! XXX REMOVING SERVER", opts.ServerID)
 			e.serverMu.Lock()
 			srv.Close()
 			delete(e.servers, opts.ServerID)

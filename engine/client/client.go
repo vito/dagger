@@ -103,6 +103,8 @@ type Client struct {
 	nestedSessionPort int
 
 	labels []pipeline.Label
+
+	progRecv *progrock.RPCReceiver
 }
 
 func Connect(ctx context.Context, params Params) (_ *Client, _ context.Context, rerr error) {
@@ -244,7 +246,8 @@ func Connect(ctx context.Context, params Params) (_ *Client, _ context.Context, 
 	})
 
 	// progress
-	bkSession.Allow(progRockAttachable{progMultiW})
+	c.progRecv = progrock.NewRPCReceiver(progMultiW)
+	bkSession.Allow(progrockAttachable{c.progRecv})
 
 	// filesync
 	if !c.DisableHostRW {
@@ -341,6 +344,10 @@ func (c *Client) daggerConnect(ctx context.Context) error {
 }
 
 func (c *Client) Close() (rerr error) {
+	// log.Println("!!! XXX ENGINE CLIENT WAITING")
+	// time.Sleep(5 * time.Second)
+	// log.Println("!!! XXX ENGINE CLIENT CLOSING")
+
 	// shutdown happens outside of c.closeMu, since it requires a connection
 	if err := c.shutdownServer(); err != nil {
 		rerr = errors.Join(rerr, fmt.Errorf("shutdown: %w", err))
@@ -368,6 +375,21 @@ func (c *Client) Close() (rerr error) {
 	}
 
 	c.closeRequests()
+
+	// if c.bkSession != nil {
+	// 	if err := c.bkSession.Close(); err != nil {
+	// 		rerr = errors.Join(rerr, err)
+	// 	}
+	// }
+
+	// NB: this depends on un-pushed Progrock code that I'm not sure will end up
+	// even helping; the tldr was to add a waitgroup that Adds when it starts the
+	// loop and Dones when the loop exits, but I'm not at all convinced this is
+	// the right approach; generally having both the Add and Done happen in the
+	// same goroutine is a little fishy
+	// if c.progRecv != nil {
+	// 	c.progRecv.Wait()
+	// }
 
 	if c.internalCancel != nil {
 		c.internalCancel()
@@ -812,12 +834,12 @@ func (AnyDirTarget) DiffCopy(stream filesync.FileSend_DiffCopyServer) (rerr erro
 	}
 }
 
-type progRockAttachable struct {
-	writer progrock.Writer
+type progrockAttachable struct {
+	recv *progrock.RPCReceiver
 }
 
-func (a progRockAttachable) Register(srv *grpc.Server) {
-	progrock.RegisterProgressServiceServer(srv, progrock.NewRPCReceiver(a.writer))
+func (a progrockAttachable) Register(srv *grpc.Server) {
+	progrock.RegisterProgressServiceServer(srv, a.recv)
 }
 
 const (

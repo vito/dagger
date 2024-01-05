@@ -101,12 +101,10 @@ func ProgrockForwarder(sockPath string, w progrock.Writer) (progrock.Writer, fun
 	if err != nil {
 		return nil, nil, err
 	}
-
 	progW, err := progrock.ServeRPC(l, w)
 	if err != nil {
 		return nil, nil, err
 	}
-
 	return progW, l.Close, nil
 }
 
