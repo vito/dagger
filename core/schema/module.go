@@ -75,10 +75,11 @@ func (s *moduleSchema) Install() {
 		dagql.Func("withObject", s.typeDefWithObject),
 		dagql.Func("withInterface", s.typeDefWithInterface),
 		dagql.Func("withField", s.typeDefWithObjectField),
-		dagql.Func("withFunction", s.typeDefWithObjectFunction),
+		dagql.Func("withFunction", s.typeDefWithFunction),
 		dagql.Func("withConstructor", s.typeDefWithObjectConstructor),
 	}.Install(s.dag)
 	dagql.Fields[*core.ObjectTypeDef]{}.Install(s.dag)
+	dagql.Fields[*core.InterfaceTypeDef]{}.Install(s.dag)
 	dagql.Fields[*core.FieldTypeDef]{}.Install(s.dag)
 	dagql.Fields[*core.ListTypeDef]{}.Install(s.dag)
 
@@ -126,7 +127,7 @@ func (s *moduleSchema) typeDefWithObject(ctx context.Context, def *core.TypeDef,
 
 func (s *moduleSchema) typeDefWithInterface(ctx context.Context, def *core.TypeDef, args struct {
 	Name        string
-	Description string
+	Description string `default:""`
 }) (*core.TypeDef, error) {
 	return def.WithInterface(args.Name, args.Description), nil
 }
@@ -150,7 +151,7 @@ func (s *moduleSchema) typeDefWithFunction(ctx context.Context, def *core.TypeDe
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode element type: %w", err)
 	}
-	return def.WithFunction(fn)
+	return def.WithFunction(fn.Self)
 }
 
 func (s *moduleSchema) typeDefWithObjectConstructor(ctx context.Context, def *core.TypeDef, args struct {
@@ -418,5 +419,5 @@ func (s *moduleSchema) moduleWithInterface(ctx context.Context, modMeta *core.Mo
 	if err != nil {
 		return nil, err
 	}
-	return modMeta.WithInterface(ctx, def)
+	return modMeta.WithInterface(ctx, def.Self)
 }

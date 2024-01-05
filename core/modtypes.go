@@ -3,7 +3,6 @@ package core
 import (
 	"context"
 	"fmt"
-	"log"
 
 	"github.com/vito/dagql"
 )
@@ -110,7 +109,7 @@ func (t *ListType) TypeDef() *TypeDef {
 }
 
 type ModuleObjectType struct {
-	typeDef *TypeDef
+	typeDef *ObjectTypeDef
 	mod     *Module
 }
 
@@ -119,19 +118,18 @@ func (t *ModuleObjectType) SourceMod() Mod {
 }
 
 func (obj *ModuleObjectType) ConvertFromSDKResult(ctx context.Context, value any) (dagql.Typed, error) {
-	log.Printf("!!! DECODING USER MOD OBJECT %v USING %T", value, obj.typeDef.ToInput())
 	if value == nil {
 		return nil, nil
 	}
 
 	switch value := value.(type) {
 	case map[string]any:
-		return &DynamicObject{
-			Object: *obj.typeDef.AsObject.Value,
-			Fields: value,
+		return &ModuleObject{
+			TypeDef: obj.typeDef,
+			Fields:  value,
 		}, nil
 	default:
-		return nil, fmt.Errorf("unexpected result value type %T for object %q", value, obj.typeDef.AsObject.Value.Name)
+		return nil, fmt.Errorf("unexpected result value type %T for object %q", value, obj.typeDef.Name)
 	}
 }
 
@@ -150,13 +148,13 @@ func (obj *ModuleObjectType) ConvertToSDKInput(ctx context.Context, value dagql.
 		if err != nil {
 			return nil, fmt.Errorf("schema: %w", err)
 		}
-		val, err := dag.Load(ctx, x.ID)
+		val, err := dag.Load(ctx, x.ID())
 		if err != nil {
 			return nil, fmt.Errorf("load DynamicID: %w", err)
 		}
 		switch x := val.(type) {
-		case *UserModInstance:
-			return x.val, nil
+		case dagql.Instance[*ModuleObject]:
+			return x.Self.Fields, nil
 		default:
 			return nil, fmt.Errorf("unexpected value type %T", x)
 		}
@@ -166,7 +164,10 @@ func (obj *ModuleObjectType) ConvertToSDKInput(ctx context.Context, value dagql.
 }
 
 func (t *ModuleObjectType) TypeDef() *TypeDef {
-	return t.typeDef
+	return &TypeDef{
+		Kind:     TypeDefKindObject,
+		AsObject: dagql.NonNull(t.typeDef),
+	}
 }
 
 type NullableType struct {

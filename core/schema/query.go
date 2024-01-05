@@ -34,7 +34,7 @@ func (s *querySchema) Install() {
 
 	s.srv.InstallScalar(core.JSON{})
 	s.srv.InstallScalar(core.Void{})
-	s.srv.InstallScalar(core.DynamicID{})
+	// s.srv.InstallScalar(core.DynamicID{})
 
 	core.NetworkProtocols.Install(s.srv)
 	core.ImageLayerCompressions.Install(s.srv)

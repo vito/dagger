@@ -112,8 +112,6 @@ func NewDaggerServer(
 		}
 	}()
 
-	ctx = progrock.ToContext(ctx, srv.recorder)
-
 	apiSchema, err := schema.New(ctx, schema.InitializeArgs{
 		BuildkitClient: srv.bkClient,
 		Platform:       srv.worker.Platforms(true)[0],

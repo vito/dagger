@@ -39,7 +39,7 @@ func TelemetryFunc(ctx context.Context, self dagql.Object, id *idproto.ID, next 
 		vtx.Meta("id", payload)
 
 		// respect user-configured pipelines
-		if w, ok := self.(dagql.Wrapped); ok {
+		if w, ok := self.(dagql.Wrapper); ok {
 			if pl, ok := w.Unwrap().(pipeline.Pipelineable); ok {
 				rec = pl.PipelinePath().RecorderGroup(rec)
 			}

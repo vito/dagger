@@ -232,7 +232,7 @@ type goSDK struct {
 	dag  *dagql.Server
 }
 
-func (sdk *goSDK) Codegen(ctx context.Context, mod core.Mod, sourceDir dagql.Instance[*core.Directory], subPath string) (*core.GeneratedCode, error) {
+func (sdk *goSDK) Codegen(ctx context.Context, mod *core.Module, sourceDir dagql.Instance[*core.Directory], subPath string) (*core.GeneratedCode, error) {
 	ctr, err := sdk.baseWithCodegen(ctx, mod, sourceDir, subPath)
 	if err != nil {
 		return nil, err
@@ -279,7 +279,7 @@ func (sdk *goSDK) Codegen(ctx context.Context, mod core.Mod, sourceDir dagql.Ins
 	}, nil
 }
 
-func (sdk *goSDK) Runtime(ctx context.Context, mod core.Mod, sourceDir dagql.Instance[*core.Directory], subPath string) (*core.Container, error) {
+func (sdk *goSDK) Runtime(ctx context.Context, mod *core.Module, sourceDir dagql.Instance[*core.Directory], subPath string) (*core.Container, error) {
 	ctr, err := sdk.baseWithCodegen(ctx, mod, sourceDir, subPath)
 	if err != nil {
 		return nil, err
@@ -317,11 +317,12 @@ func (sdk *goSDK) Runtime(ctx context.Context, mod core.Mod, sourceDir dagql.Ins
 }
 
 func (sdk *goSDK) baseWithCodegen(ctx context.Context, mod *core.Module, sourceDir dagql.Instance[*core.Directory], subPath string) (dagql.Instance[*core.Container], error) {
+	var ctr dagql.Instance[*core.Container]
 	introspectionJSON, err := mod.DependencySchemaIntrospectionJSON(ctx)
 	if err != nil {
 		return ctr, fmt.Errorf("failed to get schema introspection json during %s module sdk codegen: %w", mod.Name(), err)
 	}
-	ctr, err := sdk.base(ctx)
+	ctr, err = sdk.base(ctx)
 	if err != nil {
 		return ctr, err
 	}

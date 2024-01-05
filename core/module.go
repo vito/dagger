@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/dagger/dagger/core/modules"
@@ -108,29 +109,223 @@ func (mod *Module) Initialize(ctx context.Context, oldSelf dagql.Instance[*Modul
 func (mod *Module) Install(ctx context.Context, dag *dagql.Server) error {
 	log.Println("!!! INSTALLING MOD", mod.Name())
 	defer log.Println("!!! DONE INSTALLING MOD", mod.Name())
-	objs, err := mod.Objects(ctx, mod.InstanceID)
-	if err != nil {
-		return err
-	}
-	for _, obj := range objs {
-		log.Println("!!! INSTALLING OBJECT", obj.typeDef.AsObject.Value.Name)
-		if err := obj.Install(ctx, dag); err != nil {
-			return err
+
+	for _, def := range mod.ObjectDefs {
+		objDef := def.AsObject.Value
+		log.Println("!!! INSTALLING OBJECT", objDef.Name)
+
+		// check whether this is a pre-existing object from a dependency module
+		modType, ok, err := mod.Deps.ModTypeFor(ctx, def)
+		if err != nil {
+			return fmt.Errorf("failed to get mod type for type def: %w", err)
 		}
+
+		if ok {
+			// XXX(vito): double check this works
+			if sourceMod := modType.SourceMod(); sourceMod != nil && sourceMod != mod {
+				// modules can reference types from core/other modules as types, but they
+				// can't attach any new fields or functions to them
+				if len(objDef.Fields) > 0 || len(objDef.Functions) > 0 {
+					return fmt.Errorf("cannot attach new fields or functions to object %q from outside module", objDef.Name)
+				}
+				return nil
+			}
+		}
+
+		obj := &ModuleObject{
+			Module:  mod,
+			TypeDef: objDef,
+		}
+
+		obj.Install(ctx, dag)
 	}
+
 	return nil
 }
 
-func (mod *Module) Objects(ctx context.Context, modID *idproto.ID) (loadedObjects []*ModuleObject, rerr error) {
-	objs := make([]*ModuleObject, 0, len(mod.ObjectDefs))
-	for _, objTypeDef := range mod.ObjectDefs {
-		obj, err := newModObject(mod, modID, objTypeDef)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create object: %w", err)
-		}
-		objs = append(objs, obj)
+type ModuleObject struct {
+	Module  *Module
+	TypeDef *ObjectTypeDef
+	Fields  map[string]any
+}
+
+func (obj *ModuleObject) Type() *ast.Type {
+	return &ast.Type{
+		NamedType: obj.TypeDef.Name,
+		NonNull:   true,
 	}
-	return objs, nil
+}
+
+func (obj *ModuleObject) Install(ctx context.Context, dag *dagql.Server) error {
+	class := dagql.NewClass(dagql.ClassOpts[*ModuleObject]{
+		Typed: obj,
+	})
+	objDef := obj.TypeDef
+	mod := obj.Module
+	if objDef.Name == gqlObjectName(mod.Name()) {
+		if err := obj.installConstructor(ctx, dag); err != nil {
+			return fmt.Errorf("failed to install constructor: %w", err)
+		}
+	}
+	fields := obj.fields()
+	funs, err := obj.functions(ctx)
+	if err != nil {
+		return err
+	}
+	fields = append(fields, funs...)
+	class.Install(fields...)
+	dag.InstallObject(class)
+	return nil
+}
+
+func (obj *ModuleObject) installConstructor(ctx context.Context, dag *dagql.Server) error {
+	objDef := obj.TypeDef
+	mod := obj.Module
+
+	if !objDef.Constructor.Valid {
+		// no constructor defined; install a basic one that initializes an empty
+		// object
+		dag.Root().ObjectType().Extend(
+			dagql.FieldSpec{
+				Name:        gqlFieldName(mod.Name()),
+				Description: "TODO",
+				Type:        obj,
+				Pure:        true,
+			},
+			func(ctx context.Context, self dagql.Object, _ map[string]dagql.Typed) (dagql.Typed, error) {
+				return &ModuleObject{
+					TypeDef: objDef,
+					Fields:  map[string]any{},
+				}, nil
+			},
+		)
+		return nil
+	}
+
+	// use explicit user-defined constructor if provided
+	fnTypeDef := objDef.Constructor.Value
+	if fnTypeDef.ReturnType.Kind != TypeDefKindObject {
+		return fmt.Errorf("constructor function for object %s must return that object", objDef.OriginalName)
+	}
+	if fnTypeDef.ReturnType.AsObject.Value.OriginalName != objDef.OriginalName {
+		return fmt.Errorf("constructor function for object %s must return that object", objDef.OriginalName)
+	}
+
+	fn, err := newModFunction(ctx, mod.Query, mod, mod.InstanceID, objDef, mod.Runtime, fnTypeDef)
+	if err != nil {
+		return fmt.Errorf("failed to create function: %w", err)
+	}
+
+	spec, err := fn.metadata.FieldSpec()
+	if err != nil {
+		return fmt.Errorf("failed to get field spec: %w", err)
+	}
+
+	spec.Name = gqlFieldName(mod.Name())
+	spec.Pure = true
+
+	dag.Root().ObjectType().Extend(
+		spec,
+		func(ctx context.Context, self dagql.Object, args map[string]dagql.Typed) (dagql.Typed, error) {
+			var callInput []CallInput
+			for k, v := range args {
+				callInput = append(callInput, CallInput{
+					Name:  k,
+					Value: v,
+				})
+			}
+			return fn.Call(ctx, dagql.CurrentID(ctx), &CallOpts{
+				Inputs:    callInput,
+				ParentVal: nil,
+			})
+		},
+	)
+
+	return nil
+}
+
+func (obj *ModuleObject) fields() (fields []dagql.Field[*ModuleObject]) {
+	objDef := obj.TypeDef
+	mod := obj.Module
+	for _, field := range obj.TypeDef.Fields {
+		field := field
+		log.Println("!!! INSTALLING FIELD", objDef.Name, field.Name)
+		fields = append(fields, dagql.Field[*ModuleObject]{
+			Spec: dagql.FieldSpec{
+				Name:        field.Name,
+				Description: field.Description,
+				Type:        field.TypeDef.ToTyped(),
+				Pure:        true,
+			},
+			Func: func(ctx context.Context, obj dagql.Instance[*ModuleObject], _ map[string]dagql.Typed) (dagql.Typed, error) {
+				modType, ok, err := mod.ModTypeFor(ctx, field.TypeDef, true)
+				if err != nil {
+					return nil, fmt.Errorf("failed to get mod type for field %q: %w", field.Name, err)
+				}
+				if !ok {
+					return nil, fmt.Errorf("could not find mod type for field %q", field.Name)
+				}
+				fieldVal, found := obj.Self.Fields[field.OriginalName]
+				if !found {
+					return nil, fmt.Errorf("field %q not found on object %q", field.Name, obj.Class.TypeName())
+				}
+				return modType.ConvertFromSDKResult(ctx, fieldVal)
+			},
+		})
+	}
+	return
+}
+
+func (obj *ModuleObject) functions(ctx context.Context) (fields []dagql.Field[*ModuleObject], err error) {
+	objDef := obj.TypeDef
+	mod := obj.Module
+	for _, fun := range obj.TypeDef.Functions {
+		fun := fun
+		log.Println("!!! INSTALLING FUNCTION", objDef.Name, fun.Name)
+		modFun, err := newModFunction(
+			ctx,
+			mod.Query,
+			mod,
+			mod.InstanceID,
+			objDef,
+			mod.Runtime,
+			fun,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create function %q: %w", fun.Name, err)
+		}
+		spec, err := fun.FieldSpec()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get field spec: %w", err)
+		}
+		fields = append(fields, dagql.Field[*ModuleObject]{
+			Spec: spec,
+			Func: func(ctx context.Context, obj dagql.Instance[*ModuleObject], args map[string]dagql.Typed) (dagql.Typed, error) {
+				opts := &CallOpts{
+					ParentVal: obj.Self.Fields,
+					Cache:     false, // TODO
+					// Pipeline:  _, // TODO
+					SkipSelfSchema: false, // TODO?
+				}
+				for name, val := range args {
+					opts.Inputs = append(opts.Inputs, CallInput{
+						Name:  name,
+						Value: val,
+					})
+				}
+				// NB: ensure deterministic order
+				sort.Slice(opts.Inputs, func(i, j int) bool {
+					return opts.Inputs[i].Name < opts.Inputs[j].Name
+				})
+				return modFun.Call(ctx, dagql.CurrentID(ctx), opts)
+			},
+		})
+	}
+	return
+}
+
+func (obj *ModuleObject) Description() string {
+	return formatGqlDescription(obj.TypeDef.Description)
 }
 
 func (mod *Module) TypeDefs(ctx context.Context) ([]*TypeDef, error) {
@@ -186,7 +381,7 @@ func (mod *Module) ModTypeFor(ctx context.Context, typeDef *TypeDef, checkDirect
 			if obj.AsObject.Value.Name == typeDef.AsObject.Value.Name {
 				log.Println("!!! USERMOD FOUND OBJECT", typeDef.AsObject.Value.Name)
 				modType = &ModuleObjectType{
-					typeDef: obj,
+					typeDef: obj.AsObject.Value,
 					mod:     mod,
 				}
 				found = true
@@ -433,9 +628,9 @@ func (mod Module) Clone() *Module {
 	for i, def := range mod.ObjectDefs {
 		cp.ObjectDefs[i] = def.Clone()
 	}
-	cp.Interfaces = make([]*TypeDef, len(mod.Interfaces))
-	for i, def := range mod.Interfaces {
-		cp.Interfaces[i] = def.Clone()
+	cp.InterfaceDefs = make([]*TypeDef, len(mod.InterfaceDefs))
+	for i, def := range mod.InterfaceDefs {
+		cp.InterfaceDefs[i] = def.Clone()
 	}
 	return &cp
 }
@@ -458,7 +653,7 @@ func (mod *Module) WithObject(ctx context.Context, def *TypeDef) (*Module, error
 
 func (mod *Module) WithInterface(ctx context.Context, def *TypeDef) (*Module, error) {
 	mod = mod.Clone()
-	if def.AsInterface == nil {
+	if !def.AsInterface.Valid {
 		return nil, fmt.Errorf("expected interface type def, got %s: %+v", def.Kind, def)
 	}
 	if err := mod.validateTypeDef(ctx, def); err != nil {

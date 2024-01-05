@@ -310,7 +310,10 @@ func (e *BuildkitController) Session(stream controlapi.Control_SessionServer) (r
 	if errors.Is(err, context.Canceled) {
 		err = nil
 	}
-	return fmt.Errorf("wait: %w", err)
+	if err != nil {
+		return fmt.Errorf("wait: %w", err)
+	}
+	return nil
 }
 
 // Solve is currently only used for triggering upstream remote cache exports on a dagger server

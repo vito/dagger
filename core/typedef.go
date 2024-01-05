@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"path/filepath"
 	"strings"
 
@@ -32,18 +31,18 @@ type Function struct {
 	OriginalName string
 }
 
-func (*Function) Type() *ast.Type {
-	return &ast.Type{
-		NamedType: "Function",
-		NonNull:   true,
-	}
-}
-
 func NewFunction(name string, returnType *TypeDef) *Function {
 	return &Function{
 		Name:         strcase.ToLowerCamel(name),
 		ReturnType:   returnType,
 		OriginalName: name,
+	}
+}
+
+func (*Function) Type() *ast.Type {
+	return &ast.Type{
+		NamedType: "Function",
+		NonNull:   true,
 	}
 }
 
@@ -57,6 +56,39 @@ func (fn Function) Clone() *Function {
 		cp.ReturnType = fn.ReturnType.Clone()
 	}
 	return &cp
+}
+
+func (fn *Function) FieldSpec() (dagql.FieldSpec, error) {
+	spec := dagql.FieldSpec{
+		Name:        fn.Name,
+		Description: formatGqlDescription(fn.Description),
+		Type:        fn.ReturnType.ToTyped(),
+		Pure:        false, // TODO
+	}
+	for _, arg := range fn.Args {
+		input := arg.TypeDef.ToInput()
+		var defaultVal dagql.Input
+		if arg.DefaultValue != nil {
+			var val any
+			dec := json.NewDecoder(bytes.NewReader(arg.DefaultValue.Bytes()))
+			dec.UseNumber()
+			if err := dec.Decode(&val); err != nil {
+				return spec, fmt.Errorf("failed to decode default value for arg %q: %w", arg.Name, err)
+			}
+			var err error
+			defaultVal, err = input.Decoder().DecodeInput(val)
+			if err != nil {
+				return spec, fmt.Errorf("failed to decode default value for arg %q: %w", arg.Name, err)
+			}
+		}
+		spec.Args = append(spec.Args, dagql.InputSpec{
+			Name:        arg.Name,
+			Description: formatGqlDescription(arg.Description),
+			Type:        input,
+			Default:     defaultVal,
+		})
+	}
+	return spec, nil
 }
 
 func (fn *Function) WithDescription(desc string) *Function {
@@ -152,14 +184,21 @@ func (*FunctionArg) Type() *ast.Type {
 }
 
 type DynamicID struct {
-	Object *ObjectTypeDef
-	ID     *idproto.ID
+	objDef *ObjectTypeDef
+	id     *idproto.ID
+}
+
+var _ dagql.IDable = DynamicID{}
+
+// ID returns the ID of the value.
+func (i DynamicID) ID() *idproto.ID {
+	return i.id
 }
 
 var _ dagql.ScalarType = DynamicID{}
 
 func (d DynamicID) TypeName() string {
-	return fmt.Sprintf("%sID", d.Object.Name)
+	return fmt.Sprintf("%sID", d.objDef.Name)
 }
 
 var _ dagql.InputDecoder = DynamicID{}
@@ -169,9 +208,9 @@ func (d DynamicID) DecodeInput(val any) (dagql.Input, error) {
 	case string:
 		var idp idproto.ID
 		if err := idp.Decode(x); err != nil {
-			return nil, fmt.Errorf("decode %q ID: %w", d.Object.Name, err)
+			return nil, fmt.Errorf("decode %q ID: %w", d.objDef.Name, err)
 		}
-		d.ID = &idp
+		d.id = &idp
 		return d, nil
 	default:
 		return nil, fmt.Errorf("expected string, got %T", val)
@@ -183,7 +222,7 @@ var _ dagql.Input = DynamicID{}
 func (d DynamicID) ToLiteral() *idproto.Literal {
 	return &idproto.Literal{
 		Value: &idproto.Literal_Id{
-			Id: d.ID,
+			Id: d.id,
 		},
 	}
 }
@@ -197,32 +236,16 @@ func (d DynamicID) Type() *ast.Type {
 
 func (d DynamicID) Decoder() dagql.InputDecoder {
 	return DynamicID{
-		Object: d.Object,
+		objDef: d.objDef,
 	}
 }
 
 func (i DynamicID) MarshalJSON() ([]byte, error) {
-	if i.ID == nil {
-		panic("MARSHAL NULL DYNAMICID")
-	}
-	log.Println("!!! MARSHALING DYNAMICID", i.ID.Display())
-	enc, err := i.ID.Encode()
+	enc, err := i.id.Encode()
 	if err != nil {
 		return nil, err
 	}
 	return json.Marshal(enc)
-}
-
-type DynamicObject struct {
-	Object ObjectTypeDef
-	Fields map[string]any
-}
-
-func (obj *DynamicObject) Type() *ast.Type {
-	return &ast.Type{
-		NamedType: obj.Object.Name,
-		NonNull:   true,
-	}
 }
 
 func (arg FunctionArg) Clone() *FunctionArg {
@@ -261,7 +284,7 @@ func (t TypeDef) ToTyped() dagql.Typed {
 	case TypeDefKindList:
 		typed = dagql.DynamicArrayOutput{Elem: t.AsList.Value.ElementTypeDef.ToTyped()}
 	case TypeDefKindObject:
-		typed = &DynamicObject{Object: *t.AsObject.Value}
+		typed = &ModuleObject{TypeDef: t.AsObject.Value}
 	case TypeDefKindVoid:
 		typed = Void{}
 	default:
@@ -285,7 +308,7 @@ func (t TypeDef) ToInput() dagql.Input {
 	case TypeDefKindList:
 		typed = dagql.DynamicArrayInput{Elem: t.AsList.Value.ElementTypeDef.ToInput()}
 	case TypeDefKindObject:
-		typed = DynamicID{Object: *t.AsObject.Value}
+		typed = DynamicID{objDef: t.AsObject.Value}
 	case TypeDefKindVoid:
 		typed = Void{}
 	default:
@@ -318,7 +341,7 @@ func (typeDef TypeDef) Clone() *TypeDef {
 	if typeDef.AsObject.Valid {
 		cp.AsObject.Value = typeDef.AsObject.Value.Clone()
 	}
-	if typeDef.AsInterface != nil {
+	if typeDef.AsInterface.Valid {
 		cp.AsInterface.Value = typeDef.AsInterface.Value.Clone()
 	}
 	return &cp
@@ -346,7 +369,7 @@ func (typeDef *TypeDef) WithObject(name, desc string) *TypeDef {
 
 func (typeDef *TypeDef) WithInterface(name, desc string) *TypeDef {
 	typeDef = typeDef.WithKind(TypeDefKindInterface)
-	typeDef.AsInterface = NewInterfaceTypeDef(name, desc)
+	typeDef.AsInterface = dagql.NonNull(NewInterfaceTypeDef(name, desc))
 	return typeDef
 }
 
@@ -375,11 +398,11 @@ func (typeDef *TypeDef) WithFunction(fn *Function) (*TypeDef, error) {
 	fn = fn.Clone()
 	switch typeDef.Kind {
 	case TypeDefKindObject:
-		fn.ParentOriginalName = typeDef.AsObject.OriginalName
+		fn.ParentOriginalName = typeDef.AsObject.Value.OriginalName
 		typeDef.AsObject.Value.Functions = append(typeDef.AsObject.Value.Functions, fn)
 		return typeDef, nil
 	case TypeDefKindInterface:
-		fn.ParentOriginalName = typeDef.AsInterface.OriginalName
+		fn.ParentOriginalName = typeDef.AsInterface.Value.OriginalName
 		typeDef.AsInterface.Value.Functions = append(typeDef.AsInterface.Value.Functions, fn)
 		return typeDef, nil
 	default:
@@ -415,15 +438,15 @@ func (typeDef *TypeDef) IsSubtypeOf(otherDef *TypeDef) bool {
 		if otherDef.Kind != TypeDefKindList {
 			return false
 		}
-		return typeDef.AsList.ElementTypeDef.IsSubtypeOf(otherDef.AsList.ElementTypeDef)
+		return typeDef.AsList.Value.ElementTypeDef.IsSubtypeOf(otherDef.AsList.Value.ElementTypeDef)
 	case TypeDefKindObject:
 		switch otherDef.Kind {
 		case TypeDefKindObject:
 			// For now, assume that if the objects have the same name, they are the same object. This should be a safe assumption
 			// within the context of a single, already-namedspace schema, but not safe if objects are compared across schemas
-			return typeDef.AsObject.Name == otherDef.AsObject.Name
+			return typeDef.AsObject.Value.Name == otherDef.AsObject.Value.Name
 		case TypeDefKindInterface:
-			return typeDef.AsObject.IsSubtypeOf(otherDef.AsInterface)
+			return typeDef.AsObject.Value.IsSubtypeOf(otherDef.AsInterface.Value)
 		default:
 			return false
 		}
@@ -431,7 +454,7 @@ func (typeDef *TypeDef) IsSubtypeOf(otherDef *TypeDef) bool {
 		if otherDef.Kind != TypeDefKindInterface {
 			return false
 		}
-		return typeDef.AsInterface.IsSubtypeOf(otherDef.AsInterface)
+		return typeDef.AsInterface.Value.IsSubtypeOf(otherDef.AsInterface.Value)
 	default:
 		return false
 	}
@@ -576,17 +599,17 @@ func (typeDef FieldTypeDef) Clone() *FieldTypeDef {
 
 type InterfaceTypeDef struct {
 	// Name is the standardized name of the interface (CamelCase), as used for the interface in the graphql schema
-	Name        string      `json:"name"`
-	Description string      `json:"description"`
-	Functions   []*Function `json:"functions"`
+	Name        string      `field:"true"`
+	Description string      `field:"true"`
+	Functions   []*Function `field:"true"`
 	// SourceModuleName is currently only set when returning the TypeDef from the Objects field on Module
-	SourceModuleName string `json:"sourceModuleName"`
+	SourceModuleName string `field:"true"`
 
 	// Below are not in public API
 
 	// The original name of the interface as provided by the SDK that defined it, used
 	// when invoking the SDK so it doesn't need to think as hard about case conversions
-	OriginalName string `json:"originalName,omitempty"`
+	OriginalName string
 }
 
 func NewInterfaceTypeDef(name, description string) *InterfaceTypeDef {
@@ -672,7 +695,7 @@ var (
 	TypeDefKindBoolean   = TypeDefKinds.Register("BooleanKind")
 	TypeDefKindList      = TypeDefKinds.Register("ListKind")
 	TypeDefKindObject    = TypeDefKinds.Register("ObjectKind")
-	TypeDefKindInterface = TypeDefKinds.Register("ObjectKind")
+	TypeDefKindInterface = TypeDefKinds.Register("InterfaceKind")
 	TypeDefKindVoid      = TypeDefKinds.Register("VoidKind")
 )
 

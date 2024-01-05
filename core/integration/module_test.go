@@ -1742,7 +1742,7 @@ class Minimal:
 			require.JSONEq(t, `{"minimal":{"set":{"foo": "abc"}}}`, out)
 
 			_, err = modGen.With(daggerQuery(`{minimal{set(foo: "abc", bar: "xyz"){bar}}}`)).Stdout(ctx)
-			require.ErrorContains(t, err, `Cannot query field "bar"`)
+			require.ErrorContains(t, err, `Minimal has no such field: "bar"`)
 		})
 	}
 }
@@ -3597,6 +3597,10 @@ class Test:
 
 				_, err := ctr.With(daggerCall("foo")).Stdout(ctx)
 				require.Error(t, err)
+
+				require.NoError(t, c.Close())
+
+				t.Log(logs.String())
 				require.Contains(t, logs.String(), "too bad")
 			})
 		}

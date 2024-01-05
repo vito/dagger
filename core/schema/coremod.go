@@ -100,7 +100,7 @@ func (m *CoreMod) ModTypeFor(ctx context.Context, typeDef *core.TypeDef, checkDi
 }
 
 func (m *CoreMod) TypeDefs(ctx context.Context) ([]*core.TypeDef, error) {
-	introspectionJSON, err := schemaIntrospectionJSON(ctx, *m.compiledSchema.Compiled)
+	introspectionJSON, err := schemaIntrospectionJSON(ctx, m.dag)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get schema introspection JSON: %w", err)
 	}
@@ -229,9 +229,9 @@ func (obj *CoreModObject) TypeDef() *core.TypeDef {
 	// this out with the functions rather than just name
 	return &core.TypeDef{
 		Kind: core.TypeDefKindObject,
-		AsObject: &core.ObjectTypeDef{
+		AsObject: dagql.NonNull(&core.ObjectTypeDef{
 			Name: obj.name,
-		},
+		}),
 	}
 }
 

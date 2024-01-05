@@ -21,7 +21,7 @@ type ModuleFunction struct {
 	root    *Query
 	mod     *Module
 	modID   *idproto.ID
-	obj     *ModuleObject // may be nil for special functions like the module definition function call
+	objDef  *ObjectTypeDef // may be nil for special functions like the module definition function call
 	runtime *Container
 
 	metadata   *Function
@@ -39,7 +39,7 @@ func newModFunction(
 	root *Query,
 	mod *Module,
 	modID *idproto.ID,
-	obj *ModuleObject,
+	objDef *ObjectTypeDef,
 	runtime *Container,
 	metadata *Function,
 ) (*ModuleFunction, error) {
@@ -70,7 +70,7 @@ func newModFunction(
 		root:       root,
 		mod:        mod,
 		modID:      modID,
-		obj:        obj,
+		objDef:     objDef,
 		runtime:    runtime,
 		metadata:   metadata,
 		returnType: returnType,
@@ -95,8 +95,8 @@ func (fn *ModuleFunction) Call(ctx context.Context, caller *idproto.ID, opts *Ca
 	mod := fn.mod
 
 	lg := bklog.G(ctx).WithField("module", mod.Name()).WithField("function", fn.metadata.Name)
-	if fn.obj != nil {
-		lg = lg.WithField("object", fn.obj.typeDef.AsObject.Value.Name)
+	if fn.objDef != nil {
+		lg = lg.WithField("object", fn.objDef.Name)
 	}
 	ctx = bklog.WithLogger(ctx, lg)
 
@@ -197,8 +197,8 @@ func (fn *ModuleFunction) Call(ctx context.Context, caller *idproto.ID, opts *Ca
 		Parent:    parentJSON,
 		InputArgs: callInputs,
 	}
-	if fn.obj != nil {
-		callMeta.ParentName = fn.obj.typeDef.AsObject.Value.OriginalName
+	if fn.objDef != nil {
+		callMeta.ParentName = fn.objDef.OriginalName
 	}
 
 	var deps *ModDeps
@@ -358,18 +358,18 @@ func (fn *ModuleFunction) linkDependencyBlobs(ctx context.Context, cacheResult *
 		// no dependency blobs to handle
 		return nil
 
-	case TypeDefKindInterface:
-		runtimeVal, ok := value.(*interfaceRuntimeValue)
-		if !ok {
-			return fmt.Errorf("expected interface runtime val, got %T", value)
-		}
+	// case TypeDefKindInterface:
+	// runtimeVal, ok := value.(*interfaceRuntimeValue)
+	// if !ok {
+	// 	return fmt.Errorf("expected interface runtime val, got %T", value)
+	// }
 
-		// TODO: handle core types too
-		userModObj, ok := runtimeVal.UnderlyingType.(*UserModObject)
-		if !ok {
-			return fmt.Errorf("expected user mod object, got %T", runtimeVal.UnderlyingType)
-		}
-		return fn.linkDependencyBlobs(ctx, cacheResult, runtimeVal.Value, userModObj.typeDef)
+	// TODO: handle core types too
+	// userModObj, ok := runtimeVal.UnderlyingType.(*ModuleObject2)
+	// if !ok {
+	// 	return fmt.Errorf("expected user mod object, got %T", runtimeVal.UnderlyingType)
+	// }
+	// return fn.linkDependencyBlobs(ctx, cacheResult, runtimeVal.Value, userModObj.typeDef)
 
 	default:
 		return fmt.Errorf("unhandled type def kind %q", typeDef.Kind)

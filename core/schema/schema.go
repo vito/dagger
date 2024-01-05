@@ -292,11 +292,11 @@ func typeDefToASTType(typeDef *core.TypeDef, isInput bool) (*ast.Type, error) {
 		}
 		return &ast.Type{NamedType: objName, NonNull: !typeDef.Optional}, nil
 	case core.TypeDefKindInterface:
-		if typeDef.AsInterface == nil {
+		if !typeDef.AsInterface.Valid {
 			return nil, fmt.Errorf("expected interface type def, got nil")
 		}
 		ifaceTypeDef := typeDef.AsInterface
-		ifaceName := gqlObjectName(ifaceTypeDef.Name)
+		ifaceName := gqlObjectName(ifaceTypeDef.Value.Name)
 		if isInput {
 			// idable types use their ID scalar as the input value
 			return &ast.Type{NamedType: ifaceName + "ID", NonNull: !typeDef.Optional}, nil
