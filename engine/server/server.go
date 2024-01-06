@@ -103,18 +103,18 @@ func NewDaggerServer(
 		defer func() {
 			// drain channel on error
 			for x := range statusCh {
-				bklog.G(ctx).Debug("!!! XXX BKFORWARD DRAINING", x)
+				log.Println("!!! XXX BKFORWARD DRAINING", x)
 			}
 		}()
 		for {
 			status, ok := <-statusCh
 			if !ok {
-				bklog.G(ctx).Debug("!!! XXX BKFORWARD DONE")
+				log.Println("!!! XXX BKFORWARD DONE")
 				return
 			}
 			prog := buildkit.BK2Progrock(status)
 			err := srv.recorder.Record(prog)
-			bklog.G(ctx).Debug("!!! XXX BKFORWARD RECORDED", err, prog)
+			log.Println("!!! XXX BKFORWARD RECORDED", err, prog)
 			if err != nil {
 				bklog.G(ctx).WithError(err).Error("failed to record status update")
 				return
