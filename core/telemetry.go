@@ -21,9 +21,9 @@ func TelemetryFunc(ctx context.Context, self dagql.Object, id *idproto.ID, next 
 
 		rec := progrock.FromContext(ctx)
 
-		dig, resolverErr := id.Canonical().Digest()
-		if resolverErr != nil {
-			slog.Warn("failed to digest id", "id", id.Display(), "err", resolverErr)
+		dig, err := id.Digest()
+		if err != nil {
+			slog.Warn("failed to digest id", "id", id.Display(), "err", err)
 			return next(ctx)
 		}
 		payload, resolverErr := anypb.New(id)
@@ -75,7 +75,15 @@ func TelemetryFunc(ctx context.Context, self dagql.Object, id *idproto.ID, next 
 
 func isIntrospection(id *idproto.ID) bool {
 	if id.Parent == nil {
-		return id.Field == "__schema"
+		switch id.Field {
+		case "__schema",
+			"currentTypeDefs",
+			"currentFunctionCall",
+			"currentModule":
+			return true
+		default:
+			return false
+		}
 	} else {
 		return isIntrospection(id.Parent)
 	}
