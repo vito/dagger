@@ -89,6 +89,10 @@ func (*Container) Type() *ast.Type {
 	}
 }
 
+func (*Container) Description() string {
+	return "An OCI-compatible container, also known as a Docker container."
+}
+
 func (container *Container) PBDefinitions() ([]*pb.Definition, error) {
 	var defs []*pb.Definition
 	if container.FS != nil {
@@ -1760,12 +1764,16 @@ type ContainerExecOpts struct {
 }
 
 type BuildArg struct {
-	Name  string
-	Value string
+	Name  string `field:"true" doc:"The build argument name."`
+	Value string `field:"true" doc:"The build argument value."`
 }
 
 func (BuildArg) TypeName() string {
 	return "BuildArg"
+}
+
+func (BuildArg) Description() string {
+	return "Key value object that represents a build argument."
 }
 
 // OCI manifest annotation that specifies an image's tag
@@ -1843,6 +1851,10 @@ func (proto ImageLayerCompression) Type() *ast.Type {
 	}
 }
 
+func (proto ImageLayerCompression) Description() string {
+	return "Compression algorithm to use for image layers."
+}
+
 func (proto ImageLayerCompression) Decoder() dagql.InputDecoder {
 	return ImageLayerCompressions
 }
@@ -1867,6 +1879,10 @@ func (proto ImageMediaTypes) Type() *ast.Type {
 		NamedType: "ImageMediaTypes",
 		NonNull:   true,
 	}
+}
+
+func (proto ImageMediaTypes) Description() string {
+	return "Mediatypes to use in published or exported image metadata."
 }
 
 func (proto ImageMediaTypes) Decoder() dagql.InputDecoder {

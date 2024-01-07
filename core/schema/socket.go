@@ -13,17 +13,11 @@ type socketSchema struct {
 
 var _ SchemaResolvers = &socketSchema{}
 
-func (s *socketSchema) Name() string {
-	return "socket"
-}
-
-func (s *socketSchema) Schema() string {
-	return Socket
-}
-
 func (s *socketSchema) Install() {
 	dagql.Fields[*core.Query]{
-		dagql.Func("socket", s.socket),
+		dagql.Func("socket", s.socket).
+			Doc("Loads a socket by its ID.").
+			Deprecated("Use `loadSocketFromID` instead."),
 	}.Install(s.srv)
 
 	dagql.Fields[*core.Socket]{}.Install(s.srv)

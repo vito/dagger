@@ -26,82 +26,424 @@ type containerSchema struct {
 
 var _ SchemaResolvers = &containerSchema{}
 
-func (s *containerSchema) Name() string {
-	return "container"
-}
-
 func (s *containerSchema) Install() {
 	dagql.Fields[*core.Query]{
-		dagql.Func("container", s.container),
+		dagql.Func("container", s.container).
+			Doc(`Creates a scratch container.`,
+				`Optional platform argument initializes new containers to execute and
+				publish as that platform. Platform defaults to that of the builder's
+				host.`).
+			ArgDoc("platform", `Platform to initialize the container with.`),
 	}.Install(s.srv)
 
 	dagql.Fields[*core.Container]{
-		Syncer[*core.Container](),
-		dagql.Func("from", s.from),
-		dagql.Func("build", s.build),
-		dagql.Func("rootfs", s.rootfs),
-		dagql.Func("pipeline", s.pipeline),
-		dagql.Func("withRootfs", s.withRootfs),
-		dagql.Func("file", s.file),
-		dagql.Func("directory", s.directory),
-		dagql.Func("user", s.user),
-		dagql.Func("withUser", s.withUser),
-		dagql.Func("withoutUser", s.withoutUser),
-		dagql.Func("workdir", s.workdir),
-		dagql.Func("withWorkdir", s.withWorkdir),
-		dagql.Func("withoutWorkdir", s.withoutWorkdir),
-		dagql.Func("envVariables", s.envVariables),
-		dagql.Func("envVariable", s.envVariable),
-		dagql.Func("withEnvVariable", s.withEnvVariable),
-		dagql.Func("withSecretVariable", s.withSecretVariable),
-		dagql.Func("withoutEnvVariable", s.withoutEnvVariable),
-		dagql.Func("withLabel", s.withLabel),
-		dagql.Func("label", s.label),
-		dagql.Func("labels", s.labels),
-		dagql.Func("withoutLabel", s.withoutLabel),
-		dagql.Func("entrypoint", s.entrypoint),
-		dagql.Func("withEntrypoint", s.withEntrypoint),
-		dagql.Func("withoutEntrypoint", s.withoutEntrypoint),
-		dagql.Func("defaultArgs", s.defaultArgs),
-		dagql.Func("withDefaultArgs", s.withDefaultArgs),
-		dagql.Func("withoutDefaultArgs", s.withoutDefaultArgs),
-		dagql.Func("mounts", s.mounts),
-		dagql.Func("withMountedDirectory", s.withMountedDirectory),
-		dagql.Func("withMountedFile", s.withMountedFile),
-		dagql.Func("withMountedTemp", s.withMountedTemp),
-		dagql.Func("withMountedCache", s.withMountedCache),
-		dagql.Func("withMountedSecret", s.withMountedSecret),
-		dagql.Func("withUnixSocket", s.withUnixSocket),
-		dagql.Func("withoutUnixSocket", s.withoutUnixSocket),
-		dagql.Func("withoutMount", s.withoutMount),
-		dagql.Func("withFile", s.withFile),
-		dagql.Func("withNewFile", s.withNewFile),
-		dagql.Func("withDirectory", s.withDirectory),
-		dagql.Func("withExec", s.withExec),
-		dagql.Func("stdout", s.stdout),
-		dagql.Func("stderr", s.stderr),
-		dagql.Func("publish", s.publish).Impure(),
-		dagql.Func("platform", s.platform),
-		dagql.Func("export", s.export),
-		dagql.Func("asTarball", s.asTarball),
-		dagql.Func("import", s.import_),
-		dagql.Func("withRegistryAuth", s.withRegistryAuth),
-		dagql.Func("withoutRegistryAuth", s.withoutRegistryAuth),
-		dagql.Func("imageRef", s.imageRef),
-		dagql.Func("withExposedPort", s.withExposedPort),
-		dagql.Func("withoutExposedPort", s.withoutExposedPort),
-		dagql.Func("exposedPorts", s.exposedPorts),
-		dagql.Func("withServiceBinding", s.withServiceBinding),
-		dagql.Func("withFocus", s.withFocus),
-		dagql.Func("withoutFocus", s.withoutFocus),
-		dagql.NodeFunc("shellEndpoint", s.shellEndpoint).Impure(),
-		dagql.Func("experimentalWithGPU", s.withGPU),
-		dagql.Func("experimentalWithAllGPUs", s.withAllGPUs),
+		Syncer[*core.Container]().
+			Doc(`Forces evaluation of the pipeline in the engine.`,
+				`It doesn't run the default command if no exec has been set.`),
+
+		dagql.Func("pipeline", s.pipeline).
+			Doc(`Creates a named sub-pipeline.`).
+			ArgDoc("name", "Name of the sub-pipeline.").
+			ArgDoc("description", "Description of the sub-pipeline.").
+			ArgDoc("labels", "Labels to apply to the sub-pipeline."),
+
+		dagql.Func("from", s.from).
+			Doc(`Initializes this container from a pulled base image.`).
+			ArgDoc("address",
+				`Image's address from its registry.`,
+				`Formatted as [host]/[user]/[repo]:[tag] (e.g., "docker.io/dagger/dagger:main").`),
+
+		dagql.Func("build", s.build).
+			Doc(`Initializes this container from a Dockerfile build.`).
+			ArgDoc("context", "Directory context used by the Dockerfile.").
+			ArgDoc("dockerfile", "Path to the Dockerfile to use.").
+			ArgDoc("buildArgs", "Additional build arguments.").
+			ArgDoc("target", "Target build stage to build.").
+			ArgDoc("secrets",
+				`Secrets to pass to the build.`,
+				`They will be mounted at /run/secrets/[secret-name] in the build container`,
+				`They can be accessed in the Dockerfile using the "secret" mount type
+				and mount path /run/secrets/[secret-name], e.g. RUN
+				--mount=type=secret,id=my-secret curl http://example.com?token=$(cat
+				/run/secrets/my-secret)`),
+
+		dagql.Func("rootfs", s.rootfs).
+			Doc(`Retrieves this container's root filesystem. Mounts are not included.`),
+
+		dagql.Func("withRootfs", s.withRootfs).
+			Doc(`Retrieves the container with the given directory mounted to /.`).
+			ArgDoc("directory", "Directory to mount."),
+
+		dagql.Func("directory", s.directory).
+			Doc(`Retrieves a directory at the given path.`,
+				`Mounts are included.`).
+			ArgDoc("path", `The path of the directory to retrieve (e.g., "./src").`),
+
+		dagql.Func("file", s.file).
+			Doc(`Retrieves a file at the given path.`, `Mounts are included.`).
+			ArgDoc("path", `The path of the file to retrieve (e.g., "./README.md").`),
+
+		dagql.Func("user", s.user).
+			Doc("Retrieves the user to be set for all commands."),
+
+		dagql.Func("withUser", s.withUser).
+			Doc(`Retrieves this container with a different command user.`).
+			ArgDoc("name", `The user to set (e.g., "root").`),
+
+		dagql.Func("withoutUser", s.withoutUser).
+			Doc(`Retrieves this container with an unset command user.`,
+				`Should default to root.`),
+
+		dagql.Func("workdir", s.workdir).
+			Doc("Retrieves the working directory for all commands."),
+
+		dagql.Func("withWorkdir", s.withWorkdir).
+			Doc(`Retrieves this container with a different working directory.`).
+			ArgDoc("path", `The path to set as the working directory (e.g., "/app").`),
+
+		dagql.Func("withoutWorkdir", s.withoutWorkdir).
+			Doc(`Retrieves this container with an unset working directory.`,
+				`Should default to "/".`),
+
+		dagql.Func("envVariables", s.envVariables).
+			Doc(`Retrieves the list of environment variables passed to commands.`),
+
+		dagql.Func("envVariable", s.envVariable).
+			Doc(`Retrieves the value of the specified environment variable.`).
+			ArgDoc("name", `The name of the environment variable to retrieve (e.g., "PATH").`),
+
+		dagql.Func("withEnvVariable", s.withEnvVariable).
+			Doc(`Retrieves this container plus the given environment variable.`).
+			ArgDoc("name", `The name of the environment variable (e.g., "HOST").`).
+			ArgDoc("value", `The value of the environment variable. (e.g., "localhost").`).
+			ArgDoc("expand",
+				`Replace ${VAR} or $VAR in the value according to the current
+				environment variables defined in the container (e.g.,
+				"/opt/bin:$PATH").`),
+
+		dagql.Func("withSecretVariable", s.withSecretVariable).
+			Doc(`Retrieves this container plus an env variable containing the given secret.`).
+			ArgDoc("name", `The name of the secret variable (e.g., "API_SECRET").`).
+			ArgDoc("secret", `The identifier of the secret value.`),
+
+		dagql.Func("withoutEnvVariable", s.withoutEnvVariable).
+			Doc(`Retrieves this container minus the given environment variable.`).
+			ArgDoc("name", `The name of the environment variable (e.g., "HOST").`),
+
+		dagql.Func("withLabel", s.withLabel).
+			Doc(`Retrieves this container plus the given label.`).
+			ArgDoc("name", `The name of the label (e.g., "org.opencontainers.artifact.created").`).
+			ArgDoc("value", `The value of the label (e.g., "2023-01-01T00:00:00Z").`),
+
+		dagql.Func("label", s.label).
+			Doc(`Retrieves the value of the specified label.`).
+			ArgDoc("name", `The name of the label (e.g., "org.opencontainers.artifact.created").`),
+
+		dagql.Func("labels", s.labels).
+			Doc(`Retrieves the list of labels passed to container.`),
+
+		dagql.Func("withoutLabel", s.withoutLabel).
+			Doc(`Retrieves this container minus the given environment label.`).
+			ArgDoc("name", `The name of the label to remove (e.g., "org.opencontainers.artifact.created").`),
+
+		dagql.Func("entrypoint", s.entrypoint).
+			Doc(`Retrieves entrypoint to be prepended to the arguments of all commands.`),
+
+		dagql.Func("withEntrypoint", s.withEntrypoint).
+			Doc(`Retrieves this container but with a different command entrypoint.`).
+			ArgDoc("args", `Entrypoint to use for future executions (e.g., ["go", "run"]).`).
+			ArgDoc("keepDefaultArgs", `Don't remove the default arguments when setting the entrypoint.`),
+
+		dagql.Func("withoutEntrypoint", s.withoutEntrypoint).
+			Doc(`Retrieves this container with an unset command entrypoint.`).
+			ArgDoc("keepDefaultArgs", `Don't remove the default arguments when unsetting the entrypoint.`),
+
+		dagql.Func("defaultArgs", s.defaultArgs).
+			Doc(`Retrieves default arguments for future commands.`),
+
+		dagql.Func("withDefaultArgs", s.withDefaultArgs).
+			Doc(`Configures default arguments for future commands.`).
+			ArgDoc("args", `Arguments to prepend to future executions (e.g., ["-v", "--no-cache"]).`),
+
+		dagql.Func("withoutDefaultArgs", s.withoutDefaultArgs).
+			Doc(`Retrieves this container with unset default arguments for future commands.`),
+
+		dagql.Func("mounts", s.mounts).
+			Doc(`Retrieves the list of paths where a directory is mounted.`),
+
+		dagql.Func("withMountedDirectory", s.withMountedDirectory).
+			Doc(`Retrieves this container plus a directory mounted at the given path.`).
+			ArgDoc("path", `Location of the mounted directory (e.g., "/mnt/directory").`).
+			ArgDoc("source", `Identifier of the mounted directory.`).
+			ArgDoc("owner",
+				`A user:group to set for the mounted directory and its contents.`,
+				`The user and group can either be an ID (1000:1000) or a name (foo:bar).`,
+				`If the group is omitted, it defaults to the same as the user.`),
+
+		dagql.Func("withMountedFile", s.withMountedFile).
+			Doc(`Retrieves this container plus a file mounted at the given path.`).
+			ArgDoc("path", `Location of the mounted file (e.g., "/tmp/file.txt").`).
+			ArgDoc("source", `Identifier of the mounted file.`).
+			ArgDoc("owner",
+				`A user or user:group to set for the mounted file.`,
+				`The user and group can either be an ID (1000:1000) or a name (foo:bar).`,
+				`If the group is omitted, it defaults to the same as the user.`),
+
+		dagql.Func("withMountedTemp", s.withMountedTemp).
+			Doc(`Retrieves this container plus a temporary directory mounted at the given path.`).
+			ArgDoc("path", `Location of the temporary directory (e.g., "/tmp/temp_dir").`),
+
+		dagql.Func("withMountedCache", s.withMountedCache).
+			Doc(`Retrieves this container plus a cache volume mounted at the given path.`).
+			ArgDoc("path", `Location of the cache directory (e.g., "/cache/node_modules").`).
+			ArgDoc("cache", `Identifier of the cache volume to mount.`).
+			ArgDoc("source", `Identifier of the directory to use as the cache volume's root.`).
+			ArgDoc("sharing", `Sharing mode of the cache volume.`).
+			ArgDoc("owner",
+				`A user:group to set for the mounted cache directory.`,
+				`Note that this changes the ownership of the specified mount along with
+				the initial filesystem provided by source (if any). It does not have
+				any effect if/when the cache has already been created.`,
+				`The user and group can either be an ID (1000:1000) or a name (foo:bar).`,
+				`If the group is omitted, it defaults to the same as the user.`),
+
+		dagql.Func("withMountedSecret", s.withMountedSecret).
+			Doc(`Retrieves this container plus a secret mounted into a file at the given path.`).
+			ArgDoc("path", `Location of the secret file (e.g., "/tmp/secret.txt").`).
+			ArgDoc("source", `Identifier of the secret to mount.`).
+			ArgDoc("owner",
+				`A user:group to set for the mounted secret.`,
+				`The user and group can either be an ID (1000:1000) or a name (foo:bar).`,
+				`If the group is omitted, it defaults to the same as the user.`).
+			ArgDoc("mode", `Permission given to the mounted secret (e.g., 0600).`,
+				`This option requires an owner to be set to be active.`),
+
+		dagql.Func("withUnixSocket", s.withUnixSocket).
+			Doc(`Retrieves this container plus a socket forwarded to the given Unix socket path.`).
+			ArgDoc("path", `Location of the forwarded Unix socket (e.g., "/tmp/socket").`).
+			ArgDoc("source", `Identifier of the socket to forward.`).
+			ArgDoc("owner",
+				`A user:group to set for the mounted socket.`,
+				`The user and group can either be an ID (1000:1000) or a name (foo:bar).`,
+				`If the group is omitted, it defaults to the same as the user.`),
+
+		dagql.Func("withoutUnixSocket", s.withoutUnixSocket).
+			Doc(`Retrieves this container with a previously added Unix socket removed.`).
+			ArgDoc("path", `Location of the socket to remove (e.g., "/tmp/socket").`),
+
+		dagql.Func("withoutMount", s.withoutMount).
+			Doc(`Retrieves this container after unmounting everything at the given path.`).
+			ArgDoc("path", `Location of the cache directory (e.g., "/cache/node_modules").`),
+
+		dagql.Func("withFile", s.withFile).
+			Doc(`Retrieves this container plus the contents of the given file copied to the given path.`).
+			ArgDoc("path", `Location of the copied file (e.g., "/tmp/file.txt").`).
+			ArgDoc("source", `Identifier of the file to copy.`).
+			ArgDoc("permissions", `Permission given to the copied file (e.g., 0600).`).
+			ArgDoc("owner",
+				`A user:group to set for the file.`,
+				`The user and group can either be an ID (1000:1000) or a name (foo:bar).`,
+				`If the group is omitted, it defaults to the same as the user.`),
+
+		dagql.Func("withNewFile", s.withNewFile).
+			Doc(`Retrieves this container plus a new file written at the given path.`).
+			ArgDoc("path", `Location of the written file (e.g., "/tmp/file.txt").`).
+			ArgDoc("contents", `Content of the file to write (e.g., "Hello world!").`).
+			ArgDoc("permissions", `Permission given to the written file (e.g., 0600).`).
+			ArgDoc("owner",
+				`A user:group to set for the file.`,
+				`The user and group can either be an ID (1000:1000) or a name (foo:bar).`,
+				`If the group is omitted, it defaults to the same as the user.`),
+
+		dagql.Func("withDirectory", s.withDirectory).
+			Doc(`Retrieves this container plus a directory written at the given path.`).
+			ArgDoc("path", `Location of the written directory (e.g., "/tmp/directory").`).
+			ArgDoc("directory", `Identifier of the directory to write`).
+			ArgDoc("exclude", `Patterns to exclude in the written directory (e.g. ["node_modules/**", ".gitignore", ".git/"]).`).
+			ArgDoc("include", `Patterns to include in the written directory (e.g. ["*.go", "go.mod", "go.sum"]).`).
+			ArgDoc("owner",
+				`A user:group to set for the directory and its contents.`,
+				`The user and group can either be an ID (1000:1000) or a name (foo:bar).`,
+				`If the group is omitted, it defaults to the same as the user.`),
+
+		dagql.Func("withExec", s.withExec).
+			Doc(`Retrieves this container after executing the specified command inside it.`).
+			ArgDoc("args",
+				`Command to run instead of the container's default command (e.g., ["run", "main.go"]).`,
+				`If empty, the container's default command is used.`).
+			ArgDoc("skipEntrypoint",
+				`If the container has an entrypoint, ignore it for args rather than using it to wrap them.`).
+			ArgDoc("stdin",
+				`Content to write to the command's standard input before closing (e.g.,
+				"Hello world").`).
+			ArgDoc("redirectStdout",
+				`Redirect the command's standard output to a file in the container (e.g.,
+			"/tmp/stdout").`).
+			ArgDoc("redirectStderr",
+				`Redirect the command's standard error to a file in the container (e.g.,
+			"/tmp/stderr").`).
+			ArgDoc("experimentalPrivilegedNesting",
+				`Provides dagger access to the executed command.`,
+				`Do not use this option unless you trust the command being executed;
+				the command being executed WILL BE GRANTED FULL ACCESS TO YOUR HOST
+				FILESYSTEM.`).
+			ArgDoc("insecureRootCapabilities",
+				`Execute the command with all root capabilities. This is similar to
+				running a command with "sudo" or executing "docker run" with the
+				"--privileged" flag. Containerization does not provide any security
+				guarantees when using this option. It should only be used when
+				absolutely necessary and only with trusted commands.`),
+
+		dagql.Func("stdout", s.stdout).
+			Doc(`The output stream of the last executed command.`,
+				`Will execute default command if none is set, or error if there's no default.`),
+
+		dagql.Func("stderr", s.stderr).
+			Doc(`The error stream of the last executed command.`,
+				`Will execute default command if none is set, or error if there's no default.`),
+
+		dagql.Func("publish", s.publish).Impure().
+			Doc(`Publishes this container as a new image to the specified address.`,
+				`Publish returns a fully qualified ref.`,
+				`It can also publish platform variants.`).
+			ArgDoc("address",
+				`Registry's address to publish the image to.`,
+				`Formatted as [host]/[user]/[repo]:[tag] (e.g. "docker.io/dagger/dagger:main").`).
+			ArgDoc("platformVariants",
+				`Identifiers for other platform specific containers.`,
+				`Used for multi-platform image.`).
+			ArgDoc("forcedCompression",
+				`Force each layer of the published image to use the specified
+				compression algorithm.`,
+				`If this is unset, then if a layer already has a compressed blob in the
+				engine's cache, that will be used (this can result in a mix of
+				compression algorithms for different layers). If this is unset and a
+				layer has no compressed blob in the engine's cache, then it will be
+				compressed using Gzip.`).
+			ArgDoc("mediaTypes",
+				`Use the specified media types for the published image's layers.`,
+				`Defaults to OCI, which is largely compatible with most recent
+				registries, but Docker may be needed for older registries without OCI
+				support.`),
+
+		dagql.Func("platform", s.platform).
+			Doc(`The platform this container executes and publishes as.`),
+
+		dagql.Func("export", s.export).
+			Doc(`Writes the container as an OCI tarball to the destination file path on the host.`,
+				`Return true on success.`,
+				`It can also export platform variants.`).
+			ArgDoc("path",
+				`Host's destination path (e.g., "./tarball").`,
+				`Path can be relative to the engine's workdir or absolute.`).
+			ArgDoc("platformVariants",
+				`Identifiers for other platform specific containers.`,
+				`Used for multi-platform image.`).
+			ArgDoc("forcedCompression",
+				`Force each layer of the exported image to use the specified compression algorithm.`,
+				`If this is unset, then if a layer already has a compressed blob in the
+				engine's cache, that will be used (this can result in a mix of
+				compression algorithms for different layers). If this is unset and a
+				layer has no compressed blob in the engine's cache, then it will be
+				compressed using Gzip.`).
+			ArgDoc("mediaTypes",
+				`Use the specified media types for the exported image's layers.`,
+				`Defaults to OCI, which is largely compatible with most recent
+				container runtimes, but Docker may be needed for older runtimes without
+				OCI support.`),
+
+		dagql.Func("asTarball", s.asTarball).
+			Doc(`Returns a File representing the container serialized to a tarball.`).
+			ArgDoc("platformVariants",
+				`Identifiers for other platform specific containers.`,
+				`Used for multi-platform images.`).
+			ArgDoc("forcedCompression",
+				`Force each layer of the image to use the specified compression algorithm.`,
+				`If this is unset, then if a layer already has a compressed blob in the
+				engine's cache, that will be used (this can result in a mix of
+				compression algorithms for different layers). If this is unset and a
+				layer has no compressed blob in the engine's cache, then it will be
+				compressed using Gzip.`).
+			ArgDoc("mediaTypes", `Use the specified media types for the image's layers.`,
+				`Defaults to OCI, which is largely compatible with most recent
+				container runtimes, but Docker may be needed for older runtimes without
+				OCI support.`),
+
+		dagql.Func("import", s.import_).
+			Doc(`Reads the container from an OCI tarball.`).
+			ArgDoc("source", `File to read the container from.`).
+			ArgDoc("tag", `Identifies the tag to import from the archive, if the archive bundles multiple tags.`),
+
+		dagql.Func("withRegistryAuth", s.withRegistryAuth).
+			Doc(`Retrieves this container with a registry authentication for a given address.`).
+			ArgDoc("address",
+				`Registry's address to bind the authentication to.`,
+				`Formatted as [host]/[user]/[repo]:[tag] (e.g. docker.io/dagger/dagger:main).`).
+			ArgDoc("username", `The username of the registry's account (e.g., "Dagger").`).
+			ArgDoc("secret", `The API key, password or token to authenticate to this registry.`),
+
+		dagql.Func("withoutRegistryAuth", s.withoutRegistryAuth).
+			Doc(`Retrieves this container without the registry authentication of a given address.`).
+			ArgDoc("address", `Registry's address to remove the authentication from.`,
+				`Formatted as [host]/[user]/[repo]:[tag] (e.g. docker.io/dagger/dagger:main).`),
+
+		dagql.Func("imageRef", s.imageRef).
+			Doc(`The unique image reference which can only be retrieved immediately after the 'Container.From' call.`),
+
+		dagql.Func("withExposedPort", s.withExposedPort).
+			Doc(`Expose a network port.`,
+				`Exposed ports serve two purposes:`,
+				"- For health checks and introspection, when running services\n"+
+					"- For setting the EXPOSE OCI field when publishing the container").
+			ArgDoc("port", `Port number to expose`).
+			ArgDoc("protocol", `Transport layer network protocol`).
+			ArgDoc("description", `Optional port description`),
+
+		dagql.Func("withoutExposedPort", s.withoutExposedPort).
+			Doc(`Unexpose a previously exposed port.`).
+			ArgDoc("port", `Port number to unexpose`).
+			ArgDoc("protocol", `Port protocol to unexpose`),
+
+		dagql.Func("exposedPorts", s.exposedPorts).
+			Doc(`Retrieves the list of exposed ports.`,
+				`This includes ports already exposed by the image, even if not explicitly added with dagger.`),
+
+		dagql.Func("withServiceBinding", s.withServiceBinding).
+			Doc(`Establish a runtime dependency on a service.`,
+				`The service will be started automatically when needed and detached
+				when it is no longer needed, executing the default command if none is
+				set.`,
+				`The service will be reachable from the container via the provided hostname alias.`,
+				`The service dependency will also convey to any files or directories produced by the container.`).
+			ArgDoc("alias", `A name that can be used to reach the service from the container`).
+			ArgDoc("service", `Identifier of the service container`),
+
+		dagql.Func("withFocus", s.withFocus).
+			Doc(`Indicate that subsequent operations should be featured more prominently in the UI.`),
+
+		dagql.Func("withoutFocus", s.withoutFocus).
+			Doc(`Indicate that subsequent operations should not be featured more prominently in the UI.`,
+				`This is the initial state of all containers.`),
+
+		dagql.NodeFunc("shellEndpoint", s.shellEndpoint).Impure().
+			Doc(`Return a websocket endpoint that, if connected to, will start the container with a TTY streamed over the websocket.`,
+				`Primarily intended for internal use with the dagger CLI.`),
+
+		dagql.Func("experimentalWithGPU", s.withGPU).
+			Doc(`EXPERIMENTAL API! Subject to change/removal at any time.`,
+				`Configures the provided list of devices to be accesible to this container.`,
+				`This currently works for Nvidia devices only.`).
+			ArgDoc("devices", `List of devices to be accessible to this container.`),
+
+		dagql.Func("experimentalWithAllGPUs", s.withAllGPUs).
+			Doc(`EXPERIMENTAL API! Subject to change/removal at any time.`,
+				`Configures all available GPUs on the host to be accessible to this container.`,
+				`This currently works for Nvidia devices only.`),
 	}.Install(s.srv)
 }
 
 type containerArgs struct {
-	ID       dagql.Optional[core.ContainerID]
+	ID       dagql.Optional[core.ContainerID] `deprecated:"Use loadContainerFromID instead."`
 	Platform dagql.Optional[core.Platform]
 }
 
@@ -125,7 +467,7 @@ func (s *containerSchema) container(ctx context.Context, parent *core.Query, arg
 }
 
 type containerFromArgs struct {
-	Address string `doc:"Image's address from its registry.\n\nFormatted as [host]/[user]/[repo]:[tag] (e.g., \"docker.io/dagger/dagger:main\")."`
+	Address string
 }
 
 func (s *containerSchema) from(ctx context.Context, parent *core.Container, args containerFromArgs) (*core.Container, error) {
@@ -389,8 +731,8 @@ func (s *containerSchema) withoutEnvVariable(ctx context.Context, parent *core.C
 }
 
 type EnvVariable struct {
-	Name  string `field:"true"`
-	Value string `field:"true"`
+	Name  string `field:"true" doc:"The environment variable name."`
+	Value string `field:"true" doc:"The environment variable value."`
 }
 
 func (EnvVariable) Type() *ast.Type {
@@ -398,6 +740,10 @@ func (EnvVariable) Type() *ast.Type {
 		NamedType: "EnvVariable",
 		NonNull:   true,
 	}
+}
+
+func (EnvVariable) Description() string {
+	return "A simple key value object that represents an environment variable."
 }
 
 func (s *containerSchema) envVariables(ctx context.Context, parent *core.Container, args struct{}) ([]EnvVariable, error) {
@@ -435,8 +781,8 @@ func (s *containerSchema) envVariable(ctx context.Context, parent *core.Containe
 }
 
 type Label struct {
-	Name  string `field:"true"`
-	Value string `field:"true"`
+	Name  string `field:"true" doc:"The label name."`
+	Value string `field:"true" doc:"The label value."`
 }
 
 func (Label) Type() *ast.Type {
@@ -444,6 +790,10 @@ func (Label) Type() *ast.Type {
 		NamedType: "Label",
 		NonNull:   true,
 	}
+}
+
+func (Label) Description() string {
+	return "A simple key value object that represents a label."
 }
 
 func (s *containerSchema) labels(ctx context.Context, parent *core.Container, args struct{}) ([]Label, error) {
@@ -864,9 +1214,9 @@ type containerWithExposedPortArgs struct {
 
 func (s *containerSchema) withExposedPort(ctx context.Context, parent *core.Container, args containerWithExposedPortArgs) (*core.Container, error) {
 	return parent.WithExposedPort(core.Port{
-		Protocol:    args.Protocol,
-		Port:        args.Port,
-		Description: args.Description,
+		Protocol:     args.Protocol,
+		Port:         args.Port,
+		Description_: args.Description,
 	})
 }
 

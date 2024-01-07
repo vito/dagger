@@ -23,6 +23,10 @@ func (*Secret) Type() *ast.Type {
 	}
 }
 
+func (*Secret) Description() string {
+	return "A reference to a secret value, which can be handled more safely than the value itself."
+}
+
 func (secret *Secret) Clone() *Secret {
 	cp := *secret
 	return &cp

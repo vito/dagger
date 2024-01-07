@@ -42,6 +42,10 @@ func (*File) Type() *ast.Type {
 	}
 }
 
+func (*File) Description() string {
+	return "A file."
+}
+
 func (file *File) PBDefinitions() ([]*pb.Definition, error) {
 	var defs []*pb.Definition
 	if file.LLB != nil {

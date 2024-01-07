@@ -49,8 +49,10 @@ func (d *c2hTunnel) Tunnel(ctx context.Context) (err error) {
 	args := []string{"tunnel"}
 
 	for _, port := range d.tunnelServicePorts {
-		frontend := port.Frontend
-		if frontend == 0 {
+		var frontend int
+		if port.Frontend != nil {
+			frontend = *port.Frontend
+		} else {
 			frontend = port.Backend
 		}
 

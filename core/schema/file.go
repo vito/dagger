@@ -13,25 +13,30 @@ type fileSchema struct {
 
 var _ SchemaResolvers = &fileSchema{}
 
-func (s *fileSchema) Name() string {
-	return "file"
-}
-
-func (s *fileSchema) Schema() string {
-	return File
-}
-
 func (s *fileSchema) Install() {
 	dagql.Fields[*core.Query]{
-		dagql.Func("file", s.file),
+		dagql.Func("file", s.file).
+			Deprecated("Use loadFileFromID instead."),
 	}.Install(s.srv)
 
 	dagql.Fields[*core.File]{
-		Syncer[*core.File](),
-		dagql.Func("contents", s.contents),
-		dagql.Func("size", s.size),
-		dagql.Func("export", s.export).Impure(),
-		dagql.Func("withTimestamps", s.withTimestamps),
+		Syncer[*core.File]().
+			Doc(`Force evaluation in the engine.`),
+		dagql.Func("contents", s.contents).
+			Doc(`Retrieves the contents of the file.`),
+		dagql.Func("size", s.size).
+			Doc(`Retrieves the size of the file, in bytes.`),
+		dagql.Func("export", s.export).
+			Impure().
+			Doc(`Writes the file to a file path on the host.`).
+			ArgDoc("path", `Location of the written directory (e.g., "output.txt").`).
+			ArgDoc("allowParentDirPath",
+				`If allowParentDirPath is true, the path argument can be a directory
+				path, in which case the file will be created in that directory.`),
+		dagql.Func("withTimestamps", s.withTimestamps).
+			Doc(`Retrieves this file with its created/modified timestamps set to the given time.`).
+			ArgDoc("timestamp", `Timestamp to set dir/files in.`,
+				`Formatted in seconds following Unix epoch (e.g., 1672531199).`),
 	}.Install(s.srv)
 }
 

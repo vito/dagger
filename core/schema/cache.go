@@ -17,13 +17,11 @@ func (s *cacheSchema) Name() string {
 	return "cache"
 }
 
-func (s *cacheSchema) Schema() string {
-	return Cache
-}
-
 func (s *cacheSchema) Install() {
 	dagql.Fields[*core.Query]{
-		dagql.Func("cacheVolume", s.cacheVolume),
+		dagql.Func("cacheVolume", s.cacheVolume).
+			Doc("Constructs a cache volume for a given cache key.").
+			ArgDoc("key", `A string identifier to target this cache volume (e.g., "modules-cache").`),
 	}.Install(s.srv)
 
 	dagql.Fields[*core.CacheVolume]{}.Install(s.srv)

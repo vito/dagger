@@ -16,10 +16,10 @@ import (
 
 type Function struct {
 	// Name is the standardized name of the function (lowerCamelCase), as used for the resolver in the graphql schema
-	Name        string         `field:"true"`
-	Description string         `field:"true"`
-	Args        []*FunctionArg `field:"true"`
-	ReturnType  *TypeDef       `field:"true"`
+	Name         string         `field:"true" doc:"The name of the function."`
+	Description_ string         `field:"true" name:"description" doc:"A doc string for the function, if any."`
+	Args         []*FunctionArg `field:"true" doc:"Arguments accepted by the function, if any."`
+	ReturnType   *TypeDef       `field:"true" doc:"The type returned by the function."`
 
 	// Below are not in public API
 
@@ -46,6 +46,13 @@ func (*Function) Type() *ast.Type {
 	}
 }
 
+func (*Function) Description() string {
+	return dagql.FormatDescription(
+		`Function represents a resolver provided by a Module.`,
+		`A function always evaluates against a parent object and is given a set of named arguments.`,
+	)
+}
+
 func (fn Function) Clone() *Function {
 	cp := fn
 	cp.Args = make([]*FunctionArg, len(fn.Args))
@@ -61,7 +68,7 @@ func (fn Function) Clone() *Function {
 func (fn *Function) FieldSpec() (dagql.FieldSpec, error) {
 	spec := dagql.FieldSpec{
 		Name:        fn.Name,
-		Description: formatGqlDescription(fn.Description),
+		Description: formatGqlDescription(fn.Description_),
 		Type:        fn.ReturnType.ToTyped(),
 		Pure:        false, // TODO
 	}
@@ -83,7 +90,7 @@ func (fn *Function) FieldSpec() (dagql.FieldSpec, error) {
 		}
 		spec.Args = append(spec.Args, dagql.InputSpec{
 			Name:        arg.Name,
-			Description: formatGqlDescription(arg.Description),
+			Description: formatGqlDescription(arg.Description_),
 			Type:        input,
 			Default:     defaultVal,
 		})
@@ -93,7 +100,7 @@ func (fn *Function) FieldSpec() (dagql.FieldSpec, error) {
 
 func (fn *Function) WithDescription(desc string) *Function {
 	fn = fn.Clone()
-	fn.Description = strings.TrimSpace(desc)
+	fn.Description_ = strings.TrimSpace(desc)
 	return fn
 }
 
@@ -101,7 +108,7 @@ func (fn *Function) WithArg(name string, typeDef *TypeDef, desc string, defaultV
 	fn = fn.Clone()
 	fn.Args = append(fn.Args, &FunctionArg{
 		Name:         strcase.ToLowerCamel(name),
-		Description:  desc,
+		Description_: desc,
 		TypeDef:      typeDef,
 		DefaultValue: defaultValue,
 		OriginalName: name,
@@ -164,10 +171,10 @@ func (fn *Function) LookupArg(name string) (*FunctionArg, bool) {
 
 type FunctionArg struct {
 	// Name is the standardized name of the argument (lowerCamelCase), as used for the resolver in the graphql schema
-	Name         string   `field:"true"`
-	Description  string   `field:"true"`
-	TypeDef      *TypeDef `field:"true"`
-	DefaultValue JSON     `field:"true"`
+	Name         string   `field:"true" doc:"The name of the argument in lowerCamelCase format."`
+	Description_ string   `field:"true" name:"description" doc:"A doc string for the argument, if any."`
+	TypeDef      *TypeDef `field:"true" doc:"The type of the argument."`
+	DefaultValue JSON     `field:"true" doc:"A default value to use for this argument when not explicitly set by the caller, if any."`
 
 	// Below are not in public API
 
@@ -181,6 +188,13 @@ func (*FunctionArg) Type() *ast.Type {
 		NamedType: "FunctionArg",
 		NonNull:   true,
 	}
+}
+
+func (*FunctionArg) Description() string {
+	return dagql.FormatDescription(
+		`An argument accepted by a function.`,
+		`This is a specification for an argument at function definition time, not
+		an argument passed at function call time.`)
 }
 
 type DynamicID struct {
@@ -258,11 +272,11 @@ func (arg FunctionArg) Clone() *FunctionArg {
 }
 
 type TypeDef struct {
-	Kind        TypeDefKind                       `field:"true"`
-	Optional    bool                              `field:"true"`
-	AsList      dagql.Nullable[*ListTypeDef]      `field:"true"`
-	AsObject    dagql.Nullable[*ObjectTypeDef]    `field:"true"`
-	AsInterface dagql.Nullable[*InterfaceTypeDef] `field:"true"`
+	Kind        TypeDefKind                       `field:"true" doc:"The kind of type this is (e.g. primitive, list, object)."`
+	Optional    bool                              `field:"true" doc:"Whether this type can be set to null. Defaults to false."`
+	AsList      dagql.Nullable[*ListTypeDef]      `field:"true" doc:"If kind is LIST, the list-specific type definition. If kind is not LIST, this will be null."`
+	AsObject    dagql.Nullable[*ObjectTypeDef]    `field:"true" doc:"If kind is OBJECT, the object-specific type definition. If kind is not OBJECT, this will be null."`
+	AsInterface dagql.Nullable[*InterfaceTypeDef] `field:"true" doc:"If kind is INTERFACE, the interface-specific type definition. If kind is not INTERFACE, this will be null."`
 }
 
 func (*TypeDef) Type() *ast.Type {
@@ -270,6 +284,10 @@ func (*TypeDef) Type() *ast.Type {
 		NamedType: "TypeDef",
 		NonNull:   true,
 	}
+}
+
+func (*TypeDef) Description() string {
+	return "A definition of a parameter or return type in a Module."
 }
 
 func (t TypeDef) ToTyped() dagql.Typed {
@@ -387,7 +405,7 @@ func (typeDef *TypeDef) WithObjectField(name string, fieldType *TypeDef, desc st
 	typeDef.AsObject.Value.Fields = append(typeDef.AsObject.Value.Fields, &FieldTypeDef{
 		Name:         strcase.ToLowerCamel(name),
 		OriginalName: name,
-		Description:  desc,
+		Description_: desc,
 		TypeDef:      fieldType,
 	})
 	return typeDef, nil
@@ -462,14 +480,14 @@ func (typeDef *TypeDef) IsSubtypeOf(otherDef *TypeDef) bool {
 
 type ObjectTypeDef struct {
 	// Name is the standardized name of the object (CamelCase), as used for the object in the graphql schema
-	Name        string                    `field:"true"`
-	Description string                    `field:"true"`
-	Fields      []*FieldTypeDef           `field:"true"`
-	Functions   []*Function               `field:"true"`
-	Constructor dagql.Nullable[*Function] `field:"true"`
+	Name         string                    `field:"true" doc:"The name of the object."`
+	Description_ string                    `field:"true" doc:"The doc string for the object, if any."`
+	Fields       []*FieldTypeDef           `field:"true" doc:"Static fields defined on this object, if any."`
+	Functions    []*Function               `field:"true" doc:"Functions defined on this object, if any."`
+	Constructor  dagql.Nullable[*Function] `field:"true" doc:"The function used to construct new instances of this object, if any"`
 
 	// SourceModuleName is currently only set when returning the TypeDef from the Objects field on Module
-	SourceModuleName string `field:"true"`
+	SourceModuleName string `field:"true" doc:"If this ObjectTypeDef is associated with a Module, the name of the module. Unset otherwise."`
 
 	// Below are not in public API
 
@@ -485,14 +503,15 @@ func (*ObjectTypeDef) Type() *ast.Type {
 	}
 }
 
+func (*ObjectTypeDef) Description() string {
+	return "A definition of a custom object defined in a Module."
+}
+
 func NewObjectTypeDef(name, description string) *ObjectTypeDef {
-	if name == "" {
-		panic("WHY WOULD I HAVE NO NAME")
-	}
 	return &ObjectTypeDef{
 		Name:         strcase.ToCamel(name),
 		OriginalName: name,
-		Description:  description,
+		Description_: description,
 	}
 }
 
@@ -571,9 +590,9 @@ func (obj *ObjectTypeDef) IsSubtypeOf(iface *InterfaceTypeDef) bool {
 }
 
 type FieldTypeDef struct {
-	Name        string   `field:"true"`
-	Description string   `field:"true"`
-	TypeDef     *TypeDef `field:"true"`
+	Name         string   `field:"true" doc:"The name of the field in lowerCamelCase format."`
+	Description_ string   `field:"true" name:"description" doc:"A doc string for the field, if any."`
+	TypeDef      *TypeDef `field:"true" doc:"The type of the field."`
 
 	// Below are not in public API
 
@@ -589,6 +608,14 @@ func (*FieldTypeDef) Type() *ast.Type {
 	}
 }
 
+func (*FieldTypeDef) Description() string {
+	return dagql.FormatDescription(
+		`A definition of a field on a custom object defined in a Module.`,
+		`A field on an object has a static value, as opposed to a function on an
+		object whose value is computed by invoking code (and can accept
+		arguments).`)
+}
+
 func (typeDef FieldTypeDef) Clone() *FieldTypeDef {
 	cp := typeDef
 	if typeDef.TypeDef != nil {
@@ -599,11 +626,11 @@ func (typeDef FieldTypeDef) Clone() *FieldTypeDef {
 
 type InterfaceTypeDef struct {
 	// Name is the standardized name of the interface (CamelCase), as used for the interface in the graphql schema
-	Name        string      `field:"true"`
-	Description string      `field:"true"`
-	Functions   []*Function `field:"true"`
+	Name         string      `field:"true" doc:"The name of the interface."`
+	Description_ string      `field:"true" doc:"The doc string for the interface, if any."`
+	Functions    []*Function `field:"true" doc:"Functions defined on this interface, if any."`
 	// SourceModuleName is currently only set when returning the TypeDef from the Objects field on Module
-	SourceModuleName string `field:"true"`
+	SourceModuleName string `field:"true" doc:"If this InterfaceTypeDef is associated with a Module, the name of the module. Unset otherwise."`
 
 	// Below are not in public API
 
@@ -616,7 +643,7 @@ func NewInterfaceTypeDef(name, description string) *InterfaceTypeDef {
 	return &InterfaceTypeDef{
 		Name:         strcase.ToCamel(name),
 		OriginalName: name,
-		Description:  description,
+		Description_: description,
 	}
 }
 
@@ -625,6 +652,10 @@ func (*InterfaceTypeDef) Type() *ast.Type {
 		NamedType: "InterfaceTypeDef",
 		NonNull:   true,
 	}
+}
+
+func (*InterfaceTypeDef) Description() string {
+	return "A definition of a custom interface defined in a Module."
 }
 
 func (iface InterfaceTypeDef) Clone() *InterfaceTypeDef {
@@ -663,7 +694,7 @@ func (iface *InterfaceTypeDef) IsSubtypeOf(otherIface *InterfaceTypeDef) bool {
 }
 
 type ListTypeDef struct {
-	ElementTypeDef *TypeDef `field:"true"`
+	ElementTypeDef *TypeDef `field:"true" doc:"The type of the elements in the list."`
 }
 
 func (*ListTypeDef) Type() *ast.Type {
@@ -671,6 +702,10 @@ func (*ListTypeDef) Type() *ast.Type {
 		NamedType: "ListTypeDef",
 		NonNull:   true,
 	}
+}
+
+func (*ListTypeDef) Description() string {
+	return "A definition of a list type in a Module."
 }
 
 func (typeDef ListTypeDef) Clone() *ListTypeDef {
@@ -690,13 +725,28 @@ func (k TypeDefKind) String() string {
 var TypeDefKinds = dagql.NewEnum[TypeDefKind]()
 
 var (
-	TypeDefKindString    = TypeDefKinds.Register("StringKind")
-	TypeDefKindInteger   = TypeDefKinds.Register("IntegerKind")
-	TypeDefKindBoolean   = TypeDefKinds.Register("BooleanKind")
-	TypeDefKindList      = TypeDefKinds.Register("ListKind")
-	TypeDefKindObject    = TypeDefKinds.Register("ObjectKind")
-	TypeDefKindInterface = TypeDefKinds.Register("InterfaceKind")
-	TypeDefKindVoid      = TypeDefKinds.Register("VoidKind")
+	TypeDefKindString = TypeDefKinds.Register("STRING_KIND",
+		"A string value.")
+	TypeDefKindInteger = TypeDefKinds.Register("INTEGER_KIND",
+		"An integer value.")
+	TypeDefKindBoolean = TypeDefKinds.Register("BOOLEAN_KIND",
+		"A boolean value.")
+	TypeDefKindList = TypeDefKinds.Register("LIST_KIND",
+		"A list of values all having the same type.",
+		"Always paired with a ListTypeDef.")
+	TypeDefKindObject = TypeDefKinds.Register("OBJECT_KIND",
+		"A named type defined in the GraphQL schema, with fields and functions.",
+		"Always paired with an ObjectTypeDef.")
+	TypeDefKindInterface = TypeDefKinds.Register("INTERFACE_KIND",
+		`A named type of functions that can be matched+implemented by other
+		objects+interfaces.`,
+		"Always paired with an InterfaceTypeDef.")
+	TypeDefKindVoid = TypeDefKinds.Register("VOID_KIND",
+		"A special kind used to signify that no value is returned.",
+		`This is used for functions that have no return value. The outer TypeDef
+		specifying this Kind is always Optional, as the Void is never actually
+		represented.`,
+	)
 )
 
 func (proto TypeDefKind) Type() *ast.Type {
@@ -704,6 +754,10 @@ func (proto TypeDefKind) Type() *ast.Type {
 		NamedType: "TypeDefKind",
 		NonNull:   true,
 	}
+}
+
+func (proto TypeDefKind) Description() string {
+	return `Distinguishes the different kinds of TypeDefs.`
 }
 
 func (proto TypeDefKind) Decoder() dagql.InputDecoder {
@@ -717,10 +771,10 @@ func (proto TypeDefKind) ToLiteral() *idproto.Literal {
 type FunctionCall struct {
 	Query *Query
 
-	Name       string `field:"true"`
-	ParentName string `field:"true"`
-	Parent     JSON
-	InputArgs  []*FunctionCallArgValue `field:"true"`
+	Name       string                  `field:"true" doc:"The name of the function being called."`
+	ParentName string                  `field:"true" doc:"The name of the parent object of the function being called. If the function is top-level to the module, this is the name of the module."`
+	Parent     JSON                    `field:"true" doc:"The value of the parent object of the function being called. If the function is top-level to the module, this is always an empty object."`
+	InputArgs  []*FunctionCallArgValue `field:"true" doc:"The argument values the function is being invoked with."`
 }
 
 func (*FunctionCall) Type() *ast.Type {
@@ -744,8 +798,8 @@ func (fnCall *FunctionCall) ReturnValue(ctx context.Context, val JSON) error {
 }
 
 type FunctionCallArgValue struct {
-	Name  string `field:"true"`
-	Value JSON   `field:"true"`
+	Name  string `field:"true" doc:"The name of the argument."`
+	Value JSON   `field:"true" doc:"The value of the argument represented as a JSON serialized string."`
 }
 
 func (*FunctionCallArgValue) Type() *ast.Type {

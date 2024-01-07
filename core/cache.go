@@ -24,6 +24,10 @@ func (*CacheVolume) Type() *ast.Type {
 	}
 }
 
+func (*CacheVolume) Description() string {
+	return "A directory whose contents persist across runs."
+}
+
 var ErrInvalidCacheVolumeID = errors.New("invalid cache ID; create one using cacheVolume")
 
 func NewCache(keys ...string) *CacheVolume {
@@ -53,9 +57,12 @@ type CacheSharingMode string
 var CacheSharingModes = dagql.NewEnum[CacheSharingMode]()
 
 var (
-	CacheSharingModeShared  = CacheSharingModes.Register("SHARED")
-	CacheSharingModePrivate = CacheSharingModes.Register("PRIVATE")
-	CacheSharingModeLocked  = CacheSharingModes.Register("LOCKED")
+	CacheSharingModeShared = CacheSharingModes.Register("SHARED",
+		"Shares the cache volume amongst many build pipelines")
+	CacheSharingModePrivate = CacheSharingModes.Register("PRIVATE",
+		"Keeps a cache volume for a single build pipeline")
+	CacheSharingModeLocked = CacheSharingModes.Register("LOCKED",
+		"Shares the cache volume amongst many build pipelines, but will serialize the writes")
 )
 
 func (proto CacheSharingMode) Type() *ast.Type {
@@ -63,6 +70,10 @@ func (proto CacheSharingMode) Type() *ast.Type {
 		NamedType: "CacheSharingMode",
 		NonNull:   true,
 	}
+}
+
+func (proto CacheSharingMode) Description() string {
+	return "Sharing mode of the cache volume."
 }
 
 func (proto CacheSharingMode) Decoder() dagql.InputDecoder {

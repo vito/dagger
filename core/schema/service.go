@@ -14,25 +14,35 @@ type serviceSchema struct {
 
 var _ SchemaResolvers = &serviceSchema{}
 
-func (s *serviceSchema) Name() string {
-	return "service"
-}
-
-func (s *serviceSchema) Schema() string {
-	return Service
-}
-
 func (s *serviceSchema) Install() {
 	dagql.Fields[*core.Container]{
-		dagql.Func("asService", s.containerAsService),
+		dagql.Func("asService", s.containerAsService).
+			Doc(`Turn the container into a Service.`,
+				`Be sure to set any exposed ports before this conversion.`),
 	}.Install(s.srv)
 
 	dagql.Fields[*core.Service]{
-		dagql.NodeFunc("hostname", s.hostname),
-		dagql.NodeFunc("ports", s.ports),
-		dagql.NodeFunc("endpoint", s.endpoint),
-		dagql.NodeFunc("start", s.start).Impure(),
-		dagql.NodeFunc("stop", s.stop).Impure(),
+		dagql.NodeFunc("hostname", s.hostname).
+			Doc(`Retrieves a hostname which can be used by clients to reach this container.`),
+
+		dagql.NodeFunc("ports", s.ports).
+			Doc(`Retrieves the list of ports provided by the service.`),
+
+		dagql.NodeFunc("endpoint", s.endpoint).
+			Doc(`Retrieves an endpoint that clients can use to reach this container.`,
+				`If no port is specified, the first exposed port is used. If none exist an error is returned.`,
+				`If a scheme is specified, a URL is returned. Otherwise, a host:port pair is returned.`).
+			ArgDoc("port", `The exposed port number for the endpoint`).
+			ArgDoc("scheme", `Return a URL with the given scheme, eg. http for http://`),
+
+		dagql.NodeFunc("start", s.start).
+			Impure().
+			Doc(`Start the service and wait for its health checks to succeed.`,
+				`Services bound to a Container do not need to be manually started.`),
+
+		dagql.NodeFunc("stop", s.stop).
+			Impure().
+			Doc(`Stop the service.`),
 	}.Install(s.srv)
 }
 

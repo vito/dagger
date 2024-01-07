@@ -21,6 +21,10 @@ func (p JSON) TypeName() string {
 	return "JSON"
 }
 
+func (p JSON) Description() string {
+	return "An arbitrary JSON-encoded value."
+}
+
 func (p JSON) Type() *ast.Type {
 	return &ast.Type{
 		NamedType: p.TypeName(),

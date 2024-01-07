@@ -26,6 +26,10 @@ func (*Socket) Type() *ast.Type {
 	}
 }
 
+func (*Socket) Description() string {
+	return "A Unix or TCP/IP socket that can be mounted into a container."
+}
+
 func NewHostUnixSocket(absPath string) *Socket {
 	return &Socket{
 		HostPath: absPath,

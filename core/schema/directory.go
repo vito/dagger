@@ -16,36 +16,76 @@ type directorySchema struct {
 
 var _ SchemaResolvers = &directorySchema{}
 
-func (s *directorySchema) Name() string {
-	return "directory"
-}
-
-func (s *directorySchema) Schema() string {
-	return Directory
-}
-
 func (s *directorySchema) Install() {
 	dagql.Fields[*core.Query]{
-		dagql.Func("directory", s.directory),
+		dagql.Func("directory", s.directory).
+			Doc(`Creates an empty directory.`),
 	}.Install(s.srv)
 
 	dagql.Fields[*core.Directory]{
-		Syncer[*core.Directory](),
-		dagql.Func("pipeline", s.pipeline),
-		dagql.Func("entries", s.entries),
-		dagql.Func("glob", s.glob),
-		dagql.Func("file", s.file),
-		dagql.Func("withFile", s.withFile),
-		dagql.Func("withNewFile", s.withNewFile),
-		dagql.Func("withoutFile", s.withoutFile),
-		dagql.Func("directory", s.subdirectory),
-		dagql.Func("withDirectory", s.withDirectory),
-		dagql.Func("withTimestamps", s.withTimestamps),
-		dagql.Func("withNewDirectory", s.withNewDirectory),
-		dagql.Func("withoutDirectory", s.withoutDirectory),
-		dagql.Func("diff", s.diff),
-		dagql.Func("export", s.export).Impure(),
-		dagql.Func("dockerBuild", s.dockerBuild),
+		Syncer[*core.Directory]().
+			Doc(`Force evaluation in the engine.`),
+		dagql.Func("pipeline", s.pipeline).
+			Doc(`Creates a named sub-pipeline.`).
+			ArgDoc("name", "Name of the sub-pipeline.").
+			ArgDoc("description", "Description of the sub-pipeline.").
+			ArgDoc("labels", "Labels to apply to the sub-pipeline."),
+		dagql.Func("entries", s.entries).
+			Doc(`Returns a list of files and directories at the given path.`).
+			ArgDoc("path", `Location of the directory to look at (e.g., "/src").`),
+		dagql.Func("glob", s.glob).
+			Doc(`Returns a list of files and directories that matche the given pattern.`).
+			ArgDoc("pattern", `Pattern to match (e.g., "*.md").`),
+		dagql.Func("file", s.file).
+			Doc(`Retrieves a file at the given path.`).
+			ArgDoc("path", `Location of the file to retrieve (e.g., "README.md").`),
+		dagql.Func("withFile", s.withFile).
+			Doc(`Retrieves this directory plus the contents of the given file copied to the given path.`).
+			ArgDoc("path", `Location of the copied file (e.g., "/file.txt").`).
+			ArgDoc("source", `Identifier of the file to copy.`).
+			ArgDoc("permissions", `Permission given to the copied file (e.g., 0600).`),
+		dagql.Func("withNewFile", s.withNewFile).
+			Doc(`Retrieves this directory plus a new file written at the given path.`).
+			ArgDoc("path", `Location of the written file (e.g., "/file.txt").`).
+			ArgDoc("contents", `Content of the written file (e.g., "Hello world!").`).
+			ArgDoc("permissions", `Permission given to the copied file (e.g., 0600).`),
+		dagql.Func("withoutFile", s.withoutFile).
+			Doc(`Retrieves this directory with the file at the given path removed.`).
+			ArgDoc("path", `Location of the file to remove (e.g., "/file.txt").`),
+		dagql.Func("directory", s.subdirectory).
+			Doc(`Retrieves a directory at the given path.`).
+			ArgDoc("path", `Location of the directory to retrieve (e.g., "/src").`),
+		dagql.Func("withDirectory", s.withDirectory).
+			Doc(`Retrieves this directory plus a directory written at the given path.`).
+			ArgDoc("path", `Location of the written directory (e.g., "/src/").`).
+			ArgDoc("directory", `Identifier of the directory to copy.`).
+			ArgDoc("exclude", `Exclude artifacts that match the given pattern (e.g., ["node_modules/", ".git*"]).`).
+			ArgDoc("include", `Include only artifacts that match the given pattern (e.g., ["app/", "package.*"]).`),
+		dagql.Func("withNewDirectory", s.withNewDirectory).
+			Doc(`Retrieves this directory plus a new directory created at the given path.`).
+			ArgDoc("path", `Location of the directory created (e.g., "/logs").`).
+			ArgDoc("permissions", `Permission granted to the created directory (e.g., 0777).`),
+		dagql.Func("withoutDirectory", s.withoutDirectory).
+			Doc(`Retrieves this directory with the directory at the given path removed.`).
+			ArgDoc("path", `Location of the directory to remove (e.g., ".github/").`),
+		dagql.Func("diff", s.diff).
+			Doc(`Gets the difference between this directory and an another directory.`).
+			ArgDoc("other", `Identifier of the directory to compare.`),
+		dagql.Func("export", s.export).Impure().
+			Doc(`Writes the contents of the directory to a path on the host.`).
+			ArgDoc("path", `Location of the copied directory (e.g., "logs/").`),
+		dagql.Func("dockerBuild", s.dockerBuild).
+			Doc(`Builds a new Docker container from this directory.`).
+			ArgDoc("dockerfile", `Path to the Dockerfile to use (e.g., "frontend.Dockerfile").`).
+			ArgDoc("platform", `The platform to build.`).
+			ArgDoc("buildArgs", `Build arguments to use in the build.`).
+			ArgDoc("target", `Target build stage to build.`).
+			ArgDoc("secrets", `Secrets to pass to the build.`,
+				`They will be mounted at /run/secrets/[secret-name].`),
+		dagql.Func("withTimestamps", s.withTimestamps).
+			Doc(`Retrieves this directory with all file/dir timestamps set to the given time.`).
+			ArgDoc("timestamp", `Timestamp to set dir/files in.`,
+				`Formatted in seconds following Unix epoch (e.g., 1672531199).`),
 	}.Install(s.srv)
 }
 
@@ -60,7 +100,7 @@ func (s *directorySchema) pipeline(ctx context.Context, parent *core.Directory, 
 }
 
 type directoryArgs struct {
-	ID dagql.Optional[core.DirectoryID]
+	ID dagql.Optional[core.DirectoryID] `deprecated:"Use loadDirectoryFromID isntead."`
 }
 
 func (s *directorySchema) directory(ctx context.Context, parent *core.Query, args directoryArgs) (*core.Directory, error) {
@@ -85,7 +125,7 @@ func (s *directorySchema) subdirectory(ctx context.Context, parent *core.Directo
 
 type withNewDirectoryArgs struct {
 	Path        string
-	Permissions int `default:"0644"` // FIXME(vito): verify this parses as expected, prob doesn't
+	Permissions int `default:"0644"`
 }
 
 func (s *directorySchema) withNewDirectory(ctx context.Context, parent *core.Directory, args withNewDirectoryArgs) (*core.Directory, error) {

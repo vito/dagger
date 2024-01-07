@@ -545,9 +545,9 @@ func (svc *Service) startTunnel(ctx context.Context, id *idproto.ID) (running *R
 		desc := fmt.Sprintf("tunnel %s:%d -> %s:%d", bindHost, port, upstream.Host, forward.Backend)
 
 		ports[i] = Port{
-			Port:        port,
-			Protocol:    forward.Protocol,
-			Description: &desc,
+			Port:         port,
+			Protocol:     forward.Protocol,
+			Description_: &desc,
 		}
 
 		closers[i] = closeListener
@@ -617,9 +617,9 @@ func (svc *Service) startReverseTunnel(ctx context.Context, id *idproto.ID) (run
 	for _, p := range svc.HostPorts {
 		desc := fmt.Sprintf("tunnel %s %d -> %d", p.Protocol, p.FrontendOrBackendPort(), p.Backend)
 		checkPorts = append(checkPorts, Port{
-			Port:        p.FrontendOrBackendPort(),
-			Protocol:    p.Protocol,
-			Description: &desc,
+			Port:         p.FrontendOrBackendPort(),
+			Protocol:     p.Protocol,
+			Description_: &desc,
 		})
 	}
 

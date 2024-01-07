@@ -32,6 +32,10 @@ func (*GitRepository) Type() *ast.Type {
 	}
 }
 
+func (*GitRepository) Description() string {
+	return "A git repository."
+}
+
 type GitRef struct {
 	Query *Query
 
@@ -44,6 +48,10 @@ func (*GitRef) Type() *ast.Type {
 		NamedType: "GitRef",
 		NonNull:   true,
 	}
+}
+
+func (*GitRef) Description() string {
+	return "A git ref (tag, branch, or commit)."
 }
 
 func (ref *GitRef) Tree(ctx context.Context) (*Directory, error) {

@@ -19,48 +19,100 @@ type moduleSchema struct {
 
 var _ SchemaResolvers = &moduleSchema{}
 
-func (s *moduleSchema) Name() string {
-	return "module"
-}
-
-func (s *moduleSchema) Schema() string {
-	return strings.Join([]string{Module, TypeDef, InternalSDK}, "\n")
-}
-
 func (s *moduleSchema) Install() {
 	dagql.Fields[*core.Query]{
-		dagql.Func("module", s.module),
-		dagql.Func("currentModule", s.currentModule).Impure(),
-		dagql.Func("function", s.function),
-		dagql.Func("currentFunctionCall", s.currentFunctionCall).Impure(),
-		dagql.Func("typeDef", s.typeDef),
-		dagql.Func("generatedCode", s.generatedCode),
-		dagql.Func("moduleConfig", s.moduleConfig),
-		dagql.Func("currentTypeDefs", s.currentTypeDefs).Impure(),
+		dagql.Func("module", s.module).
+			Doc(`Create a new module.`),
+
+		dagql.Func("typeDef", s.typeDef).
+			Doc(`Create a new TypeDef.`),
+
+		dagql.Func("generatedCode", s.generatedCode).
+			Doc(`Create a code generation result, given a directory containing the generated code.`),
+
+		dagql.Func("moduleConfig", s.moduleConfig).
+			Doc(`Load the static configuration for a module from the given source directory and optional subpath.`),
+
+		dagql.Func("function", s.function).
+			Doc(`Creates a function.`).
+			ArgDoc("name", `Name of the function, in its original format from the implementation language.`).
+			ArgDoc("returnType", `Return type of the function.`),
+
+		dagql.Func("currentModule", s.currentModule).
+			Impure().
+			Doc(`The module currently being served in the session, if any.`),
+
+		dagql.Func("currentTypeDefs", s.currentTypeDefs).
+			Impure().
+			Doc(`The TypeDef representations of the objects currently being served in the session.`),
+
+		dagql.Func("currentFunctionCall", s.currentFunctionCall).
+			Impure().
+			Doc(`The FunctionCall context that the SDK caller is currently executing in.`,
+				`If the caller is not currently executing in a function, this will
+				return an error.`),
 	}.Install(s.dag)
 
 	dagql.Fields[*core.Directory]{
-		dagql.NodeFunc("asModule", s.directoryAsModule),
+		dagql.NodeFunc("asModule", s.directoryAsModule).
+			Doc(`Load the directory as a Dagger module`).
+			ArgDoc("sourceSubpath",
+				`An optional subpath of the directory which contains the module's source code.`,
+				`This is needed when the module code is in a subdirectory but requires
+				parent directories to be loaded in order to execute. For example, the
+				module source code may need a go.mod, project.toml, package.json, etc.
+				file from a parent directory.`,
+				`If not set, the module source code is loaded from the root of the directory.`),
 	}.Install(s.dag)
 
 	dagql.Fields[*core.FunctionCall]{
-		dagql.Func("returnValue", s.functionCallReturnValue).Impure(),
-		dagql.Func("parent", s.functionCallParent),
+		dagql.Func("returnValue", s.functionCallReturnValue).
+			Impure().
+			Doc(`Set the return value of the function call to the provided value.`).
+			ArgDoc("value", `JSON serialization of the return value.`),
 	}.Install(s.dag)
 
 	dagql.Fields[*core.Module]{
-		dagql.NodeFunc("initialize", s.moduleInitialize),
-		dagql.Func("withSource", s.moduleWithSource),
-		dagql.Func("withObject", s.moduleWithObject),
-		dagql.Func("withInterface", s.moduleWithInterface),
-		dagql.NodeFunc("serve", s.moduleServe).Impure(),
+		dagql.Func("withSource", s.moduleWithSource).
+			Doc(`Retrieves the module with basic configuration loaded, ready for initialization.`).
+			ArgDoc("directory", `The directory containing the module's source code.`).
+			ArgDoc("subpath",
+				`An optional subpath of the directory which contains the module's
+				source code.`,
+				`This is needed when the module code is in a subdirectory but requires
+				parent directories to be loaded in order to execute. For example, the
+				module source code may need a go.mod, project.toml, package.json, etc.
+				file from a parent directory.`,
+				`If not set, the module source code is loaded from the root of the
+				directory.`),
+
+		dagql.NodeFunc("initialize", s.moduleInitialize).
+			Doc(`Retrieves the module with the objects loaded via its SDK.`),
+
+		dagql.Func("withObject", s.moduleWithObject).
+			Doc(`This module plus the given Object type and associated functions.`),
+
+		dagql.Func("withInterface", s.moduleWithInterface).
+			Doc(`This module plus the given Interface type and associated functions`),
+
+		dagql.NodeFunc("serve", s.moduleServe).Impure().
+			Doc(`Serve a module's API in the current session.`,
+				`Note: this can only be called once per session. In the future, it could return a stream or service to remove the side effect.`),
 	}.Install(s.dag)
 
 	dagql.Fields[*modules.Config]{}.Install(s.dag)
 
 	dagql.Fields[*core.Function]{
-		dagql.Func("withDescription", s.functionWithDescription),
-		dagql.Func("withArg", s.functionWithArg),
+		dagql.Func("withDescription", s.functionWithDescription).
+			Doc(`Returns the function with the given doc string.`).
+			ArgDoc("description", `The doc string to set.`),
+
+		dagql.Func("withArg", s.functionWithArg).
+			Doc(`Returns the function with the provided argument`).
+			ArgDoc("name", `The name of the argument`).
+			ArgDoc("typeDef", `The type of the argument`).
+			ArgDoc("description", `A doc string for the argument, if any`).
+			ArgDoc("defaultValue", `A default value to use for this argument if not explicitly set by the caller, if any`),
 	}.Install(s.dag)
 
 	dagql.Fields[*core.FunctionArg]{}.Install(s.dag)
@@ -68,24 +120,47 @@ func (s *moduleSchema) Install() {
 	dagql.Fields[*core.FunctionCallArgValue]{}.Install(s.dag)
 
 	dagql.Fields[*core.TypeDef]{
-		dagql.Func("kind", s.typeDefKind),
-		dagql.Func("withOptional", s.typeDefWithOptional),
-		dagql.Func("withKind", s.typeDefWithKind),
-		dagql.Func("withListOf", s.typeDefWithListOf),
-		dagql.Func("withObject", s.typeDefWithObject),
-		dagql.Func("withInterface", s.typeDefWithInterface),
-		dagql.Func("withField", s.typeDefWithObjectField),
-		dagql.Func("withFunction", s.typeDefWithFunction),
-		dagql.Func("withConstructor", s.typeDefWithObjectConstructor),
+		dagql.Func("withOptional", s.typeDefWithOptional).
+			Doc(`Sets whether this type can be set to null.`),
+
+		dagql.Func("withKind", s.typeDefWithKind).
+			Doc(`Sets the kind of the type.`),
+
+		dagql.Func("withListOf", s.typeDefWithListOf).
+			Doc(`Returns a TypeDef of kind List with the provided type for its elements.`),
+
+		dagql.Func("withObject", s.typeDefWithObject).
+			Doc(`Returns a TypeDef of kind Object with the provided name.`,
+				`Note that an object's fields and functions may be omitted if the
+				intent is only to refer to an object. This is how functions are able to
+				return their own object, or any other circular reference.`),
+
+		dagql.Func("withInterface", s.typeDefWithInterface).
+			Doc(`Returns a TypeDef of kind Interface with the provided name.`),
+
+		dagql.Func("withField", s.typeDefWithObjectField).
+			Doc(`Adds a static field for an Object TypeDef, failing if the type is not an object.`).
+			ArgDoc("name", `The name of the field in the object`).
+			ArgDoc("typeDef", `The type of the field`).
+			ArgDoc("description", `A doc string for the field, if any`),
+
+		dagql.Func("withFunction", s.typeDefWithFunction).
+			Doc(`Adds a function for an Object or Interface TypeDef, failing if the type is not one of those kinds.`),
+
+		dagql.Func("withConstructor", s.typeDefWithObjectConstructor).
+			Doc(`Adds a function for constructing a new instance of an Object TypeDef, failing if the type is not an object.`),
 	}.Install(s.dag)
+
 	dagql.Fields[*core.ObjectTypeDef]{}.Install(s.dag)
 	dagql.Fields[*core.InterfaceTypeDef]{}.Install(s.dag)
 	dagql.Fields[*core.FieldTypeDef]{}.Install(s.dag)
 	dagql.Fields[*core.ListTypeDef]{}.Install(s.dag)
 
 	dagql.Fields[*core.GeneratedCode]{
-		dagql.Func("withVCSIgnoredPaths", s.generatedCodeWithVCSIgnoredPaths),
-		dagql.Func("withVCSGeneratedPaths", s.generatedCodeWithVCSGeneratedPaths),
+		dagql.Func("withVCSIgnoredPaths", s.generatedCodeWithVCSIgnoredPaths).
+			Doc(`Set the list of paths to ignore in version control.`),
+		dagql.Func("withVCSGeneratedPaths", s.generatedCodeWithVCSGeneratedPaths).
+			Doc(`Set the list of paths to mark generated in version control.`),
 	}.Install(s.dag)
 }
 
@@ -169,10 +244,6 @@ func (s *moduleSchema) typeDefWithObjectConstructor(ctx context.Context, def *co
 	return def.WithObjectConstructor(fn)
 }
 
-func (s *moduleSchema) typeDefKind(ctx context.Context, def *core.TypeDef, args struct{}) (dagql.String, error) {
-	return dagql.NewString(def.Kind.String()), nil
-}
-
 func (s *moduleSchema) generatedCode(ctx context.Context, _ *core.Query, args struct {
 	Code core.DirectoryID
 }) (*core.GeneratedCode, error) {
@@ -242,10 +313,6 @@ func (s *moduleSchema) functionWithArg(ctx context.Context, fn *core.Function, a
 		return nil, fmt.Errorf("failed to decode arg type: %w", err)
 	}
 	return fn.WithArg(args.Name, argType.Self, args.Description, args.DefaultValue), nil
-}
-
-func (s *moduleSchema) functionCallParent(ctx context.Context, fnCall *core.FunctionCall, _ struct{}) (core.JSON, error) {
-	return fnCall.Parent, nil
 }
 
 func (s *moduleSchema) moduleWithSource(ctx context.Context, self *core.Module, args struct {

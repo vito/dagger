@@ -13,22 +13,22 @@ type secretSchema struct {
 
 var _ SchemaResolvers = &secretSchema{}
 
-func (s *secretSchema) Name() string {
-	return "secret"
-}
-
-func (s *secretSchema) Schema() string {
-	return Secret
-}
-
 func (s *secretSchema) Install() {
 	dagql.Fields[*core.Query]{
-		dagql.Func("secret", s.secret),
-		dagql.Func("setSecret", s.setSecret).Impure(),
+		dagql.Func("setSecret", s.setSecret).Impure().
+			Doc(`Sets a secret given a user defined name to its plaintext and returns the secret.`,
+				`The plaintext value is limited to a size of 128000 bytes.`).
+			ArgDoc("name", `The user defined name for this secret`).
+			ArgDoc("plaintext", `The plaintext of the secret`),
+
+		dagql.Func("secret", s.secret).
+			Doc(`Loads a secret from its ID.`).
+			Deprecated("Use `loadSecretFromID` instead."),
 	}.Install(s.srv)
 
 	dagql.Fields[*core.Secret]{
-		dagql.Func("plaintext", s.plaintext).Impure(),
+		dagql.Func("plaintext", s.plaintext).Impure().
+			Doc(`The value of this secret.`),
 	}.Install(s.srv)
 }
 

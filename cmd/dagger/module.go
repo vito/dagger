@@ -687,9 +687,9 @@ func loadModTypeDefs(ctx context.Context, dag *dagger.Client, mod *dagger.Module
 	modDef := &moduleDef{Name: res.Mod.Name}
 	for _, typeDef := range res.TypeDefs {
 		switch typeDef.Kind {
-		case dagger.Objectkind:
+		case dagger.ObjectKind:
 			modDef.Objects = append(modDef.Objects, typeDef)
-		case dagger.Interfacekind:
+		case dagger.InterfaceKind:
 			modDef.Interfaces = append(modDef.Interfaces, typeDef)
 		}
 	}

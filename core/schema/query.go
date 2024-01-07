@@ -21,20 +21,11 @@ type querySchema struct {
 
 var _ SchemaResolvers = &querySchema{}
 
-func (s *querySchema) Name() string {
-	return "query"
-}
-
-func (s *querySchema) Schema() string {
-	return Query
-}
-
 func (s *querySchema) Install() {
 	introspection.Install[*core.Query](s.srv)
 
 	s.srv.InstallScalar(core.JSON{})
 	s.srv.InstallScalar(core.Void{})
-	// s.srv.InstallScalar(core.DynamicID{})
 
 	core.NetworkProtocols.Install(s.srv)
 	core.ImageLayerCompressions.Install(s.srv)
@@ -53,8 +44,15 @@ func (s *querySchema) Install() {
 	dagql.Fields[Label]{}.Install(s.srv)
 
 	dagql.Fields[*core.Query]{
-		dagql.Func("pipeline", s.pipeline),
-		dagql.Func("checkVersionCompatibility", s.checkVersionCompatibility),
+		dagql.Func("pipeline", s.pipeline).
+			Doc(`Creates a named sub-pipeline.`).
+			ArgDoc("name", "Name of the sub-pipeline.").
+			ArgDoc("description", "Description of the sub-pipeline.").
+			ArgDoc("labels", "Labels to apply to the sub-pipeline."),
+
+		dagql.Func("checkVersionCompatibility", s.checkVersionCompatibility).
+			Doc(`Checks if the current Dagger Engine is compatible with an SDK's required version.`).
+			ArgDoc("version", "Version required by the SDK."),
 	}.Install(s.srv)
 }
 

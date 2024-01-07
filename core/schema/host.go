@@ -19,19 +19,11 @@ type hostSchema struct {
 
 var _ SchemaResolvers = &hostSchema{}
 
-func (s *hostSchema) Name() string {
-	return "host"
-}
-
-func (s *hostSchema) Schema() string {
-	return Host
-}
-
 func (s *hostSchema) Install() {
 	dagql.Fields[*core.Query]{
 		dagql.Func("host", func(ctx context.Context, parent *core.Query, args struct{}) (*core.Host, error) {
 			return parent.NewHost(), nil
-		}),
+		}).Doc(`Queries the host environment.`),
 		dagql.Func("blob", func(ctx context.Context, parent *core.Query, args struct {
 			Digest       string `doc:"Digest of the blob"`
 			Size         int64  `doc:"Size of the blob"`
@@ -50,16 +42,55 @@ func (s *hostSchema) Install() {
 				return nil, fmt.Errorf("failed to marshal blob source: %s", err)
 			}
 			return core.NewDirectory(parent, blobDef.ToPB(), "", parent.Platform, nil), nil
-		}),
+		}).Doc("Retrieves a content-addressed blob."),
 	}.Install(s.srv)
 
 	dagql.Fields[*core.Host]{
-		dagql.Func("directory", s.directory).Impure(),
-		dagql.Func("file", s.file).Impure(),
-		dagql.Func("unixSocket", s.socket),
-		dagql.Func("setSecretFile", s.setSecretFile),
-		dagql.Func("tunnel", s.tunnel),
-		dagql.Func("service", s.service),
+		dagql.Func("directory", s.directory).
+			Impure().
+			Doc(`Accesses a directory on the host.`).
+			ArgDoc("path", `Location of the directory to access (e.g., ".").`).
+			ArgDoc("exclude", `Exclude artifacts that match the given pattern (e.g., ["node_modules/", ".git*"]).`).
+			ArgDoc("include", `Include only artifacts that match the given pattern (e.g., ["app/", "package.*"]).`),
+
+		dagql.Func("file", s.file).
+			Impure().
+			Doc(`Accesses a file on the host.`).
+			ArgDoc("path", `Location of the file to retrieve (e.g., "README.md").`),
+
+		dagql.Func("unixSocket", s.socket).
+			Doc(`Accesses a Unix socket on the host.`).
+			ArgDoc("path", `Location of the Unix socket (e.g., "/var/run/docker.sock").`),
+
+		dagql.Func("tunnel", s.tunnel).
+			Doc(`Creates a tunnel that forwards traffic from the host to a service.`).
+			ArgDoc("service", `Service to send traffic from the tunnel.`).
+			ArgDoc("native",
+				`Map each service port to the same port on the host, as if the service were running natively.`,
+				`Note: enabling may result in port conflicts.`).
+			ArgDoc("ports",
+				`Configure explicit port forwarding rules for the tunnel.`,
+				`If a port's frontend is unspecified or 0, a random port will be chosen
+				by the host.`,
+				`If no ports are given, all of the service's ports are forwarded. If
+				native is true, each port maps to the same port on the host. If native
+				is false, each port maps to a random port chosen by the host.`,
+				`If ports are given and native is true, the ports are additive.`),
+
+		dagql.Func("service", s.service).
+			Doc(`Creates a service that forwards traffic to a specified address via the host.`).
+			ArgDoc("ports",
+				`Ports to expose via the service, forwarding through the host network.`,
+				`If a port's frontend is unspecified or 0, it defaults to the same as
+				the backend port.`,
+				`An empty set of ports is not valid; an error will be returned.`).
+			ArgDoc("host", `Upstream host to forward traffic to.`),
+
+		dagql.Func("setSecretFile", s.setSecretFile).
+			Doc(`Sets a secret given a user-defined name and the file path on the host, and returns the secret.`,
+				`The file is limited to a size of 512000 bytes.`).
+			ArgDoc("name", `The user defined name for this secret.`).
+			ArgDoc("path", `Location of the file to set as a secret.`),
 	}.Install(s.srv)
 }
 
@@ -121,7 +152,7 @@ func (s *hostSchema) tunnel(ctx context.Context, parent *core.Host, args hostTun
 	if args.Native {
 		for _, port := range svc.Container.Ports {
 			ports = append(ports, core.PortForward{
-				Frontend: port.Port,
+				Frontend: &port.Port,
 				Backend:  port.Port,
 				Protocol: port.Protocol,
 			})
@@ -135,7 +166,7 @@ func (s *hostSchema) tunnel(ctx context.Context, parent *core.Host, args hostTun
 	if len(ports) == 0 {
 		for _, port := range svc.Container.Ports {
 			ports = append(ports, core.PortForward{
-				Frontend: 0, // pick a random port on the host
+				Frontend: nil, // pick a random port on the host
 				Backend:  port.Port,
 				Protocol: port.Protocol,
 			})

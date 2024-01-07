@@ -29,12 +29,12 @@ import (
 type Directory struct {
 	Query *Query
 
-	LLB      *pb.Definition `json:"llb"`
-	Dir      string         `json:"dir"`
-	Platform Platform       `json:"platform"`
+	LLB      *pb.Definition
+	Dir      string
+	Platform Platform
 
 	// Services necessary to provision the directory.
-	Services ServiceBindings `json:"services,omitempty"`
+	Services ServiceBindings
 }
 
 func (*Directory) Type() *ast.Type {

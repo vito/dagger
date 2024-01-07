@@ -117,8 +117,8 @@ func (m *CoreMod) TypeDefs(ctx context.Context) ([]*core.TypeDef, error) {
 		}
 
 		typeDef := &core.ObjectTypeDef{
-			Name:        introspectionType.Name,
-			Description: introspectionType.Description,
+			Name:         introspectionType.Name,
+			Description_: introspectionType.Description,
 		}
 
 		isIdable := false
@@ -129,8 +129,8 @@ func (m *CoreMod) TypeDefs(ctx context.Context) ([]*core.TypeDef, error) {
 			}
 
 			fn := &core.Function{
-				Name:        introspectionField.Name,
-				Description: introspectionField.Description,
+				Name:         introspectionField.Name,
+				Description_: introspectionField.Description,
 			}
 
 			rtType, ok, err := introspectionRefToTypeDef(introspectionField.TypeRef, false, false)
@@ -144,8 +144,8 @@ func (m *CoreMod) TypeDefs(ctx context.Context) ([]*core.TypeDef, error) {
 
 			for _, introspectionArg := range introspectionField.Args {
 				fnArg := &core.FunctionArg{
-					Name:        introspectionArg.Name,
-					Description: introspectionArg.Description,
+					Name:         introspectionArg.Name,
+					Description_: introspectionArg.Description,
 				}
 
 				if introspectionArg.DefaultValue != nil {

@@ -835,38 +835,38 @@ export enum TypeDefKind {
   /**
    * A boolean value
    */
-  Booleankind = "BooleanKind",
+  BooleanKind = "BooleanKind",
 
   /**
    * An integer value
    */
-  Integerkind = "IntegerKind",
+  IntegerKind = "IntegerKind",
 
   /**
    * A named type of functions that can be matched+implemented by other objects+interfaces.
    *
    * Always paired with an InterfaceTypeDef.
    */
-  Interfacekind = "InterfaceKind",
+  InterfaceKind = "InterfaceKind",
 
   /**
    * A list of values all having the same type.
    *
    * Always paired with a ListTypeDef.
    */
-  Listkind = "ListKind",
+  ListKind = "ListKind",
 
   /**
    * A named type defined in the GraphQL schema, with fields and functions.
    *
    * Always paired with an ObjectTypeDef.
    */
-  Objectkind = "ObjectKind",
+  ObjectKind = "ObjectKind",
 
   /**
    * A string value
    */
-  Stringkind = "StringKind",
+  StringKind = "StringKind",
 
   /**
    * A special kind used to signify that no value is returned.
@@ -875,7 +875,7 @@ export enum TypeDefKind {
    * specifying this Kind is always Optional, as the Void is never actually
    * represented.
    */
-  Voidkind = "VoidKind",
+  VoidKind = "VoidKind",
 }
 /**
  * The absense of a value.

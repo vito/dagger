@@ -13,28 +13,38 @@ type gitSchema struct {
 	srv *dagql.Server
 }
 
-func (s *gitSchema) Name() string {
-	return "git"
-}
-
-func (s *gitSchema) Schema() string {
-	return Git
-}
-
 func (s *gitSchema) Install() {
 	dagql.Fields[*core.Query]{
-		dagql.Func("git", s.git),
+		dagql.Func("git", s.git).
+			Doc(`Queries a Git repository.`).
+			ArgDoc("url",
+				`URL of the git repository.`,
+				`Can be formatted as "https://{host}/{owner}/{repo}", "git@{host}:{owner}/{repo}".`,
+				`Suffix ".git" is optional.`).
+			ArgDoc("keepGitDir", `Set to true to keep .git directory.`).
+			ArgDoc("sshKnownHosts", `Set SSH known hosts`).
+			ArgDoc("sshAuthSocket", `Set SSH auth socket`).
+			ArgDoc("experimentalServiceHost", `A service which must be started before the repo is fetched.`),
 	}.Install(s.srv)
 
 	dagql.Fields[*core.GitRepository]{
-		dagql.Func("branch", s.branch),
-		dagql.Func("tag", s.tag),
-		dagql.Func("commit", s.commit),
+		dagql.Func("branch", s.branch).
+			Doc(`Returns details of a branch.`).
+			ArgDoc("name", `Branch's name (e.g., "main").`),
+		dagql.Func("tag", s.tag).
+			Doc(`Returns details of a tag.`).
+			ArgDoc("name", `Tag's name (e.g., "v0.3.9").`),
+		dagql.Func("commit", s.commit).
+			Doc(`Returns details of a commit.`).
+			// TODO: id is normally a reserved word; we should probably rename this
+			ArgDoc("id", `Identifier of the commit (e.g., "b6315d8f2810962c601af73f86831f6866ea798b").`),
 	}.Install(s.srv)
 
 	dagql.Fields[*core.GitRef]{
-		dagql.Func("tree", s.tree),
-		dagql.Func("commit", s.fetchCommit),
+		dagql.Func("tree", s.tree).
+			Doc(`The filesystem tree at this ref.`),
+		dagql.Func("commit", s.fetchCommit).
+			Doc(`The resolved commit id at this ref.`),
 	}.Install(s.srv)
 }
 
@@ -120,11 +130,8 @@ func (s *gitSchema) tag(ctx context.Context, parent *core.GitRepository, args ta
 }
 
 type treeArgs struct {
-	// FIXME(vito): support deprecated in dagql
-	// SSHKnownHosts is deprecated
-	SSHKnownHosts dagql.Optional[dagql.String] `name:"sshKnownHosts"`
-	// SSHAuthSocket is deprecated
-	SSHAuthSocket dagql.Optional[core.SocketID] `name:"sshAuthSocket"`
+	SSHKnownHosts dagql.Optional[dagql.String]  `name:"sshKnownHosts" deprecated:"This option should be passed to git() instead."`
+	SSHAuthSocket dagql.Optional[core.SocketID] `name:"sshAuthSocket" deprecated:"This option should be passed to git() instead."`
 }
 
 func (s *gitSchema) tree(ctx context.Context, parent *core.GitRef, args treeArgs) (*core.Directory, error) {

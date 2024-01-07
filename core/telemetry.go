@@ -73,6 +73,10 @@ func TelemetryFunc(ctx context.Context, self dagql.Object, id *idproto.ID, next 
 	}
 }
 
+// isIntrospection detects whether an ID is an introspection query.
+//
+// These queries tend to be very large and are not interesting for users to
+// see.
 func isIntrospection(id *idproto.ID) bool {
 	if id.Parent == nil {
 		switch id.Field {

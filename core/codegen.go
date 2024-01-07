@@ -5,9 +5,9 @@ import (
 )
 
 type GeneratedCode struct {
-	Code              *Directory `field:"true"`
-	VCSIgnoredPaths   []string   `field:"true" name:"vcsIgnoredPaths"`
-	VCSGeneratedPaths []string   `field:"true" name:"vcsGeneratedPaths"`
+	Code              *Directory `field:"true" doc:"The directory containing the generated code."`
+	VCSIgnoredPaths   []string   `field:"true" name:"vcsIgnoredPaths" doc:"List of paths to ignore in version control (i.e. .gitignore)."`
+	VCSGeneratedPaths []string   `field:"true" name:"vcsGeneratedPaths" doc:"List of paths to mark generated in version control (i.e. .gitattributes)."`
 }
 
 func NewGeneratedCode(code *Directory) *GeneratedCode {

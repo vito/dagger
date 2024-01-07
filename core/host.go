@@ -23,6 +23,10 @@ func (*Host) Type() *ast.Type {
 	}
 }
 
+func (*Host) Description() string {
+	return "Information about the host environment."
+}
+
 type CopyFilter struct {
 	Exclude []string `default:"[]"`
 	Include []string `default:"[]"`

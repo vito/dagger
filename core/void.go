@@ -16,6 +16,12 @@ func (p Void) TypeName() string {
 	return "Void"
 }
 
+func (p Void) Description() string {
+	return dagql.FormatDescription(
+		`The absense of a value.`,
+		`A Null Void is used as a placeholder for resolvers that do not return anything.`)
+}
+
 func (p Void) Type() *ast.Type {
 	return &ast.Type{
 		NamedType: p.TypeName(),

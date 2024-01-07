@@ -27,6 +27,12 @@ func (p Platform) TypeName() string {
 	return "Platform"
 }
 
+func (p Platform) Description() string {
+	return dagql.FormatDescription(
+		`The platform config OS and architecture in a Container.`,
+		`The format is [os]/[platform]/[version] (e.g., "darwin/arm64/v7", "windows/amd64", "linux/arm64").`)
+}
+
 func (p Platform) Type() *ast.Type {
 	return &ast.Type{
 		NamedType: p.TypeName(),

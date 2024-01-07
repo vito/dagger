@@ -10,9 +10,11 @@ import (
 
 // Port configures a port to exposed from a container or service.
 type Port struct {
-	Port        int             `field:"true"`
-	Protocol    NetworkProtocol `field:"true"`
-	Description *string         `field:"true"`
+	Port     int             `field:"true" doc:"The port number."`
+	Protocol NetworkProtocol `field:"true" doc:"The transport layer protocol."`
+
+	// TODO: use a more specific method name like GraphQLDescription?
+	Description_ *string `field:"true" name:"description" doc:"The port description."`
 }
 
 func (Port) Type() *ast.Type {
@@ -20,6 +22,10 @@ func (Port) Type() *ast.Type {
 		NamedType: "Port",
 		NonNull:   true,
 	}
+}
+
+func (Port) Description() string {
+	return "A port exposed by a container."
 }
 
 // NetworkProtocol is a GraphQL enum type.
@@ -39,6 +45,10 @@ func (proto NetworkProtocol) Type() *ast.Type {
 	}
 }
 
+func (proto NetworkProtocol) Description() string {
+	return "Transport layer network protocol associated to a port."
+}
+
 func (proto NetworkProtocol) Decoder() dagql.InputDecoder {
 	return NetworkProtocols
 }
@@ -55,18 +65,22 @@ func (proto NetworkProtocol) Network() string {
 }
 
 type PortForward struct {
-	Frontend int `default:"0"` // TODO
-	Backend  int
-	Protocol NetworkProtocol `default:"TCP"`
+	Frontend *int            `doc:"Port to expose to clients. If unspecified, a default will be chosen."`
+	Backend  int             `doc:"Destination port for traffic."`
+	Protocol NetworkProtocol `doc:"Transport layer protocol to use for traffic." default:"TCP"`
 }
 
 func (pf PortForward) TypeName() string {
 	return "PortForward"
 }
 
+func (pf PortForward) Description() string {
+	return "Port forwarding rules for tunneling network traffic."
+}
+
 func (pf PortForward) FrontendOrBackendPort() int {
-	if pf.Frontend != 0 {
-		return pf.Frontend
+	if pf.Frontend != nil {
+		return *pf.Frontend
 	}
 	return pf.Backend
 }

@@ -3879,10 +3879,10 @@ EXPOSE 8080
 		require.Equal(t, core.NetworkProtocolTCP, p.Protocol)
 		switch p.Port {
 		case 8080:
-			require.Nil(t, p.Description)
+			require.Nil(t, p.Description_)
 		case 5000:
-			require.NotNil(t, p.Description)
-			require.Equal(t, "five thousand", *p.Description)
+			require.NotNil(t, p.Description_)
+			require.Equal(t, "five thousand", *p.Description_)
 		default:
 			t.Fatalf("unexpected port %d", p.Port)
 		}
