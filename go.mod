@@ -80,7 +80,7 @@ require (
 	github.com/rs/cors v1.10.0
 	github.com/rs/zerolog v1.30.0
 	github.com/shurcooL/graphql v0.0.0-20220606043923-3cf50f8a0a29
-	github.com/vito/dagql v0.0.0-20240107041428-be6f626f71ad
+	github.com/vito/dagql v0.0.0-20240107050052-862cf10bd496
 	github.com/vito/midterm v0.1.4
 	github.com/vito/progrock v0.10.2-0.20240101100611-2d9fa8bf30ad
 	golang.org/x/exp v0.0.0-20231110203233-9a3e6036ecaa

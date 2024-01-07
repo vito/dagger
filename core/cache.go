@@ -50,8 +50,6 @@ func (cache *CacheVolume) Sum() string {
 	return base64.StdEncoding.EncodeToString(hash.Sum(nil))
 }
 
-// CacheSharingMode is a string deriving from CacheSharingMode enum
-// it can take values: SHARED, PRIVATE, LOCKED
 type CacheSharingMode string
 
 var CacheSharingModes = dagql.NewEnum[CacheSharingMode]()

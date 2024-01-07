@@ -1463,6 +1463,8 @@ github.com/vito/dagql v0.0.0-20240107040525-9e22d07eb722 h1:ub7NvmBE0d4NcHj9TBx/
 github.com/vito/dagql v0.0.0-20240107040525-9e22d07eb722/go.mod h1:KAoi0FPXtjVeE0IMwHUkYysR3BJIW9HkpQPJQ3d3pXg=
 github.com/vito/dagql v0.0.0-20240107041428-be6f626f71ad h1:s2/CTnMvLjcWxVlplKTb/ckKoVlU+ibjaYyjbjnqMMY=
 github.com/vito/dagql v0.0.0-20240107041428-be6f626f71ad/go.mod h1:KAoi0FPXtjVeE0IMwHUkYysR3BJIW9HkpQPJQ3d3pXg=
+github.com/vito/dagql v0.0.0-20240107050052-862cf10bd496 h1:WcyIQKuooPpiH14jH2h45mOr09Bcepu6DQavD8MBnts=
+github.com/vito/dagql v0.0.0-20240107050052-862cf10bd496/go.mod h1:KAoi0FPXtjVeE0IMwHUkYysR3BJIW9HkpQPJQ3d3pXg=
 github.com/vito/midterm v0.1.4 h1:SALq5mQ+AgzeZxjL4loB6Uk5TZc9JMyX2ELA/NVH65c=
 github.com/vito/midterm v0.1.4/go.mod h1:Mm3u6lrpzo2EFSJbwksKOdottTJzYePK8c1KJy4aRbk=
 github.com/vito/progrock v0.10.2-0.20240101100611-2d9fa8bf30ad h1:zvCBKtqnK5KqesuEIC0TipFV7z/7//zPdexE5ajRclY=

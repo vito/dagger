@@ -150,7 +150,7 @@ export function typeNameToTypedef(typeName: string): TypeDef<TypeDefKind> {
     case "boolean":
       return { kind: TypeDefKind.BooleanKind }
     case "void":
-      return { Kind: TypeDefKind.VoidKind }
+      return { kind: TypeDefKind.VoidKind }
     default:
       return {
         kind: TypeDefKind.ObjectKind,

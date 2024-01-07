@@ -348,7 +348,7 @@ describe("scan static Typescript", function () {
           methods: [
             {
               name: "helloWorld",
-              returnType: { Kind: TypeDefKind.VoidKind },
+              returnType: { kind: TypeDefKind.VoidKind },
               description: "",
               args: [
                 {
@@ -362,7 +362,7 @@ describe("scan static Typescript", function () {
             },
             {
               name: "asyncHelloWorld",
-              returnType: { Kind: TypeDefKind.VoidKind },
+              returnType: { kind: TypeDefKind.VoidKind },
               description: "",
               args: [
                 {
