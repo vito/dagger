@@ -192,6 +192,7 @@ func (srv *DaggerServer) ServeClientConn(
 	httpSrv := http.Server{
 		Handler:           handler,
 		ReadHeaderTimeout: 30 * time.Second,
+		BaseContext:       func(net.Listener) context.Context { return ctx },
 	}
 	defer httpSrv.Close()
 	return httpSrv.Serve(l)
