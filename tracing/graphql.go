@@ -2,7 +2,7 @@ package tracing
 
 import (
 	"context"
-	"encoding/json"
+	"fmt"
 	"log/slog"
 
 	"github.com/dagger/dagger/core/pipeline"
@@ -10,7 +10,6 @@ import (
 	"github.com/dagger/dagger/dagql/idproto"
 	"github.com/dagger/dagger/dagql/ioctx"
 	"github.com/vito/progrock"
-	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"google.golang.org/protobuf/types/known/anypb"
 )
@@ -28,22 +27,15 @@ func SpanAroundFunc(ctx context.Context, self dagql.Object, id *idproto.ID, next
 			return next(ctx)
 		}
 
-		ctx, span := Tracer.Start(ctx, id.Display())
+		spanName := fmt.Sprintf("%s: %s", id.DisplaySelf(), id.Type.ToAST())
+		ctx, span := Tracer.Start(ctx, spanName)
+		defer span.End()
 
 		v, err := next(ctx)
-
 		if err != nil {
 			span.RecordError(err)
 			span.SetStatus(codes.Error, err.Error())
 		}
-		if v != nil {
-			serialized, err := json.MarshalIndent(v, "", "  ")
-			if err == nil {
-				// span.AddEvent("event", trace.WithAttributes(attribute.String("value", string(serialized))))
-				span.SetAttributes(attribute.String("value", string(serialized)))
-			}
-		}
-		span.End()
 
 		return v, err
 	}
