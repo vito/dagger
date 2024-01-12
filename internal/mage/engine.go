@@ -300,6 +300,8 @@ func (t Engine) Dev(ctx context.Context) error {
 		"-e", util.CacheConfigEnvName,
 		"-e", "_EXPERIMENTAL_DAGGER_CLOUD_TOKEN",
 		"-e", "_EXPERIMENTAL_DAGGER_CLOUD_URL",
+		"--link", "jaeger",
+		"-e", "OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318",
 		"-e", util.GPUSupportEnvName,
 		"-v", volumeName + ":" + distconsts.EngineDefaultStateDir,
 		"-p", "6060:6060",

@@ -83,6 +83,10 @@ func (s *APIServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), code)
 	}
 
+	ctx, span := tracing.Tracer.Start(ctx, fmt.Sprintf("%s %s", r.Method, r.URL))
+	defer span.End()
+	r = r.WithContext(ctx)
+
 	clientMetadata, err := engine.ClientMetadataFromContext(ctx)
 	if err != nil {
 		errorOut(err, http.StatusInternalServerError)
