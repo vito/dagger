@@ -3,29 +3,52 @@ package tracing
 import (
 	"context"
 	"io"
+	"log/slog"
 	"os"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel"
-	//nolint:staticcheck
-	"go.opentelemetry.io/otel/exporters/jaeger"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/sdk/resource"
 	tracesdk "go.opentelemetry.io/otel/sdk/trace"
-	semconv "go.opentelemetry.io/otel/semconv/v1.4.0"
+	semconv "go.opentelemetry.io/otel/semconv/v1.21.0"
 )
 
 var Tracer = otel.Tracer("dagger")
 
 func Init() io.Closer {
-	traceEndpoint := os.Getenv("OTEL_EXPORTER_JAEGER_ENDPOINT")
-	if traceEndpoint == "" {
+	var tracingEnabled bool
+	for _, env := range os.Environ() {
+		if strings.HasPrefix(env, "OTEL_") {
+			tracingEnabled = true
+			break
+		}
+	}
+
+	if !tracingEnabled {
 		return &nopCloser{}
 	}
 
-	tp, err := tracerProvider(traceEndpoint)
+	slog.Debug("setting up tracing")
+
+	exp, err := otlptracehttp.New(context.TODO())
 	if err != nil {
 		panic(err)
 	}
+
+	tp := tracesdk.NewTracerProvider(
+		// Always be sure to batch in production.
+		tracesdk.WithBatcher(exp,
+			// The engine doesn't actually process enough traffic for it to be worth
+			// batching; better to set it to 1 for instant dev feedback.
+			tracesdk.WithMaxExportBatchSize(1)),
+		// Record information about this application in an Resource.
+		tracesdk.WithResource(resource.NewWithAttributes(
+			semconv.SchemaURL,
+			semconv.ServiceNameKey.String("dagger"),
+		)),
+	)
 
 	// Register our TracerProvider as the global so any imported
 	// instrumentation in the future will default to using it.
@@ -36,28 +59,6 @@ func Init() io.Closer {
 	}
 
 	return closer
-}
-
-// tracerProvider returns an OpenTelemetry TracerProvider configured to use
-// the Jaeger exporter that will send spans to the provided url. The returned
-// TracerProvider will also use a Resource configured with all the information
-// about the application.
-func tracerProvider(url string) (*tracesdk.TracerProvider, error) {
-	// Create the Jaeger exporter
-	exp, err := jaeger.New(jaeger.WithCollectorEndpoint(jaeger.WithEndpoint(url)))
-	if err != nil {
-		return nil, err
-	}
-	tp := tracesdk.NewTracerProvider(
-		// Always be sure to batch in production.
-		tracesdk.WithBatcher(exp, tracesdk.WithMaxExportBatchSize(1)),
-		// Record information about this application in an Resource.
-		tracesdk.WithResource(resource.NewWithAttributes(
-			semconv.SchemaURL,
-			semconv.ServiceNameKey.String("dagger"),
-		)),
-	)
-	return tp, nil
 }
 
 type providerCloser struct {
