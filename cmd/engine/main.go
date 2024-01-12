@@ -26,9 +26,9 @@ import (
 	"github.com/dagger/dagger/engine/server"
 	"github.com/dagger/dagger/network"
 	"github.com/dagger/dagger/network/netinst"
+	"github.com/dagger/dagger/tracing"
 	"github.com/docker/docker/pkg/reexec"
 	"github.com/gofrs/flock"
-	grpc_middleware "github.com/grpc-ecosystem/go-grpc-middleware"
 	"github.com/moby/buildkit/cache/remotecache"
 	"github.com/moby/buildkit/cache/remotecache/azblob"
 	"github.com/moby/buildkit/cache/remotecache/gha"
@@ -52,7 +52,6 @@ import (
 	"github.com/moby/buildkit/util/appdefaults"
 	"github.com/moby/buildkit/util/archutil"
 	"github.com/moby/buildkit/util/bklog"
-	"github.com/moby/buildkit/util/grpcerrors"
 	"github.com/moby/buildkit/util/profiler"
 	"github.com/moby/buildkit/util/resolver"
 	"github.com/moby/buildkit/util/stack"
@@ -70,7 +69,6 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/otel/propagation"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	"go.opentelemetry.io/otel/trace"
 	tracev1 "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
@@ -124,6 +122,8 @@ func registerWorkerInitializer(wi workerInitializer, flags ...cli.Flag) {
 }
 
 func main() { //nolint:gocyclo
+	defer tracing.Init().Close()
+
 	cli.VersionPrinter = func(c *cli.Context) {
 		fmt.Println(c.App.Name, version.Package, c.App.Version, version.Revision)
 	}
@@ -283,27 +283,8 @@ func main() { //nolint:gocyclo
 			}
 		}
 
-		bklog.G(ctx).Debug("setting up engine tracing")
-
-		tp, err := detect.TracerProvider()
-		if err != nil {
-			// just log it, this can happen when there's mismatching versions of otel libraries in your
-			// module dependency DAG...
-			bklog.G(ctx).WithError(err).Error("failed to create tracer provider")
-		}
-
-		// FIXME: continuing to use the deprecated interceptor until/unless there's a replacement that works w/ grpc_middleware
-		//nolint:staticcheck // SA1019 deprecated
-		streamTracer := otelgrpc.StreamServerInterceptor(otelgrpc.WithTracerProvider(tp), otelgrpc.WithPropagators(propagators))
-
-		// NOTE: using context.Background because otherwise when the outer context is cancelled the server
-		// stops working. Server shutdown based on context cancellation is handled later in this func.
-		unary := grpc_middleware.ChainUnaryServer(unaryInterceptor(context.Background(), tp), grpcerrors.UnaryServerInterceptor)
-		stream := grpc_middleware.ChainStreamServer(streamTracer, grpcerrors.StreamServerInterceptor)
-
 		bklog.G(ctx).Debug("creating engine GRPC server")
-		grpcOpts := []grpc.ServerOption{grpc.UnaryInterceptor(unary), grpc.StreamInterceptor(stream)}
-		server := grpc.NewServer(grpcOpts...)
+		server := grpc.NewServer(grpc.StatsHandler(otelgrpc.NewServerHandler()))
 
 		// relative path does not work with nightlyone/lockfile
 		root, err := filepath.Abs(cfg.Root)
@@ -647,38 +628,6 @@ func getListener(addr string, uid, gid int, tlsConfig *tls.Config) (net.Listener
 		return tls.NewListener(l, tlsConfig), nil
 	default:
 		return nil, errors.Errorf("addr %s not supported", addr)
-	}
-}
-
-func unaryInterceptor(globalCtx context.Context, tp trace.TracerProvider) grpc.UnaryServerInterceptor {
-	// FIXME: continuing to use the deprecated interceptor until/unless there's a replacement that works w/ grpc_middleware
-	//nolint:staticcheck // SA1019 deprecated
-	withTrace := otelgrpc.UnaryServerInterceptor(otelgrpc.WithTracerProvider(tp), otelgrpc.WithPropagators(propagators))
-
-	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (resp interface{}, err error) {
-		ctx, cancel := context.WithCancel(ctx)
-		defer cancel()
-
-		go func() {
-			select {
-			case <-ctx.Done():
-			case <-globalCtx.Done():
-				cancel()
-			}
-		}()
-
-		if strings.HasSuffix(info.FullMethod, "opentelemetry.proto.collector.trace.v1.TraceService/Export") {
-			return handler(ctx, req)
-		}
-
-		resp, err = withTrace(ctx, req, info, handler)
-		if err != nil {
-			logrus.Errorf("%s returned error: %v", info.FullMethod, err)
-			if logrus.GetLevel() >= logrus.DebugLevel {
-				fmt.Fprintf(os.Stderr, "%+v", stack.Formatter(grpcerrors.FromGRPC(err)))
-			}
-		}
-		return
 	}
 }
 
