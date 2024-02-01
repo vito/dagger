@@ -124,6 +124,43 @@ func TestBasic(t *testing.T) {
 	assert.Equal(t, 8, res.Point.ShiftLeft.Neighbors[3].Y)
 }
 
+func TestMissingSubselections(t *testing.T) {
+	srv := dagql.NewServer(Query{})
+
+	points.Install[Query](srv)
+
+	gql := client.New(handler.NewDefaultServer(srv))
+
+	t.Run("simple Object", func(t *testing.T) {
+		var res struct {
+			Point struct {
+				X int
+				Y int
+			}
+		}
+		err := gql.Post(`query {
+			point(x: 6, y: 7)
+		}`, &res)
+		assert.ErrorContains(t, err, "expected subselections for Point!")
+	})
+
+	t.Run("Objects in a list", func(t *testing.T) {
+		var res struct {
+			Point struct {
+				Neighbors []struct {
+					X, Y int
+				}
+			}
+		}
+		err := gql.Post(`query {
+			point(x: 6, y: 7) {
+				neighbors
+			}
+		}`, &res)
+		assert.ErrorContains(t, err, "expected subselections for Point!")
+	})
+}
+
 func TestNullableResults(t *testing.T) {
 	srv := dagql.NewServer(Query{})
 

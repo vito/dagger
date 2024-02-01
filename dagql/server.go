@@ -327,10 +327,9 @@ func (s *Server) Exec(ctx1 context.Context) graphql.ResponseHandler {
 		results, err := s.ExecOp(ctx, gqlOp)
 		if err != nil {
 			gqlOp.Error(ctx, err)
-			gqlErr := &gqlerror.Error{
-				Err:     err,
-				Message: err.Error(),
-				// TODO Path would correspond nicely to an ID
+			var gqlErr *gqlerror.Error
+			if !errors.As(err, &gqlErr) {
+				gqlErr = gqlerror.Wrap(err)
 			}
 			var ext ExtendedError
 			if errors.As(err, &ext) {
@@ -565,6 +564,9 @@ func (s *Server) resolvePath(ctx context.Context, self Object, sel Selection) (r
 				}
 			}
 			if len(sel.Subselections) == 0 {
+				if _, isObj := s.ObjectType(val.Type().Name()); isObj {
+					return nil, fmt.Errorf("expected subselections for %s", val.Type())
+				}
 				results = append(results, val)
 			} else {
 				nthID := chainedID.Clone()
@@ -584,6 +586,9 @@ func (s *Server) resolvePath(ctx context.Context, self Object, sel Selection) (r
 	}
 
 	if len(sel.Subselections) == 0 {
+		if _, isObj := s.ObjectType(val.Type().Name()); isObj {
+			return nil, fmt.Errorf("expected subselections for %s", val.Type())
+		}
 		return val, nil
 	}
 

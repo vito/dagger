@@ -103,6 +103,18 @@ func (id *ID) Path() string {
 	return buf.String()
 }
 
+func (id *ID) PathAST() ast.Path {
+	var p ast.Path
+	if id.Parent != nil {
+		p = id.Parent.PathAST()
+	}
+	p = append(p, ast.PathName(id.Field))
+	if id.Nth != 0 {
+		p = append(p, ast.PathIndex(int(id.Nth-1)))
+	}
+	return p
+}
+
 func (id *ID) DisplaySelf() string {
 	buf := new(bytes.Buffer)
 	fmt.Fprintf(buf, "%s", id.Field)
