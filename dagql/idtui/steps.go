@@ -29,6 +29,19 @@ func (step *Step) FirstVertex() *progrock.Vertex {
 	return step.db.FirstVertex(step.Digest)
 }
 
+func (s *Step) IsRunning() bool {
+	ivals := s.db.Intervals[s.Digest]
+	if ivals == nil || len(ivals) == 0 {
+		return false
+	}
+	for _, vtx := range ivals {
+		if vtx.Completed == nil {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Step) StartTime() time.Time {
 	ivals := s.db.Intervals[s.Digest]
 	if ivals == nil || len(ivals) == 0 {

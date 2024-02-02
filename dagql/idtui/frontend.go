@@ -94,11 +94,27 @@ func (f *Frontend) Close() error {
 	return nil
 }
 
+func (row *TraceRow) IsRunning() bool {
+	if row.Step.IsRunning() {
+		return true
+	}
+	for _, child := range row.Children {
+		if child.IsRunning() {
+			return true
+		}
+	}
+	return false
+}
+
 func (f *Frontend) Render(w io.Writer) error {
 	steps := CollectSteps(f.db)
 	rows := CollectRows(steps)
 	out := ui.NewOutput(w)
 	for _, row := range rows {
+		if !row.IsRunning() {
+			continue
+		}
+
 		if err := f.renderRow(out, row); err != nil {
 			return err
 		}
@@ -198,23 +214,23 @@ func (f *Frontend) View() string {
 func (fe *Frontend) renderRow(out *termenv.Output, row *TraceRow) error {
 	vtx := row.Step.FirstVertex()
 
-	// if !(vtx != nil && vtx.Completed != nil && vtx.Error == nil) {
-	id := row.Step.ID()
-	if id != nil {
-		if err := fe.renderID(out, vtx, row.Step.ID(), row.Depth()); err != nil {
-			return err
+	if row.IsRunning() {
+		id := row.Step.ID()
+		if id != nil {
+			if err := fe.renderID(out, vtx, row.Step.ID(), row.Depth()); err != nil {
+				return err
+			}
+		} else if vtx := row.Step.FirstVertex(); vtx != nil {
+			if err := fe.renderVertex(out, vtx, row.Depth()); err != nil {
+				return err
+			}
 		}
-	} else if vtx := row.Step.FirstVertex(); vtx != nil {
-		if err := fe.renderVertex(out, vtx, row.Depth()); err != nil {
-			return err
+		if logs, ok := fe.db.Logs[row.Step.Digest]; ok {
+			logs.SetPrefix(strings.Repeat("  ", row.Depth()+1))
+			logs.SetHeight(fe.window.Height / 3)
+			fmt.Fprint(out, logs.View())
 		}
 	}
-	if logs, ok := fe.db.Logs[row.Step.Digest]; ok {
-		logs.SetPrefix(strings.Repeat("  ", row.Depth()) + ui.VertBar + " ")
-		logs.SetHeight(fe.window.Height / 3)
-		fmt.Fprint(out, logs.View())
-	}
-	// }
 
 	for _, child := range row.Children {
 		// out.SetWindowTitle // TODO  this would be cool
@@ -272,7 +288,11 @@ func (fe *Frontend) renderID(out *termenv.Output, vtx *progrock.Vertex, id *idpr
 					fmt.Fprintln(out, " "+x.Id.Type.ToAST().Name()+"@"+argVertexID.String()+"{")
 					depth++
 					argVtx := fe.db.Vertices[argVertexID.String()]
-					if err := fe.renderID(out, argVtx, x.Id, depth); err != nil {
+					base := x.Id
+					if baseStep, ok := fe.db.HighLevelStep(x.Id); ok {
+						base = baseStep.ID()
+					}
+					if err := fe.renderID(out, argVtx, base, depth); err != nil {
 						return err
 					}
 					depth--
