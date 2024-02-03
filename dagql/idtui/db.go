@@ -8,7 +8,6 @@ import (
 
 	"github.com/dagger/dagger/dagql/idproto"
 	"github.com/vito/progrock"
-	"github.com/vito/progrock/ui"
 )
 
 func init() {
@@ -25,7 +24,7 @@ type DB struct {
 	OutputOf  map[string]map[string]struct{}
 	Children  map[string]map[string]struct{}
 	Intervals map[string]map[time.Time]*progrock.Vertex
-	Logs      map[string]*ui.Vterm
+	Logs      map[string]*Vterm
 }
 
 func NewDB(log *slog.Logger) *DB {
@@ -45,13 +44,25 @@ func NewDB(log *slog.Logger) *DB {
 		Outputs:   make(map[string]map[string]struct{}),
 		Children:  make(map[string]map[string]struct{}),
 		Intervals: make(map[string]map[time.Time]*progrock.Vertex),
-		Logs:      make(map[string]*ui.Vterm),
+		Logs:      make(map[string]*Vterm),
 	}
 }
 
 var _ progrock.Writer = (*DB)(nil)
 
 func (db *DB) WriteStatus(status *progrock.StatusUpdate) error {
+	// collect IDs
+	for _, meta := range status.Metas {
+		switch meta.Name {
+		case "id":
+			var id idproto.ID
+			if err := meta.Data.UnmarshalTo(&id); err != nil {
+				return fmt.Errorf("unmarshal payload: %w", err)
+			}
+			db.IDs[meta.Vertex] = &id
+		}
+	}
+
 	for _, v := range status.Vertexes {
 		// track the earliest start time and latest end time
 		if v.Started != nil && v.Started.AsTime().Before(db.Epoch) {
@@ -65,15 +76,13 @@ func (db *DB) WriteStatus(status *progrock.StatusUpdate) error {
 		db.Vertices[v.Id] = v
 
 		// keep track of outputs
-		if len(v.Outputs) > 0 {
-			if db.Outputs[v.Id] == nil {
-				db.Outputs[v.Id] = make(map[string]struct{})
-			}
-		}
 		for _, out := range v.Outputs {
 			if strings.HasPrefix(v.Name, "load") && strings.HasSuffix(v.Name, "FromID") {
 				// don't consider loadFooFromID to be a 'creator'
 				continue
+			}
+			if db.Outputs[v.Id] == nil {
+				db.Outputs[v.Id] = make(map[string]struct{})
 			}
 			db.Outputs[v.Id][out] = struct{}{}
 			if db.OutputOf[out] == nil {
@@ -101,18 +110,6 @@ func (db *DB) WriteStatus(status *progrock.StatusUpdate) error {
 		}
 	}
 
-	// collect IDs
-	for _, meta := range status.Metas {
-		switch meta.Name {
-		case "id":
-			var id idproto.ID
-			if err := meta.Data.UnmarshalTo(&id); err != nil {
-				return fmt.Errorf("unmarshal payload: %w", err)
-			}
-			db.IDs[meta.Vertex] = &id
-		}
-	}
-
 	for _, log := range status.Logs {
 		_, _ = db.VertexLogs(log.Vertex).Write(log.Data)
 	}
@@ -120,10 +117,10 @@ func (db *DB) WriteStatus(status *progrock.StatusUpdate) error {
 	return nil
 }
 
-func (db *DB) VertexLogs(vertex string) *ui.Vterm {
+func (db *DB) VertexLogs(vertex string) *Vterm {
 	term, found := db.Logs[vertex]
 	if !found {
-		term = ui.NewVterm()
+		term = NewVterm()
 		db.Logs[vertex] = term
 	}
 	return term
@@ -166,9 +163,9 @@ func (db *DB) Step(dig string) (*Step, bool) {
 	if outID != nil {
 		var ok bool
 		if outID.Parent != nil {
-			step.Parent, ok = db.HighLevelStep(outID.Parent)
+			step.Base, ok = db.HighLevelStep(outID.Parent)
 			if !ok {
-				db.l.Warn("missing parent", "step", outID.Display(), "digest", dig)
+				db.l.Warn("missing base", "step", outID.Display(), "digest", dig)
 				return nil, false
 			}
 		}

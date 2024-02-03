@@ -8,12 +8,11 @@ import (
 
 	"github.com/a-h/templ"
 	"github.com/dagger/dagger/dagql/idproto"
-	"github.com/vito/midterm"
 	"github.com/vito/progrock"
 )
 
 type Step struct {
-	Parent *Step
+	Base   *Step
 	Digest string
 
 	db *DB
@@ -104,10 +103,6 @@ func (s *Step) Children() []*Step {
 		return children[i].IsBefore(children[j])
 	})
 	return children
-}
-
-func (s *Step) Logs(state *State) *midterm.Terminal {
-	return state.Tape.VertexLogs(s.Digest).Term()
 }
 
 type Span struct {

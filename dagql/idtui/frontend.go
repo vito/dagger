@@ -31,8 +31,10 @@ type Frontend struct {
 	err       error
 
 	// updated via progrock.Writer interface
-	db  *DB
-	eof bool
+	db    *DB
+	eof   bool
+	steps []*Step
+	rows  []*TraceRow
 
 	// da spin zone
 	spin tea.Model
@@ -84,7 +86,14 @@ var _ progrock.Writer = (*Frontend)(nil)
 func (f *Frontend) WriteStatus(update *progrock.StatusUpdate) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.db.WriteStatus(update)
+	if err := f.db.WriteStatus(update); err != nil {
+		return err
+	}
+	if len(update.Vertexes) > 0 {
+		f.steps = CollectSteps(f.db)
+		f.rows = CollectRows(f.steps)
+	}
+	return nil
 }
 
 type eofMsg struct{}
@@ -107,10 +116,8 @@ func (row *TraceRow) IsRunning() bool {
 }
 
 func (f *Frontend) Render(w io.Writer) error {
-	steps := CollectSteps(f.db)
-	rows := CollectRows(steps)
 	out := ui.NewOutput(w)
-	for _, row := range rows {
+	for _, row := range f.rows {
 		if !row.IsRunning() {
 			continue
 		}
