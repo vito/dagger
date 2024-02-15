@@ -480,33 +480,9 @@ func (s *Server) Select(ctx context.Context, self Object, dest any, sels ...Sele
 			} else if isEnum {
 				// HACK: list of objects must be the last selection right now unless nth used in Selector.
 				if i+1 < len(sels) {
-					return fmt.Errorf("cannot sub-select enum of %s", res.Type())
+					return fmt.Errorf("cannot sub-select enumerable: %s", res.Type())
 				}
-				for nth := 1; nth <= enum.Len(); nth++ {
-					val, err := enum.Nth(nth)
-					if err != nil {
-						return fmt.Errorf("nth %d: %w", nth, err)
-					}
-					if wrapped, ok := val.(Derefable); ok {
-						val, ok = wrapped.Deref()
-						if !ok {
-							if err := appendAssign(reflect.ValueOf(dest).Elem(), nil); err != nil {
-								return err
-							}
-							continue
-						}
-					}
-					nthID := id.Clone()
-					nthID.SelectNth(nth)
-					obj, err := s.toSelectable(nthID, val)
-					if err != nil {
-						return fmt.Errorf("select %dth array element: %w", nth, err)
-					}
-					if err := appendAssign(reflect.ValueOf(dest).Elem(), obj); err != nil {
-						return err
-					}
-				}
-				return nil
+				return assign(reflect.ValueOf(dest).Elem(), res)
 			}
 
 			// if the result is an Object, set it as the next selection target, and
