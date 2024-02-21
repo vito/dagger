@@ -19,7 +19,10 @@ import (
 	"golang.org/x/term"
 )
 
-const PrimaryVertex = "primary"
+const (
+	InitVertex    = "init"
+	PrimaryVertex = "primary"
+)
 
 var consoleSink = os.Stderr
 
