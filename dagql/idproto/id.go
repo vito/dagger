@@ -240,11 +240,11 @@ func (id *ID) Encode() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return base64.URLEncoding.EncodeToString(proto), nil
+	return base64.StdEncoding.EncodeToString(proto), nil
 }
 
 func (id *ID) Decode(str string) error {
-	bytes, err := base64.URLEncoding.DecodeString(str)
+	bytes, err := base64.StdEncoding.DecodeString(str)
 	if err != nil {
 		return fmt.Errorf("cannot decode ID from %q: %w", str, err)
 	}

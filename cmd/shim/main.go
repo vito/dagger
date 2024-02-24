@@ -664,7 +664,7 @@ func runWithNesting(ctx context.Context, cmd *exec.Cmd) error {
 	if err != nil {
 		return fmt.Errorf("error connecting to engine: %w", err)
 	}
-	defer sess.Close()
+	defer sess.Close(nil)
 
 	_ = ctx // avoid ineffasign lint
 

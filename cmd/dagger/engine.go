@@ -2,15 +2,12 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/dagger/dagger/dagql/idtui"
 	"github.com/dagger/dagger/engine"
 	"github.com/dagger/dagger/engine/client"
-	"github.com/dagger/dagger/internal/tui"
 	"github.com/dagger/dagger/telemetry"
 	"github.com/mattn/go-isatty"
 	"github.com/vito/progrock"
@@ -50,8 +47,6 @@ var focus bool
 // set this to false if your command handles errors (e.g. dagger checks)
 var revealErrored = true
 
-var interactive = os.Getenv("_EXPERIMENTAL_DAGGER_INTERACTIVE_TUI") != ""
-
 type runClientCallback func(context.Context, *client.Client) error
 
 var useLegacyTUI = os.Getenv("_EXPERIMENTAL_DAGGER_LEGACY_TUI") != ""
@@ -75,9 +70,6 @@ func withEngineAndTUI(
 		params.JournalFile = os.Getenv("_EXPERIMENTAL_DAGGER_JOURNAL")
 	}
 
-	if interactive {
-		return interactiveTUI(ctx, params, fn)
-	}
 	if useLegacyTUI {
 		if progress == "auto" && autoTTY || progress == "tty" {
 			return legacyTUI(ctx, params, fn)
@@ -109,8 +101,9 @@ func plainConsole(ctx context.Context, params client.Params, fn runClientCallbac
 	if err != nil {
 		return err
 	}
-	defer engineClient.Close()
-	return fn(ctx, engineClient)
+	err = fn(ctx, engineClient)
+	engineClient.Close(err)
+	return err
 }
 
 func runWithFrontend(
@@ -130,8 +123,9 @@ func runWithFrontend(
 		if err != nil {
 			return err
 		}
-		defer sess.Close()
-		return fn(ctx, sess)
+		err = fn(ctx, sess)
+		sess.Close(err)
+		return err
 	})
 }
 
@@ -172,40 +166,8 @@ func legacyTUI(
 		if err != nil {
 			return err
 		}
-		defer sess.Close()
-		return fn(ctx, sess)
+		err = fn(ctx, sess)
+		sess.Close(err)
+		return err
 	})
-}
-
-func interactiveTUI(
-	ctx context.Context,
-	params client.Params,
-	fn runClientCallback,
-) error {
-	progR, progW := progrock.Pipe()
-	params.ProgrockWriter = telemetry.NewLegacyIDInternalizer(progW)
-
-	ctx, quit := context.WithCancel(ctx)
-	defer quit()
-
-	program := tea.NewProgram(tui.New(quit, progR), tea.WithAltScreen())
-
-	tuiDone := make(chan error, 1)
-	go func() {
-		_, err := program.Run()
-		tuiDone <- err
-	}()
-
-	sess, ctx, err := client.Connect(ctx, params)
-	if err != nil {
-		tuiErr := <-tuiDone
-		return errors.Join(tuiErr, err)
-	}
-
-	err = fn(ctx, sess)
-
-	closeErr := sess.Close()
-
-	tuiErr := <-tuiDone
-	return errors.Join(tuiErr, closeErr, err)
 }

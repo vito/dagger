@@ -11,7 +11,6 @@ import (
 	"github.com/vito/progrock"
 
 	"github.com/dagger/dagger/core"
-	"github.com/dagger/dagger/core/pipeline"
 	"github.com/dagger/dagger/engine"
 )
 
@@ -34,7 +33,7 @@ func (s *querySchema) Install() {
 	core.TypeDefKinds.Install(s.srv)
 	core.ModuleSourceKindEnum.Install(s.srv)
 
-	dagql.MustInputSpec(pipeline.Label{}).Install(s.srv)
+	dagql.MustInputSpec(PipelineLabel{}).Install(s.srv)
 	dagql.MustInputSpec(core.PortForward{}).Install(s.srv)
 	dagql.MustInputSpec(core.BuildArg{}).Install(s.srv)
 
@@ -60,15 +59,11 @@ func (s *querySchema) Install() {
 type pipelineArgs struct {
 	Name        string
 	Description string `default:""`
-	Labels      dagql.Optional[dagql.ArrayInput[dagql.InputObject[pipeline.Label]]]
+	Labels      dagql.Optional[dagql.ArrayInput[dagql.InputObject[PipelineLabel]]]
 }
 
 func (s *querySchema) pipeline(ctx context.Context, parent *core.Query, args pipelineArgs) (*core.Query, error) {
-	return parent.WithPipeline(
-		args.Name,
-		args.Description,
-		collectInputs(args.Labels),
-	), nil
+	return parent.WithPipeline(args.Name, args.Description), nil
 }
 
 type checkVersionCompatibilityArgs struct {

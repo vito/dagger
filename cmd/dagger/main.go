@@ -11,6 +11,8 @@ import (
 	"unicode"
 
 	"github.com/dagger/dagger/analytics"
+	"github.com/dagger/dagger/engine"
+	"github.com/dagger/dagger/telemetry"
 	"github.com/dagger/dagger/tracing"
 	"github.com/muesli/reflow/indent"
 	"github.com/muesli/reflow/wordwrap"
@@ -127,7 +129,8 @@ var rootCmd = &cobra.Command{
 			return err
 		}
 
-		t := analytics.New(analytics.DefaultConfig())
+		labels := telemetry.LoadDefaultLabels(workdir, engine.Version)
+		t := analytics.New(analytics.DefaultConfig(labels))
 		cmd.SetContext(analytics.WithContext(cmd.Context(), t))
 		cobra.OnFinalize(func() {
 			t.Close()

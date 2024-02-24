@@ -15,10 +15,10 @@ import (
 	"github.com/dagger/dagger/analytics"
 	"github.com/dagger/dagger/auth"
 	"github.com/dagger/dagger/core"
-	"github.com/dagger/dagger/core/pipeline"
 	"github.com/dagger/dagger/core/schema"
 	"github.com/dagger/dagger/engine"
 	"github.com/dagger/dagger/engine/buildkit"
+	"github.com/dagger/dagger/telemetry"
 	bksession "github.com/moby/buildkit/session"
 	"github.com/moby/buildkit/util/bklog"
 	bkworker "github.com/moby/buildkit/worker"
@@ -51,7 +51,7 @@ func NewDaggerServer(
 	serverID string,
 	secretStore *core.SecretStore,
 	authProvider *auth.RegistryAuthProvider,
-	rootLabels []pipeline.Label,
+	rootLabels telemetry.Labels,
 	cloudToken string,
 	doNotTrack bool,
 ) (*DaggerServer, error) {
@@ -83,14 +83,7 @@ func NewDaggerServer(
 	}
 	srv.progCleanup = progCleanup
 
-	progrockLabels := []*progrock.Label{}
-	for _, label := range rootLabels {
-		progrockLabels = append(progrockLabels, &progrock.Label{
-			Name:  label.Name,
-			Value: label.Value,
-		})
-	}
-	srv.recorder = progrock.NewRecorder(progWriter, progrock.WithLabels(progrockLabels...))
+	srv.recorder = progrock.NewRecorder(progWriter)
 
 	// NOTE: context.Background is used because if the provided context is canceled, buildkit can
 	// leave internal progress contexts open and leak goroutines.

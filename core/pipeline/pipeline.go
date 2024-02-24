@@ -9,10 +9,9 @@ import (
 )
 
 type Pipeline struct {
-	Name        string  `json:"name"`
-	Description string  `json:"description,omitempty"`
-	Labels      []Label `json:"labels,omitempty"`
-	Weak        bool    `json:"weak,omitempty"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Weak        bool   `json:"weak,omitempty"`
 }
 
 // Pipelineable is any object which can return a pipeline.Path.
@@ -76,13 +75,6 @@ func (g Path) WithGroups(ctx context.Context) context.Context {
 			labels = append(labels, &progrock.Label{
 				Name:  ProgrockDescriptionLabel,
 				Value: p.Description,
-			})
-		}
-
-		for _, l := range p.Labels {
-			labels = append(labels, &progrock.Label{
-				Name:  l.Name,
-				Value: l.Value,
 			})
 		}
 

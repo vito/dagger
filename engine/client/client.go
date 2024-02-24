@@ -41,7 +41,6 @@ import (
 	"google.golang.org/grpc/codes"
 
 	"github.com/dagger/dagger/analytics"
-	"github.com/dagger/dagger/core/pipeline"
 	"github.com/dagger/dagger/engine"
 	"github.com/dagger/dagger/engine/session"
 	"github.com/dagger/dagger/telemetry"
@@ -106,7 +105,9 @@ type Client struct {
 
 	nestedSessionPort int
 
-	labels []pipeline.Label
+	labels telemetry.Labels
+
+	finishRun func(error)
 }
 
 func Connect(ctx context.Context, params Params) (_ *Client, _ context.Context, rerr error) {
@@ -141,10 +142,18 @@ func Connect(ctx context.Context, params Params) (_ *Client, _ context.Context, 
 		progMultiW = append(progMultiW, fw)
 	}
 
+	workdir, err := os.Getwd()
+	if err != nil {
+		return nil, nil, fmt.Errorf("get workdir: %w", err)
+	}
+
+	c.labels = telemetry.LoadDefaultLabels(workdir, engine.Version)
+
 	tel := telemetry.New()
 	var cloudURL string
 	if tel.Enabled() {
 		cloudURL = tel.URL()
+		c.finishRun = tel.StartRun(c.labels)
 		progMultiW = append(progMultiW, telemetry.NewWriter(tel))
 	}
 	if c.ProgrockParent != "" {
@@ -199,7 +208,6 @@ func Connect(ctx context.Context, params Params) (_ *Client, _ context.Context, 
 	// Note that this is not the cache service support in engine/cache/, that
 	// is a different feature which is configured in the engine daemon.
 
-	var err error
 	c.upstreamCacheImportOptions, c.upstreamCacheExportOptions, err = allCacheConfigsFromEnv()
 	if err != nil {
 		return nil, nil, fmt.Errorf("cache config from env: %w", err)
@@ -246,18 +254,6 @@ func Connect(ctx context.Context, params Params) (_ *Client, _ context.Context, 
 			c.bkSession.Close()
 		}
 	}()
-
-	workdir, err := os.Getwd()
-	if err != nil {
-		return nil, nil, fmt.Errorf("get workdir: %w", err)
-	}
-
-	labels := pipeline.Labels{}
-	labels.AppendCILabel()
-	labels = append(labels, pipeline.LoadVCSLabels(workdir)...)
-	labels = append(labels, pipeline.LoadClientLabels(engine.Version)...)
-
-	c.labels = labels
 
 	c.internalCtx = engine.ContextWithClientMetadata(c.internalCtx, &engine.ClientMetadata{
 		ClientID:           c.ID(),
@@ -369,7 +365,7 @@ func (c *Client) daggerConnect(ctx context.Context) error {
 	return err
 }
 
-func (c *Client) Close() (rerr error) {
+func (c *Client) Close(runErr error) (rerr error) {
 	// shutdown happens outside of c.closeMu, since it requires a connection
 	if err := c.shutdownServer(); err != nil {
 		rerr = errors.Join(rerr, fmt.Errorf("shutdown: %w", err))
@@ -421,6 +417,11 @@ func (c *Client) Close() (rerr error) {
 	}
 	if err := c.eg.Wait(); err != nil {
 		rerr = errors.Join(rerr, err)
+	}
+
+	// finalize the run, sending the error result upstream
+	if c.finishRun != nil {
+		c.finishRun(runErr)
 	}
 
 	// mark all groups completed

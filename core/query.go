@@ -223,12 +223,11 @@ func (q *Query) CurrentServedDeps(ctx context.Context) (*ModDeps, error) {
 	return callCtx.Deps, nil
 }
 
-func (q *Query) WithPipeline(name, desc string, labels []pipeline.Label) *Query {
+func (q *Query) WithPipeline(name, desc string) *Query {
 	q = q.Clone()
 	q.Pipeline = q.Pipeline.Add(pipeline.Pipeline{
 		Name:        name,
 		Description: desc,
-		Labels:      labels,
 	})
 	return q
 }

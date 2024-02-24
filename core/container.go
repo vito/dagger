@@ -958,9 +958,9 @@ func (container *Container) UpdateImageConfig(ctx context.Context, updateFn func
 	return container, nil
 }
 
-func (container *Container) WithPipeline(ctx context.Context, name, description string, labels []pipeline.Label) (*Container, error) {
+func (container *Container) WithPipeline(ctx context.Context, name, description string) (*Container, error) {
 	container = container.Clone()
-	container.Query = container.Query.WithPipeline(name, description, labels)
+	container.Query = container.Query.WithPipeline(name, description)
 	return container, nil
 }
 

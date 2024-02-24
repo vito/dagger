@@ -12,7 +12,6 @@ import (
 
 	"github.com/dagger/dagger/auth"
 	"github.com/dagger/dagger/core"
-	"github.com/dagger/dagger/core/pipeline"
 	"github.com/dagger/dagger/engine"
 	"github.com/dagger/dagger/engine/buildkit"
 	"github.com/dagger/dagger/engine/cache"
@@ -272,9 +271,10 @@ func (e *BuildkitController) Session(stream controlapi.Control_SessionServer) (r
 
 		bklog.G(ctx).Debugf("initialized new server buildkit client")
 
-		labels := opts.Labels
-		labels = append(labels, pipeline.EngineLabel(e.EngineName))
-		labels = append(labels, pipeline.LoadServerLabels(engine.Version, runtime.GOOS, runtime.GOARCH, e.cacheManager.ID() != cache.LocalCacheID)...)
+		labels := opts.Labels.
+			WithEngineLabel(e.EngineName).
+			WithServerLabels(engine.Version, runtime.GOOS, runtime.GOARCH,
+				e.cacheManager.ID() != cache.LocalCacheID)
 
 		srv, err = NewDaggerServer(ctx, bkClient, e.worker, caller, opts.ServerID, secretStore, authProvider, labels, opts.CloudToken, opts.DoNotTrack)
 		if err != nil {

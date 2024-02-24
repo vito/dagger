@@ -120,6 +120,8 @@ func ProgrockAroundFunc(ctx context.Context, self dagql.Object, id *idproto.ID, 
 			}
 		}
 
+		// {"metas":[{"vertex":"abcdef","value":"sdfsdfsdfsdfkljsdf"}]}
+
 		vtx.Done(resolveErr)
 
 		return res, resolveErr

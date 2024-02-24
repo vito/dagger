@@ -154,9 +154,9 @@ func (dir *Directory) SetState(ctx context.Context, st llb.State) error {
 	return nil
 }
 
-func (dir *Directory) WithPipeline(ctx context.Context, name, description string, labels []pipeline.Label) (*Directory, error) {
+func (dir *Directory) WithPipeline(ctx context.Context, name, description string) (*Directory, error) {
 	dir = dir.Clone()
-	dir.Query = dir.Query.WithPipeline(name, description, labels)
+	dir.Query = dir.Query.WithPipeline(name, description)
 	return dir, nil
 }
 
