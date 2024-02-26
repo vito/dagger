@@ -8,7 +8,6 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/dagger/dagger/dagql/idtui"
-	"github.com/dagger/dagger/engine"
 	"github.com/dagger/dagger/engine/client"
 	"github.com/dagger/dagger/internal/tui"
 	"github.com/dagger/dagger/telemetry"
@@ -61,20 +60,7 @@ func withEngineAndTUI(
 	params client.Params,
 	fn runClientCallback,
 ) error {
-	if params.RunnerHost == "" {
-		var err error
-		params.RunnerHost, err = engine.RunnerHost()
-		if err != nil {
-			return err
-		}
-	}
-
 	params.DisableHostRW = disableHostRW
-
-	if params.JournalFile == "" {
-		params.JournalFile = os.Getenv("_EXPERIMENTAL_DAGGER_JOURNAL")
-	}
-
 	if interactive {
 		return interactiveTUI(ctx, params, fn)
 	}

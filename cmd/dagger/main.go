@@ -55,6 +55,7 @@ func init() {
 		versionCmd,
 		queryCmd,
 		runCmd,
+		execCmd,
 		configCmd,
 		moduleInitCmd,
 		moduleInstallCmd,

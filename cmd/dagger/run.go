@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -100,52 +101,70 @@ func run(ctx context.Context, args []string) error {
 	return withEngineAndTUI(ctx, client.Params{
 		SecretToken: sessionToken,
 	}, func(ctx context.Context, engineClient *client.Client) error {
-		sessionL, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			return fmt.Errorf("session listen: %w", err)
-		}
-		defer sessionL.Close()
+		return execWithSession(ctx, args, sessionToken, engineClient)
+	})
+}
 
-		sessionPort := fmt.Sprintf("%d", sessionL.Addr().(*net.TCPAddr).Port)
-		os.Setenv("DAGGER_SESSION_PORT", sessionPort)
-		os.Setenv("DAGGER_SESSION_TOKEN", sessionToken)
+func execWithSession(ctx context.Context, args []string, sessionToken string, engineClient *client.Client) (rerr error) {
+	sessionL, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return fmt.Errorf("session listen: %w", err)
+	}
+	defer sessionL.Close()
 
-		subCmd := exec.CommandContext(ctx, args[0], args[1:]...) // #nosec
+	sessionPort := fmt.Sprintf("%d", sessionL.Addr().(*net.TCPAddr).Port)
+	os.Setenv("DAGGER_SESSION_PORT", sessionPort)
+	os.Setenv("DAGGER_SESSION_TOKEN", sessionToken)
 
-		// allow piping to the command
-		subCmd.Stdin = os.Stdin
+	subCmd := exec.CommandContext(ctx, args[0], args[1:]...) // #nosec
 
-		// NB: go run lets its child process roam free when you interrupt it, so
-		// make sure they all get signalled. (you don't normally notice this in a
-		// shell because Ctrl+C sends to the process group.)
-		ensureChildProcessesAreKilled(subCmd)
+	// allow piping to the command
+	subCmd.Stdin = os.Stdin
 
-		go http.Serve(sessionL, engineClient) //nolint:gosec
+	// NB: go run lets its child process roam free when you interrupt it, so
+	// make sure they all get signalled. (you don't normally notice this in a
+	// shell because Ctrl+C sends to the process group.)
+	ensureChildProcessesAreKilled(subCmd)
 
-		var cmdErr error
-		if !silent {
-			cmdline := strings.Join(subCmd.Args, " ")
-			_, cmdVtx := progrock.Span(ctx, idtui.PrimaryVertex, cmdline)
-			if stdoutIsTTY {
-				subCmd.Stdout = cmdVtx.Stdout()
-			} else {
-				subCmd.Stdout = os.Stdout
-			}
+	go http.Serve(sessionL, engineClient) //nolint:gosec
 
-			if stderrIsTTY {
-				subCmd.Stderr = cmdVtx.Stderr()
-			} else {
-				subCmd.Stderr = os.Stderr
-			}
+	if silent {
+		subCmd.Stdout = os.Stdout
+		subCmd.Stderr = os.Stderr
+	} else {
+		cmdline := strings.Join(subCmd.Args, " ")
+		_, cmdVtx := progrock.Span(ctx, idtui.PrimaryVertex, cmdline)
+		defer func() { cmdVtx.Done(rerr) }()
 
-			cmdErr = subCmd.Run()
-			cmdVtx.Done(cmdErr)
+		if stdoutIsTTY {
+			subCmd.Stdout = cmdVtx.Stdout()
 		} else {
 			subCmd.Stdout = os.Stdout
-			subCmd.Stderr = os.Stderr
-			cmdErr = subCmd.Run()
 		}
 
-		return cmdErr
-	})
+		if stderrIsTTY {
+			subCmd.Stderr = cmdVtx.Stderr()
+		} else {
+			subCmd.Stderr = os.Stderr
+		}
+	}
+
+	if err := subCmd.Start(); err != nil {
+		return err
+	}
+	defer subCmd.Process.Kill()
+
+	// close stdin so the TUI stops stealing input
+	if err := os.Stderr.Close(); err != nil {
+		return err
+	}
+	if err := os.Stdout.Close(); err != nil {
+		return err
+	}
+	if err := os.Stdin.Close(); err != nil {
+		return err
+	}
+	log.Println("!!! IM CLOSED")
+
+	return subCmd.Wait()
 }

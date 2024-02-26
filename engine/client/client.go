@@ -108,7 +108,20 @@ type Client struct {
 }
 
 func Connect(ctx context.Context, params Params) (_ *Client, _ context.Context, rerr error) {
+	if params.RunnerHost == "" {
+		var err error
+		params.RunnerHost, err = engine.RunnerHost()
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+
+	if params.JournalFile == "" {
+		params.JournalFile = os.Getenv("_EXPERIMENTAL_DAGGER_JOURNAL")
+	}
+
 	c := &Client{Params: params}
+
 	if c.SecretToken == "" {
 		c.SecretToken = uuid.New().String()
 	}
