@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"strconv"
 	"strings"
@@ -22,6 +23,7 @@ import (
 	"github.com/moby/buildkit/solver/pb"
 	"github.com/vektah/gqlparser/v2/ast"
 	"github.com/vito/progrock"
+	"go.opentelemetry.io/otel/trace"
 )
 
 const (
@@ -345,6 +347,14 @@ func (svc *Service) startContainer(
 		ServerID:        clientMetadata.ServerID,
 		ProgSockPath:    bk.ProgSockPath,
 		ProgParent:      rec.Parent,
+	}
+	if span := trace.SpanFromContext(ctx); span != nil && span.SpanContext().IsValid() {
+		spanCtx := span.SpanContext()
+		log.Println("!!! SETTING EXEC SPAN CONTEXT", spanCtx.TraceID(), spanCtx.SpanID())
+		execMeta.TraceParent = spanCtx.TraceID().String()
+		execMeta.SpanParent = spanCtx.SpanID().String()
+	} else {
+		log.Println("!!! NOT SETTING EXEC TRACE/SPAN")
 	}
 	execOp.Meta.ProxyEnv.FtpProxy, err = execMeta.ToPBFtpProxyVal()
 	if err != nil {

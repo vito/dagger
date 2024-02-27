@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"strings"
 	"sync"
@@ -34,6 +35,7 @@ import (
 	bkworker "github.com/moby/buildkit/worker"
 	"github.com/opencontainers/go-digest"
 	"github.com/vito/progrock"
+	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc/metadata"
 )
@@ -268,6 +270,14 @@ func (c *Client) Solve(ctx context.Context, req bkgw.SolveRequest) (_ *Result, r
 					ServerID:        clientMetadata.ServerID,
 					ProgSockPath:    c.ProgSockPath,
 					ProgParent:      progrock.FromContext(ctx).Parent,
+				}
+				if span := trace.SpanFromContext(ctx); span != nil && span.SpanContext().IsValid() {
+					spanCtx := span.SpanContext()
+					log.Println("!!! SETTING EXEC SPAN CONTEXT", spanCtx.TraceID(), spanCtx.SpanID())
+					execMeta.TraceParent = spanCtx.TraceID().String()
+					execMeta.SpanParent = spanCtx.SpanID().String()
+				} else {
+					log.Println("!!! NOT SETTING EXEC TRACE/SPAN")
 				}
 				c.execMetadata[*execOp.OpDigest] = execMeta
 			}
@@ -741,6 +751,9 @@ type ContainerExecUncachedMetadata struct {
 	// Progrock propagation
 	ProgSockPath string `json:"progSockPath,omitempty"`
 	ProgParent   string `json:"progParent,omitempty"`
+	// otel propagation
+	TraceParent string `json:"traceParent,omitempty"`
+	SpanParent  string `json:"spanParent,omitempty"`
 }
 
 func (md ContainerExecUncachedMetadata) ToPBFtpProxyVal() (string, error) {

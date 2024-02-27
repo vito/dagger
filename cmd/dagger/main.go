@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -148,9 +149,14 @@ var rootCmd = &cobra.Command{
 
 func main() {
 	closer := tracing.Init()
-	if err := rootCmd.Execute(); err != nil {
+	ctx := context.Background()
+	ctx, span := tracing.Tracer.Start(ctx, "banana")
+	if err := rootCmd.ExecuteContext(ctx); err != nil {
+		span.End()
 		closer.Close()
 		os.Exit(1)
+	} else {
+		span.End()
 	}
 	closer.Close()
 }

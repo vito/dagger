@@ -74,6 +74,9 @@ type ClientMetadata struct {
 
 	// Disable analytics
 	DoNotTrack bool
+
+	TraceParent string
+	SpanParent  string
 }
 
 // ClientIDs returns the ClientID followed by ParentClientIDs.

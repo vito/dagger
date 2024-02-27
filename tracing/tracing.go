@@ -3,6 +3,7 @@ package tracing
 import (
 	"context"
 	"io"
+	"log"
 	"log/slog"
 	"os"
 	"strings"
@@ -27,9 +28,11 @@ func Init() io.Closer {
 	}
 
 	if !tracingEnabled {
+		log.Println("!!! TRACING NOT ENABLED")
 		return &nopCloser{}
 	}
 
+	log.Println("!!! TRACING INDEED ENABLED")
 	slog.Debug("setting up tracing")
 
 	exp, err := otlptracehttp.New(context.TODO())
@@ -48,6 +51,14 @@ func Init() io.Closer {
 			semconv.SchemaURL,
 			semconv.ServiceNameKey.String("dagger"),
 		)),
+		tracesdk.WithRawSpanLimits(tracesdk.SpanLimits{
+			AttributeValueLengthLimit:   -1,
+			AttributeCountLimit:         -1,
+			EventCountLimit:             -1,
+			LinkCountLimit:              -1,
+			AttributePerEventCountLimit: -1,
+			AttributePerLinkCountLimit:  -1,
+		}),
 	)
 
 	// Register our TracerProvider as the global so any imported

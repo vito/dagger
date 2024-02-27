@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"runtime"
 	"runtime/debug"
 	"sync"
@@ -15,6 +16,7 @@ import (
 	"github.com/dagger/dagger/engine"
 	"github.com/dagger/dagger/engine/buildkit"
 	"github.com/dagger/dagger/engine/cache"
+	"github.com/dagger/dagger/tracing"
 	controlapi "github.com/moby/buildkit/api/services/control"
 	apitypes "github.com/moby/buildkit/api/types"
 	"github.com/moby/buildkit/cache/remotecache"
@@ -38,7 +40,9 @@ import (
 	bkworker "github.com/moby/buildkit/worker"
 	"github.com/moby/locker"
 	"github.com/sirupsen/logrus"
-	"go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/attribute"
+	tracesdk "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/trace"
 	tracev1 "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
@@ -74,7 +78,7 @@ type BuildkitControllerOpts struct {
 	Entitlements           []string
 	EngineName             string
 	Frontends              map[string]frontend.Frontend
-	TraceCollector         trace.SpanExporter
+	TraceCollector         tracesdk.SpanExporter
 	UpstreamCacheExporters map[string]remotecache.ResolveCacheExporterFunc
 	UpstreamCacheImporters map[string]remotecache.ResolveCacheImporterFunc
 	DNSConfig              *oci.DNSConfig
@@ -157,6 +161,52 @@ func (e *BuildkitController) Session(stream controlapi.Control_SessionServer) (r
 		bklog.G(ctx).WithError(err).Errorf("failed to get client metadata for session call")
 		return fmt.Errorf("failed to get client metadata for session call: %w", err)
 	}
+
+	if opts.TraceParent != "" {
+		log.Println("!!! GOT TRACEPARENT", opts.TraceParent, opts.SpanParent)
+		defer log.Println("!!! DEFER GOT TRACEPARENT", opts.TraceParent, opts.SpanParent)
+		// Given parent trace and span IDs
+		parentTraceID, err := trace.TraceIDFromHex(opts.TraceParent)
+		if err != nil {
+			return err
+		}
+		parentSpanID, err := trace.SpanIDFromHex(opts.SpanParent)
+		if err != nil {
+			return err
+		}
+
+		// Create a parent SpanContext
+		parentSpanContext := trace.NewSpanContext(trace.SpanContextConfig{
+			TraceID: parentTraceID,
+			SpanID:  parentSpanID,
+			// Adjust the following flags as needed
+			// TraceFlags: trace.FlagsSampled, // Indicating the span is sampled
+			// Remote:     false,              // True if the context is from a remote parent
+		})
+
+		// Create a context with the parent SpanContext
+		ctx = trace.ContextWithSpanContext(ctx, parentSpanContext)
+
+		// Start a new span with the specified parent context
+	}
+
+	log.Println("!!! IM SPANNING")
+
+	var span trace.Span
+	ctx, span = tracing.Tracer.Start(ctx, "lychee")
+
+	go func() {
+		defer span.End()
+
+		for i := 0; i < 1000; i++ {
+			span.AddEvent("output",
+				trace.WithAttributes(
+					attribute.Int("fd", 0),
+					attribute.String("data", fmt.Sprintf("line %d\n", i)),
+				))
+		}
+	}()
+
 	ctx = bklog.WithLogger(ctx, bklog.G(ctx).
 		WithField("client_id", opts.ClientID).
 		WithField("client_hostname", opts.ClientHostname).

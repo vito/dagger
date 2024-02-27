@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -31,6 +32,7 @@ import (
 	"github.com/opencontainers/go-digest"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/vito/progrock"
+	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/sys/unix"
 	"golang.org/x/term"
 )
@@ -466,6 +468,11 @@ func setupBundle() int {
 			// propagate parent vertex ID
 			keepEnv = append(keepEnv, "_DAGGER_PROGROCK_PARENT="+execMetadata.ProgParent)
 
+			// propagate otel trace/span parent
+			log.Println("!!! SHIM NESTING PROPAGATING", execMetadata.TraceParent, execMetadata.SpanParent)
+			keepEnv = append(keepEnv, "_DAGGER_TRACE_PARENT="+execMetadata.TraceParent)
+			keepEnv = append(keepEnv, "_DAGGER_SPAN_PARENT="+execMetadata.SpanParent)
+
 			// mount buildkit sock since it's nesting
 			spec.Mounts = append(spec.Mounts, specs.Mount{
 				Destination: "/.runner.sock",
@@ -660,6 +667,33 @@ func runWithNesting(ctx context.Context, cmd *exec.Cmd) error {
 		clientParams.ProgrockParent = parentID
 	}
 
+	if parentID := os.Getenv("_DAGGER_TRACE_PARENT"); parentID != "" {
+		log.Println("!!! GOT PARENT ENV", parentID)
+		parentTraceID, err := trace.TraceIDFromHex(parentID)
+		if err != nil {
+			return err
+		}
+		parentSpanID, err := trace.SpanIDFromHex(os.Getenv("_DAGGER_SPAN_PARENT"))
+		if err != nil {
+			return err
+		}
+
+		// Create a parent SpanContext
+		parentSpanContext := trace.NewSpanContext(trace.SpanContextConfig{
+			TraceID: parentTraceID,
+			SpanID:  parentSpanID,
+			// Adjust the following flags as needed
+			// TraceFlags: trace.FlagsSampled, // Indicating the span is sampled
+			// Remote:     false,              // True if the context is from a remote parent
+		})
+
+		// Create a context with the parent SpanContext
+		ctx = trace.ContextWithSpanContext(ctx, parentSpanContext)
+	} else {
+		log.Println("!!! NO PARENT ENV")
+	}
+
+	// Given parent trace and span IDs
 	sess, ctx, err := client.Connect(ctx, clientParams)
 	if err != nil {
 		return fmt.Errorf("error connecting to engine: %w", err)

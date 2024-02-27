@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -21,6 +22,7 @@ import (
 	"dagger.io/dagger"
 	"github.com/Khan/genqlient/graphql"
 	"github.com/cenkalti/backoff/v4"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/docker/cli/cli/config"
 	"github.com/google/uuid"
@@ -255,7 +257,7 @@ func Connect(ctx context.Context, params Params) (_ *Client, _ context.Context, 
 		}
 	}()
 
-	c.internalCtx = engine.ContextWithClientMetadata(c.internalCtx, &engine.ClientMetadata{
+	clientMeta := &engine.ClientMetadata{
 		ClientID:           c.ID(),
 		ClientSecretToken:  c.SecretToken,
 		ServerID:           c.ServerID,
@@ -263,7 +265,18 @@ func Connect(ctx context.Context, params Params) (_ *Client, _ context.Context, 
 		Labels:             c.labels,
 		ParentClientIDs:    c.ParentClientIDs,
 		ModuleCallerDigest: c.ModuleCallerDigest,
-	})
+	}
+
+	if span := trace.SpanFromContext(ctx); span != nil && span.SpanContext().IsValid() {
+		spanCtx := span.SpanContext()
+		log.Println("!!! SPAN CONTEXT", spanCtx.TraceID(), spanCtx.SpanID())
+		clientMeta.TraceParent = spanCtx.TraceID().String()
+		clientMeta.SpanParent = spanCtx.SpanID().String()
+	} else {
+		log.Println("!!! SPAN NO CONTEXT", clientMeta.TraceParent, clientMeta.SpanParent)
+	}
+
+	c.internalCtx = engine.ContextWithClientMetadata(c.internalCtx, clientMeta)
 
 	// progress
 	bkSession.Allow(progRockAttachable{progMultiW})
@@ -290,6 +303,7 @@ func Connect(ctx context.Context, params Params) (_ *Client, _ context.Context, 
 	// already started
 	c.eg.Go(func() error {
 		return bkSession.Run(c.internalCtx, func(ctx context.Context, proto string, meta map[string][]string) (net.Conn, error) {
+			log.Println("!!! PROPAGATING", clientMeta.TraceParent, clientMeta.SpanParent)
 			return grpchijack.Dialer(c.bkClient.ControlClient())(ctx, proto, engine.ClientMetadata{
 				RegisterClient:            true,
 				ClientID:                  c.ID(),
@@ -302,6 +316,8 @@ func Connect(ctx context.Context, params Params) (_ *Client, _ context.Context, 
 				ModuleCallerDigest:        c.ModuleCallerDigest,
 				CloudToken:                os.Getenv("DAGGER_CLOUD_TOKEN"),
 				DoNotTrack:                analytics.DoNotTrack(),
+				TraceParent:               clientMeta.TraceParent,
+				SpanParent:                clientMeta.SpanParent,
 			}.AppendToMD(meta))
 		})
 	})
