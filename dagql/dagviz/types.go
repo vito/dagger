@@ -1,4 +1,4 @@
-package idtui
+package dagviz
 
 import (
 	"sort"
@@ -189,7 +189,7 @@ func WalkSteps(spans []*Span, f func(*TraceRow)) {
 			Span:   span,
 			Parent: parent,
 		}
-		if base, ok := span.Base(); ok && lastRow != nil {
+		if base, ok := span.Receiver(); ok && lastRow != nil {
 			row.Chained = base.Digest == lastRow.Span.Digest
 		}
 		if span.IsRunning() {

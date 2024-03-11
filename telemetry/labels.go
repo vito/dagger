@@ -9,12 +9,10 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
 
-	"github.com/denisbrodbeck/machineid"
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
@@ -54,19 +52,6 @@ func (labels Labels) WithServerLabels(engineVersion, os, arch string, cacheEnabl
 	labels["dagger.io/server.arch"] = arch
 	labels["dagger.io/server.version"] = engineVersion
 	labels["dagger.io/server.cache.enabled"] = strconv.FormatBool(cacheEnabled)
-	return labels
-}
-
-func (labels Labels) WithClientLabels(engineVersion string) Labels {
-	labels["dagger.io/client.os"] = runtime.GOOS
-	labels["dagger.io/client.arch"] = runtime.GOARCH
-	labels["dagger.io/client.version"] = engineVersion
-
-	machineID, err := machineid.ProtectedID("dagger")
-	if err == nil {
-		labels["dagger.io/client.machine_id"] = machineID
-	}
-
 	return labels
 }
 

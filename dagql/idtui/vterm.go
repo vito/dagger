@@ -29,6 +29,10 @@ type Vterm struct {
 }
 
 func NewVterm() *Vterm {
+	return NewVtermWithTerminal(midterm.NewAutoResizingTerminal())
+}
+
+func NewVtermWithTerminal(vt *midterm.Terminal) *Vterm {
 	return &Vterm{
 		vt:      midterm.NewAutoResizingTerminal(),
 		viewBuf: new(bytes.Buffer),

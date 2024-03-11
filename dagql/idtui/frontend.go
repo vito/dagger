@@ -23,6 +23,7 @@ import (
 
 	"github.com/dagger/dagger/dagql/call"
 	"github.com/dagger/dagger/dagql/call/callpbv1"
+	"github.com/dagger/dagger/dagql/dagviz"
 	"github.com/dagger/dagger/telemetry/sdklog"
 	"github.com/dagger/dagger/tracing"
 )
@@ -55,9 +56,10 @@ type Frontend struct {
 	err         error
 
 	// updated as events are written
-	db       *DB
+	db       *dagviz.DB
 	eof      bool
-	logsView *LogsView
+	logsView *dagviz.LogsView
+	vterms   map[trace.SpanID]*Vterm
 
 	// global logs
 	messagesView *Vterm
@@ -85,7 +87,7 @@ func New() *Frontend {
 	logsView := NewVterm()
 	logsOut := new(strings.Builder)
 	return &Frontend{
-		db: NewDB(),
+		db: dagviz.NewDB(),
 
 		fps:          30, // sane default, fine-tune if needed
 		profile:      profile,
@@ -94,6 +96,7 @@ func New() *Frontend {
 		messagesView: logsView,
 		messagesBuf:  logsOut,
 		messagesW:    ui.NewOutput(io.MultiWriter(logsView, logsOut), termenv.WithProfile(profile)),
+		vterms:       make(map[trace.SpanID]*Vterm),
 	}
 }
 
@@ -384,9 +387,9 @@ func (fe *Frontend) Render(out *termenv.Output) error {
 }
 
 func (fe *Frontend) recalculateView() {
-	steps := CollectSpans(fe.db, trace.TraceID{})
-	rows := CollectRows(steps)
-	fe.logsView = CollectLogsView(rows)
+	steps := dagviz.CollectSpans(fe.db, trace.TraceID{})
+	rows := dagviz.CollectRows(steps)
+	fe.logsView = dagviz.CollectLogsView(rows)
 }
 
 func (fe *Frontend) renderProgress(out *termenv.Output) (bool, error) {
@@ -490,7 +493,9 @@ func (fe *Frontend) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.WindowSizeMsg:
 		fe.window = msg
-		fe.db.SetWidth(msg.Width)
+		for _, term := range fe.vterms {
+			term.SetWidth(msg.Width)
+		}
 		fe.messagesView.SetWidth(msg.Width)
 		return fe, nil
 
@@ -541,7 +546,7 @@ func (fe *Frontend) DumpID(out *termenv.Output, id *call.ID) error {
 	return fe.renderCall(out, nil, id.Call(), 0, false)
 }
 
-func (fe *Frontend) renderRow(out *termenv.Output, row *TraceRow, depth int) error {
+func (fe *Frontend) renderRow(out *termenv.Output, row *dagviz.TraceRow, depth int) error {
 	if !row.IsInteresting(fe.Verbosity) && !fe.Debug {
 		return nil
 	}
@@ -560,7 +565,7 @@ func (fe *Frontend) renderRow(out *termenv.Output, row *TraceRow, depth int) err
 	return nil
 }
 
-func (fe *Frontend) renderStep(out *termenv.Output, span *Span, depth int) error {
+func (fe *Frontend) renderStep(out *termenv.Output, span *dagviz.Span, depth int) error {
 	id := span.Call
 	if id != nil {
 		if err := fe.renderCall(out, span, id, depth, false); err != nil {
@@ -582,8 +587,21 @@ func (fe *Frontend) renderStep(out *termenv.Output, span *Span, depth int) error
 	return nil
 }
 
-func (fe *Frontend) renderLogs(out *termenv.Output, span *Span, depth int) {
-	if logs, ok := fe.db.Logs[span.SpanContext().SpanID()]; ok {
+func (fe *Frontend) spanVterm(span *dagviz.Span) (*Vterm, bool) {
+	logs := span.Logs()
+	if logs == nil {
+		return nil, false
+	}
+	vterm, found := fe.vterms[span.ID()]
+	if !found {
+		vterm = NewVtermWithTerminal(logs)
+		fe.vterms[span.ID()] = vterm
+	}
+	return vterm, true
+}
+
+func (fe *Frontend) renderLogs(out *termenv.Output, span *dagviz.Span, depth int) {
+	if logs, ok := fe.spanVterm(span); ok {
 		pipe := out.String(ui.VertBoldBar).Foreground(termenv.ANSIBrightBlack)
 		if depth != -1 {
 			logs.SetPrefix(strings.Repeat("  ", depth) + pipe.String() + " ")
@@ -613,7 +631,7 @@ func (fe *Frontend) renderIDBase(out *termenv.Output, call *callpbv1.Call) error
 	return nil
 }
 
-func (fe *Frontend) renderCall(out *termenv.Output, span *Span, id *callpbv1.Call, depth int, inline bool) error {
+func (fe *Frontend) renderCall(out *termenv.Output, span *dagviz.Span, id *callpbv1.Call, depth int, inline bool) error {
 	if !inline {
 		indent(out, depth)
 	}
@@ -687,7 +705,7 @@ func (fe *Frontend) renderCall(out *termenv.Output, span *Span, id *callpbv1.Cal
 	return nil
 }
 
-func (fe *Frontend) renderVertex(out *termenv.Output, span *Span, depth int) error {
+func (fe *Frontend) renderVertex(out *termenv.Output, span *dagviz.Span, depth int) error {
 	indent(out, depth)
 	fe.renderStatus(out, span, depth)
 	fmt.Fprint(out, span.Name())
@@ -740,7 +758,7 @@ func (fe *Frontend) renderLiteral(out *termenv.Output, lit *callpbv1.Literal) {
 	}
 }
 
-func (fe *Frontend) renderStatus(out *termenv.Output, span *Span, depth int) {
+func (fe *Frontend) renderStatus(out *termenv.Output, span *dagviz.Span, depth int) {
 	var symbol string
 	var color termenv.Color
 	switch {
@@ -763,9 +781,9 @@ func (fe *Frontend) renderStatus(out *termenv.Output, span *Span, depth int) {
 	fmt.Fprintf(out, "%s ", symbol)
 }
 
-func (fe *Frontend) renderDuration(out *termenv.Output, span *Span) {
+func (fe *Frontend) renderDuration(out *termenv.Output, span *dagviz.Span) {
 	fmt.Fprint(out, " ")
-	duration := out.String(fmtDuration(span.Duration()))
+	duration := out.String(dagviz.FormatDuration(span.Duration()))
 	if span.IsRunning() {
 		duration = duration.Foreground(termenv.ANSIYellow)
 	} else {
@@ -778,7 +796,7 @@ var (
 	progChars = []string{"⠀", "⡀", "⣀", "⣄", "⣤", "⣦", "⣶", "⣷", "⣿"}
 )
 
-func (fe *Frontend) renderVertexTasks(out *termenv.Output, span *Span, depth int) error {
+func (fe *Frontend) renderVertexTasks(out *termenv.Output, span *dagviz.Span, depth int) error {
 	tasks := fe.db.Tasks[span.SpanContext().SpanID()]
 	if len(tasks) == 0 {
 		return nil

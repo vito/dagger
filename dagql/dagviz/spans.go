@@ -1,4 +1,4 @@
-package idtui
+package dagviz
 
 import (
 	"errors"
@@ -9,8 +9,10 @@ import (
 
 	"github.com/a-h/templ"
 	"github.com/dagger/dagger/dagql/call/callpbv1"
+	"github.com/vito/midterm"
 	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type Span struct {
@@ -34,7 +36,7 @@ type Span struct {
 	trace *Trace
 }
 
-func (span *Span) Base() (*callpbv1.Call, bool) {
+func (span *Span) Receiver() (*callpbv1.Call, bool) {
 	if span.Call == nil {
 		return nil, false
 	}
@@ -48,12 +50,16 @@ func (span *Span) Base() (*callpbv1.Call, bool) {
 	return span.db.Simplify(call), true
 }
 
+func (span *Span) ID() trace.SpanID {
+	return span.SpanContext().SpanID()
+}
+
 func (span *Span) IsRunning() bool {
 	inner := span.ReadOnlySpan
 	return inner.EndTime().Before(inner.StartTime())
 }
 
-func (span *Span) Logs() *Vterm {
+func (span *Span) Logs() *midterm.Terminal {
 	return span.db.Logs[span.SpanContext().SpanID()]
 }
 
@@ -133,9 +139,9 @@ type SpanBar struct {
 func (span *Span) Bar() SpanBar {
 	epoch := span.trace.Epoch
 	end := span.trace.End
-	if span.trace.IsRunning {
-		end = time.Now()
-	}
+	// if span.trace.IsRunning {
+	// 	end = time.Now()
+	// }
 	total := end.Sub(epoch)
 
 	started := span.StartTime()
@@ -156,7 +162,7 @@ func (span *Span) Bar() SpanBar {
 func (bar SpanBar) Render() templ.Component {
 	var dur string
 	if bar.Duration > 10*time.Millisecond {
-		dur = fmtDuration(bar.Duration)
+		dur = FormatDuration(bar.Duration)
 	}
 	return templ.Raw(
 		fmt.Sprintf(
@@ -186,7 +192,7 @@ func (span *Span) Classes() string {
 	return strings.Join(classes, " ")
 }
 
-func fmtDuration(d time.Duration) string {
+func FormatDuration(d time.Duration) string {
 	days := int64(d.Hours()) / 24
 	hours := int64(d.Hours()) % 24
 	minutes := int64(d.Minutes()) % 60

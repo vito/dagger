@@ -1,4 +1,4 @@
-package idtui
+package dagviz
 
 import (
 	"context"
@@ -14,6 +14,7 @@ import (
 	"github.com/dagger/dagger/dagql/call/callpbv1"
 	"github.com/dagger/dagger/telemetry/sdklog"
 	"github.com/dagger/dagger/tracing"
+	"github.com/vito/midterm"
 )
 
 type DB struct {
@@ -22,7 +23,7 @@ type DB struct {
 	Tasks    map[trace.SpanID][]*Task
 	Children map[trace.SpanID]map[trace.SpanID]struct{}
 
-	Logs        map[trace.SpanID]*Vterm
+	Logs        map[trace.SpanID]*midterm.Terminal
 	LogWidth    int
 	PrimarySpan trace.SpanID
 	PrimaryLogs map[trace.SpanID][]*sdklog.LogData
@@ -40,7 +41,7 @@ func NewDB() *DB {
 		Tasks:    make(map[trace.SpanID][]*Task),
 		Children: make(map[trace.SpanID]map[trace.SpanID]struct{}),
 
-		Logs:        make(map[trace.SpanID]*Vterm),
+		Logs:        make(map[trace.SpanID]*midterm.Terminal),
 		LogWidth:    -1,
 		PrimaryLogs: make(map[trace.SpanID][]*sdklog.LogData),
 
@@ -60,13 +61,6 @@ func (db *DB) AllTraces() []*Trace {
 		return traces[i].Epoch.After(traces[j].Epoch)
 	})
 	return traces
-}
-
-func (db *DB) SetWidth(width int) {
-	db.LogWidth = width
-	for _, vt := range db.Logs {
-		vt.SetWidth(width)
-	}
 }
 
 var _ sdktrace.SpanExporter = (*DB)(nil)
@@ -121,14 +115,10 @@ func (db *DB) ExportLogs(ctx context.Context, logs []*sdklog.LogData) error {
 	return nil
 }
 
-func (db *DB) spanLogs(id trace.SpanID) *Vterm {
+func (db *DB) spanLogs(id trace.SpanID) *midterm.Terminal {
 	term, found := db.Logs[id]
 	if !found {
-		term = NewVterm()
-		if db.LogWidth > -1 {
-			term.SetWidth(db.LogWidth)
-		}
-		db.Logs[id] = term
+		db.Logs[id] = midterm.NewAutoResizingTerminal()
 	}
 	return term
 }
