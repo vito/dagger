@@ -880,7 +880,7 @@ func (srv *Server) serveShutdown(w http.ResponseWriter, r *http.Request, client 
 		sess.services.StopSessionServices(ctx, sess.sessionID)
 
 		// Start draining telemetry
-		srv.telemetryPubSub.Drain(sess.mainClientCallerID, immediate)
+		srv.telemetryPubSub.Drain(sess.mainClientCallerID, immediate, drainTimeout)
 
 		if len(sess.cacheExporterCfgs) > 0 {
 			bklog.G(ctx).Debugf("running cache export for client %s", client.clientID)
