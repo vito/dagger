@@ -1666,4 +1666,5 @@ func (proto ImageMediaTypes) Decoder() dagql.InputDecoder {
 func (proto ImageMediaTypes) ToLiteral() call.Literal {
 	return ImageMediaTypesEnum.Literal(proto)
 }
+
 // foo
