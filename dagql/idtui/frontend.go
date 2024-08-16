@@ -461,12 +461,12 @@ func (opts FrontendOpts) ShouldShow(span *Span) bool {
 
 	// TODO: optimize these
 	//
-	// idea: mark spans interesting, with a reason. interestingness propagates
-	// through parent spans and linked spans, stopping at encapsulation
-	// boundaries.
-	//
-	// what if the span is internal? feels circular
-
+	// idea: mark spans interesting, with a reason. interestingness
+	// propagates through parent spans and linked spans, stopping at
+	// encapsulation boundaries.
+	// if len(span.Interestings) > 0 {
+	// 	return true
+	// }
 	if span.IsFailed() {
 		return true
 	}
@@ -483,12 +483,13 @@ func (opts FrontendOpts) ShouldShow(span *Span) bool {
 		// stop showing steps that ended after a given threshold
 		return false
 	}
-	if opts.TooFastThreshold > 0 &&
-		span.ActiveDuration(time.Now()) < opts.TooFastThreshold &&
-		opts.Verbosity < ShowSpammyVerbosity {
-		// ignore fast steps; signal:noise is too poor
-		return false
-	}
+	// TODO: don't break chains
+	// if opts.TooFastThreshold > 0 &&
+	// 	span.ActiveDuration(time.Now()) < opts.TooFastThreshold &&
+	// 	opts.Verbosity < ShowSpammyVerbosity {
+	// 	// ignore fast steps; signal:noise is too poor
+	// 	return false
+	// }
 	return true
 }
 
