@@ -1,4 +1,4 @@
-package idtui
+package dagui
 
 import (
 	"time"
@@ -60,8 +60,10 @@ type RowsView struct {
 
 func (db *DB) RowsView(opts FrontendOpts) *RowsView {
 	view := &RowsView{
-		Zoomed: db.Spans.Map[opts.ZoomedSpan],
 		BySpan: make(map[trace.SpanID]*TraceTree),
+	}
+	if zoomed, ok := db.Spans.Map[opts.ZoomedSpan]; ok {
+		view.Zoomed = zoomed
 	}
 	var spans []*Span
 	if view.Zoomed != nil {

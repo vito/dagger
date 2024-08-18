@@ -20,11 +20,12 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/term"
 
+	"github.com/dagger/dagger/dagql/dagui"
 	"github.com/dagger/dagger/engine/slog"
 )
 
 type frontendPretty struct {
-	FrontendOpts
+	dagui.FrontendOpts
 
 	// updated by Run
 	program     *tea.Program
@@ -37,15 +38,15 @@ type frontendPretty struct {
 	err         error
 
 	// updated as events are written
-	db           *DB
+	db           *dagui.DB
 	logs         *prettyLogs
 	eof          bool
 	backgrounded bool
 	autoFocus    bool
 	debugged     trace.SpanID
 	focusedIdx   int
-	rowsView     *RowsView
-	rows         *Rows
+	rowsView     *dagui.RowsView
+	rows         *dagui.Rows
 	pressedKey   string
 	pressedKeyAt time.Time
 
@@ -69,7 +70,7 @@ type frontendPretty struct {
 }
 
 func New() Frontend {
-	db := NewDB()
+	db := dagui.NewDB()
 	profile := ColorProfile()
 	view := new(strings.Builder)
 	return &frontendPretty{
@@ -78,8 +79,8 @@ func New() Frontend {
 		autoFocus: true,
 
 		// set empty initial row state to avoid nil checks
-		rowsView: &RowsView{},
-		rows:     &Rows{BySpan: map[trace.SpanID]*TraceRow{}},
+		rowsView: &dagui.RowsView{},
+		rows:     &dagui.Rows{BySpan: map[trace.SpanID]*dagui.TraceRow{}},
 
 		// initial TUI state
 		window:     tea.WindowSizeMsg{Width: -1, Height: -1}, // be clear that it's not set
@@ -130,7 +131,7 @@ func traceMessage(profile termenv.Profile, url string, msg string) string {
 
 // Run starts the TUI, calls the run function, stops the TUI, and finally
 // prints the primary output to the appropriate stdout/stderr streams.
-func (fe *frontendPretty) Run(ctx context.Context, opts FrontendOpts, run func(context.Context) error) error {
+func (fe *frontendPretty) Run(ctx context.Context, opts dagui.FrontendOpts, run func(context.Context) error) error {
 	if opts.TooFastThreshold == 0 {
 		opts.TooFastThreshold = 100 * time.Millisecond
 	}
@@ -226,7 +227,7 @@ func (fe *frontendPretty) renderErrorLogs(out *termenv.Output, r *renderer) erro
 	}
 	errTree := fe.db.CollectErrors(fe.rowsView)
 	var anyHasLogs bool
-	WalkTree(errTree, func(row *TraceTree, _ int) bool {
+	dagui.WalkTree(errTree, func(row *dagui.TraceTree, _ int) bool {
 		logs := fe.logs.Logs[row.Span.ID]
 		if logs != nil && logs.UsedHeight() > 0 {
 			anyHasLogs = true
@@ -238,7 +239,7 @@ func (fe *frontendPretty) renderErrorLogs(out *termenv.Output, r *renderer) erro
 		fmt.Fprintln(out)
 		fmt.Fprintln(out, out.String("Error logs:").Bold())
 	}
-	WalkTree(errTree, func(row *TraceTree, _ int) bool {
+	dagui.WalkTree(errTree, func(row *dagui.TraceTree, _ int) bool {
 		logs := fe.logs.Logs[row.Span.ID]
 		if logs != nil && logs.UsedHeight() > 0 {
 			fmt.Fprintln(out)
@@ -269,7 +270,7 @@ func (fe *frontendPretty) finalRender() error {
 	out := NewOutput(os.Stderr, termenv.WithProfile(fe.profile))
 
 	var renderedProgress bool
-	if fe.Debug || fe.Verbosity >= ShowCompletedVerbosity || fe.err != nil {
+	if fe.Debug || fe.Verbosity >= dagui.ShowCompletedVerbosity || fe.err != nil {
 		if fe.msgPreFinalRender.Len() > 0 {
 			fmt.Fprintf(os.Stderr, fe.msgPreFinalRender.String()+"\n\n")
 		}
@@ -481,7 +482,7 @@ func (fe *frontendPretty) recalculateViewLocked() {
 	}
 }
 
-func (fe *frontendPretty) renderedRowLines(r *renderer, row *TraceRow, prefix string) []string {
+func (fe *frontendPretty) renderedRowLines(r *renderer, row *dagui.TraceRow, prefix string) []string {
 	buf := new(strings.Builder)
 	out := NewOutput(buf, termenv.WithProfile(fe.profile))
 	fe.renderRow(out, r, row, false, prefix)
@@ -606,7 +607,7 @@ func (fe *frontendPretty) renderLines(r *renderer, height int, prefix string) []
 	return focusedLines
 }
 
-func (fe *frontendPretty) focus(row *TraceRow) {
+func (fe *frontendPretty) focus(row *dagui.TraceRow) {
 	if row == nil {
 		return
 	}
@@ -909,7 +910,7 @@ func (fe *frontendPretty) renderLocked() {
 	fe.Render(fe.viewOut)
 }
 
-func (fe *frontendPretty) renderRow(out *termenv.Output, r *renderer, row *TraceRow, final bool, prefix string) {
+func (fe *frontendPretty) renderRow(out *termenv.Output, r *renderer, row *dagui.TraceRow, final bool, prefix string) {
 	if row.Previous != nil &&
 		row.Previous.Depth >= row.Depth &&
 		!row.Chained &&
@@ -920,7 +921,7 @@ func (fe *frontendPretty) renderRow(out *termenv.Output, r *renderer, row *Trace
 		fmt.Fprintln(out)
 	}
 	fe.renderStep(out, r, row.Span, row.Chained, row.Depth, prefix)
-	if row.IsRunningOrChildRunning || row.Span.IsFailed() || fe.Verbosity >= ShowSpammyVerbosity {
+	if row.IsRunningOrChildRunning || row.Span.IsFailed() || fe.Verbosity >= dagui.ShowSpammyVerbosity {
 		if logs := fe.logs.Logs[row.Span.ID]; logs != nil {
 			fe.renderLogs(out, r,
 				logs,
@@ -932,7 +933,7 @@ func (fe *frontendPretty) renderRow(out *termenv.Output, r *renderer, row *Trace
 	}
 }
 
-func (fe *frontendPretty) renderStep(out *termenv.Output, r *renderer, span *Span, chained bool, depth int, prefix string) error {
+func (fe *frontendPretty) renderStep(out *termenv.Output, r *renderer, span *dagui.Span, chained bool, depth int, prefix string) error {
 	isFocused := span.ID == fe.FocusedSpan
 
 	id := span.Call

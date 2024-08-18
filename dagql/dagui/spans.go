@@ -1,4 +1,4 @@
-package idtui
+package dagui
 
 import (
 	"fmt"
@@ -383,7 +383,7 @@ func (span *Span) Bar() SpanBar {
 func (bar SpanBar) Render() templ.Component {
 	var dur string
 	if bar.Duration > 10*time.Millisecond {
-		dur = fmtDuration(bar.Duration)
+		dur = FormatDuration(bar.Duration)
 	}
 	return templ.Raw(
 		fmt.Sprintf(
@@ -413,7 +413,7 @@ func (span *Span) Classes() string {
 	return strings.Join(classes, " ")
 }
 
-func fmtDuration(d time.Duration) string {
+func FormatDuration(d time.Duration) string {
 	days := int64(d.Hours()) / 24
 	hours := int64(d.Hours()) % 24
 	minutes := int64(d.Minutes()) % 60

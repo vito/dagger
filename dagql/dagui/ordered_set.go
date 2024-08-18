@@ -1,4 +1,4 @@
-package idtui
+package dagui
 
 import "go.opentelemetry.io/otel/trace"
 

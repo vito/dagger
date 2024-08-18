@@ -20,6 +20,7 @@ import (
 	"dagger.io/dagger/telemetry"
 	"github.com/dagger/dagger/dagql/call"
 	"github.com/dagger/dagger/dagql/call/callpbv1"
+	"github.com/dagger/dagger/dagql/dagui"
 	"github.com/dagger/dagger/engine/slog"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 )
@@ -33,39 +34,9 @@ var skipLoggedOutTraceMsgEnvs = []string{"NOTHANKS", "SHUTUP", "GOAWAY", "STOPIT
 var loggedOutTraceMsg = fmt.Sprintf("Setup tracing at %%s. To hide: export %s=1",
 	skipLoggedOutTraceMsgEnvs[rand.Intn(len(skipLoggedOutTraceMsgEnvs))])
 
-type FrontendOpts struct {
-	// Debug tells the frontend to show everything and do one big final render.
-	Debug bool
-
-	// Silent tells the frontend to not display progress at all.
-	Silent bool
-
-	// Verbosity is the level of detail to show in the TUI.
-	Verbosity int
-
-	// Don't show things that completed beneath this duration. (default 100ms)
-	TooFastThreshold time.Duration
-
-	// Remove completed things after this duration. (default 1s)
-	GCThreshold time.Duration
-
-	// Open web browser with the trace URL as soon as pipeline starts.
-	OpenWeb bool
-
-	// Leave the TUI running instead of exiting after completion.
-	NoExit bool
-
-	// ZoomedSpan configures a span to be zoomed in on, revealing
-	// its child spans.
-	ZoomedSpan trace.SpanID
-
-	// FocusedSpan is the currently selected span, i.e. the cursor position.
-	FocusedSpan trace.SpanID
-}
-
 type Frontend interface {
 	// Run starts a frontend, and runs the target function.
-	Run(ctx context.Context, opts FrontendOpts, f func(context.Context) error) error
+	Run(ctx context.Context, opts dagui.FrontendOpts, f func(context.Context) error) error
 
 	// SetPrimary tells the frontend which span should be treated like the focal
 	// point of the command. Its output will be displayed at the end, and its
@@ -102,11 +73,11 @@ func (d *Dump) DumpID(out *termenv.Output, id *call.ID) error {
 		return err
 	}
 
-	db := NewDB()
+	db := dagui.NewDB()
 	for dig, call := range dag.CallsByDigest {
 		db.Calls[dig] = call
 	}
-	r := newRenderer(db, -1, FrontendOpts{})
+	r := newRenderer(db, -1, dagui.FrontendOpts{})
 	if d.Newline != "" {
 		r.newline = d.Newline
 	}
@@ -116,16 +87,16 @@ func (d *Dump) DumpID(out *termenv.Output, id *call.ID) error {
 }
 
 type renderer struct {
-	FrontendOpts
+	dagui.FrontendOpts
 
 	now           time.Time
 	newline       string
-	db            *DB
+	db            *dagui.DB
 	maxLiteralLen int
 	rendering     map[string]bool
 }
 
-func newRenderer(db *DB, maxLiteralLen int, fe FrontendOpts) *renderer {
+func newRenderer(db *dagui.DB, maxLiteralLen int, fe dagui.FrontendOpts) *renderer {
 	return &renderer{
 		FrontendOpts:  fe,
 		now:           time.Now(),
@@ -155,14 +126,14 @@ func (r *renderer) renderIDBase(out *termenv.Output, call *callpbv1.Call) {
 		parent = parent.Foreground(moduleColor)
 	}
 	fmt.Fprint(out, parent.String())
-	if r.Verbosity > ShowDigestsVerbosity && call.ReceiverDigest != "" {
+	if r.Verbosity > dagui.ShowDigestsVerbosity && call.ReceiverDigest != "" {
 		fmt.Fprint(out, out.String(fmt.Sprintf("@%s", call.ReceiverDigest)).Foreground(faintColor))
 	}
 }
 
 func (r *renderer) renderCall(
 	out *termenv.Output,
-	span *Span,
+	span *dagui.Span,
 	call *callpbv1.Call,
 	prefix string,
 	chained bool,
@@ -256,7 +227,7 @@ func (r *renderer) renderCall(
 		fmt.Fprint(out, typeStr)
 	}
 
-	if r.Verbosity > ShowDigestsVerbosity {
+	if r.Verbosity > dagui.ShowDigestsVerbosity {
 		fmt.Fprint(out, out.String(fmt.Sprintf(" = %s", call.Digest)).Foreground(faintColor))
 	}
 
@@ -270,7 +241,7 @@ func (r *renderer) renderCall(
 
 func (r *renderer) renderSpan(
 	out *termenv.Output,
-	span *Span,
+	span *dagui.Span,
 	name string,
 	prefix string,
 	depth int,
@@ -341,7 +312,7 @@ func (r *renderer) renderLiteral(out *termenv.Output, lit *callpbv1.Literal) {
 	}
 }
 
-func (r *renderer) renderStatus(out *termenv.Output, span *Span, focused bool) {
+func (r *renderer) renderStatus(out *termenv.Output, span *dagui.Span, focused bool) {
 	var symbol string
 	var color termenv.Color
 	switch {
@@ -378,9 +349,9 @@ func (r *renderer) renderStatus(out *termenv.Output, span *Span, focused bool) {
 	}
 }
 
-func (r *renderer) renderDuration(out *termenv.Output, span *Span) {
+func (r *renderer) renderDuration(out *termenv.Output, span *dagui.Span) {
 	fmt.Fprint(out, " ")
-	duration := out.String(fmtDuration(span.ActiveDuration(r.now)))
+	duration := out.String(dagui.FormatDuration(span.ActiveDuration(r.now)))
 	if span.IsRunning() {
 		duration = duration.Foreground(termenv.ANSIYellow)
 	} else {
@@ -389,7 +360,7 @@ func (r *renderer) renderDuration(out *termenv.Output, span *Span) {
 	fmt.Fprint(out, duration)
 }
 
-func (r *renderer) renderCached(out *termenv.Output, span *Span) {
+func (r *renderer) renderCached(out *termenv.Output, span *dagui.Span) {
 	if !span.IsRunning() && span.IsCached() {
 		fmt.Fprintf(out, " %s", out.String("CACHED").
 			Foreground(termenv.ANSIBlue))
@@ -436,64 +407,7 @@ func (r *renderer) renderCached(out *termenv.Output, span *Span) {
 // 	return nil
 // }
 
-const (
-	HideCompletedVerbosity    = 0
-	ShowCompletedVerbosity    = 1
-	ExpandCompletedVerbosity  = 2
-	ShowInternalVerbosity     = 3
-	ShowEncapsulatedVerbosity = 3
-	ShowSpammyVerbosity       = 4
-	ShowDigestsVerbosity      = 4
-)
-
-func (opts FrontendOpts) ShouldShow(span *Span) bool {
-	if opts.Debug {
-		// debug reveals all
-		return true
-	}
-	if opts.FocusedSpan == span.ID {
-		// prevent focused span from disappearing
-		return true
-	}
-	if span.Hidden(opts) {
-		return false
-	}
-
-	// TODO: optimize these
-	//
-	// idea: mark spans interesting, with a reason. interestingness
-	// propagates through parent spans and linked spans, stopping at
-	// encapsulation boundaries.
-	// if len(span.Interestings) > 0 {
-	// 	return true
-	// }
-	if span.IsFailed() {
-		return true
-	}
-	if span.IsPending() {
-		return true
-	}
-	if span.IsRunning() {
-		return true
-	}
-	// TODO: bring back <100ms?
-	if opts.GCThreshold > 0 &&
-		time.Since(span.EndTime()) > opts.GCThreshold &&
-		opts.Verbosity < ShowCompletedVerbosity {
-		// stop showing steps that ended after a given threshold
-		return false
-	}
-	// TODO: don't break chains
-	// if opts.TooFastThreshold > 0 &&
-	// 	span.ActiveDuration(time.Now()) < opts.TooFastThreshold &&
-	// 	opts.Verbosity < ShowSpammyVerbosity {
-	// 	// ignore fast steps; signal:noise is too poor
-	// 	return false
-	// }
-	return true
-}
-
-func renderPrimaryOutput(db *DB) error {
+func renderPrimaryOutput(db *dagui.DB) error {
 	logs := db.PrimaryLogs[db.PrimarySpan]
 	if len(logs) == 0 {
 		return nil
