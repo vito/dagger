@@ -336,7 +336,6 @@ func (svc *Service) startContainer(
 		}
 	}
 
-	execCtx := trace.ContextWithSpanContext(ctx, svc.Creator)
 	ctx, span := Tracer(ctx).Start(
 		// The parent is the call site that triggered it to start.
 		ctx,
@@ -359,6 +358,7 @@ func (svc *Service) startContainer(
 		}
 	}()
 
+	execCtx := trace.ContextWithSpanContext(ctx, svc.Creator)
 	gc, err := bk.NewContainer(execCtx, buildkit.NewContainerRequest{
 		Mounts:            mounts,
 		Hostname:          fullHost,
