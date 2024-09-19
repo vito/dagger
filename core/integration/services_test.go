@@ -2123,6 +2123,31 @@ func (ServiceSuite) TestSearchDomainAlwaysSet(ctx context.Context, t *testctx.T)
 	require.True(t, found)
 }
 
+func (ServiceSuite) TestServiceHealthCheck(ctx context.Context, t *testctx.T) {
+	c := connect(ctx, t)
+	content := identity.NewID()
+
+	srv := c.Directory().
+		WithNewFile("Dockerfile", `FROM busybox
+ADD . /srv
+WORKDIR /srv
+RUN echo `+content+` > index.html
+ENTRYPOINT httpd -v -f
+HEALTHCHECK CMD wget -O- http://localhost && echo checked >> index.html
+`).
+		DockerBuild().
+		AsService()
+
+	out, err := c.Container().
+		From(alpineImage).
+		WithServiceBinding("www", srv).
+		WithExec([]string{"apk", "add", "curl"}).
+		WithExec([]string{"curl", "-v", "http://www"}).
+		Stdout(ctx)
+	require.NoError(t, err)
+	require.Equal(t, content+"\nchecked\n", out)
+}
+
 func httpService(ctx context.Context, t *testctx.T, c *dagger.Client, content string) (*dagger.Service, string) {
 	t.Helper()
 
