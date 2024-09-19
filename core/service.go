@@ -363,7 +363,11 @@ func (svc *Service) startContainer(
 
 	checked := make(chan error, 1)
 	go func() {
-		checked <- newHealth(bk, gc, fullHost, ctr.Ports).Check(ctx)
+		if ctr.Config.Healthcheck == nil {
+			checked <- newPortHealth(bk, gc, fullHost, ctr.Ports).Check(ctx)
+		} else {
+			checked <- newDockerHealth(bk, gc, ctr.Config.Healthcheck).Check(ctx)
+		}
 	}()
 
 	env := append([]string{}, execOp.Meta.Env...)
@@ -665,7 +669,7 @@ func (svc *Service) startReverseTunnel(ctx context.Context, id *call.ID) (runnin
 
 	checked := make(chan error, 1)
 	go func() {
-		checked <- newHealth(bk, netNS, fullHost, checkPorts).Check(svcCtx)
+		checked <- newPortHealth(bk, netNS, fullHost, checkPorts).Check(svcCtx)
 	}()
 
 	select {
