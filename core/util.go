@@ -14,7 +14,7 @@ import (
 	bkgw "github.com/moby/buildkit/frontend/gateway/client"
 	"github.com/moby/buildkit/solver/llbsolver/provenance"
 	"github.com/moby/buildkit/solver/pb"
-	specs "github.com/opencontainers/image-spec/specs-go/v1"
+	specs "github.com/moby/docker-image-spec/specs-go/v1"
 	"github.com/opencontainers/runc/libcontainer/user"
 	"github.com/pkg/errors"
 
@@ -294,7 +294,7 @@ func mergeMap[T any](dst, src map[string]T) map[string]T {
 // Only the configurations that have corresponding `WithXXX` and `WithoutXXX`
 // methods in `Container` are added or updated (i.e., `Env`, `Labels` and
 // `ExposedPorts`). Everything else is replaced.
-func mergeImageConfig(dst, src specs.ImageConfig) specs.ImageConfig {
+func mergeImageConfig(dst, src specs.DockerOCIImageConfig) specs.DockerOCIImageConfig {
 	res := src
 
 	res.Env = mergeEnv(dst.Env, src.Env)
