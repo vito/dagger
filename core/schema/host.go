@@ -10,8 +10,9 @@ import (
 	"github.com/containerd/containerd/content/local"
 	"github.com/containerd/containerd/labels"
 	"github.com/moby/buildkit/client/llb"
+	dkrspecs "github.com/moby/docker-image-spec/specs-go/v1"
 	"github.com/opencontainers/go-digest"
-	specs "github.com/opencontainers/image-spec/specs-go/v1"
+	ocispecs "github.com/opencontainers/image-spec/specs-go/v1"
 
 	"github.com/dagger/dagger/core"
 	"github.com/dagger/dagger/dagql"
@@ -47,7 +48,7 @@ func (s *hostSchema) Install() {
 			if err != nil {
 				return nil, fmt.Errorf("failed to parse digest: %w", err)
 			}
-			blobDef, err := blob.LLB(specs.Descriptor{
+			blobDef, err := blob.LLB(ocispecs.Descriptor{
 				MediaType: args.MediaType,
 				Digest:    dig,
 				Size:      args.Size,
@@ -89,14 +90,14 @@ func (s *hostSchema) Install() {
 				return nil, fmt.Errorf("failed to create go sdk content store: %w", err)
 			}
 
-			manifestBlob, err := content.ReadBlob(ctx, goSDKContentStore, specs.Descriptor{
+			manifestBlob, err := content.ReadBlob(ctx, goSDKContentStore, ocispecs.Descriptor{
 				Digest: digest.Digest(args.Digest),
 			})
 			if err != nil {
 				return nil, fmt.Errorf("image archive read manifest blob: %w", err)
 			}
 
-			var man specs.Manifest
+			var man ocispecs.Manifest
 			err = json.Unmarshal(manifestBlob, &man)
 			if err != nil {
 				return nil, fmt.Errorf("image archive unmarshal manifest: %w", err)
@@ -107,7 +108,7 @@ func (s *hostSchema) Install() {
 				return nil, fmt.Errorf("image archive read image config blob %s: %w", man.Config.Digest, err)
 			}
 
-			var imgSpec specs.Image
+			var imgSpec dkrspecs.DockerOCIImage
 			err = json.Unmarshal(configBlob, &imgSpec)
 			if err != nil {
 				return nil, fmt.Errorf("load image config: %w", err)
