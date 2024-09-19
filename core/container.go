@@ -25,8 +25,9 @@ import (
 	"github.com/moby/buildkit/identity"
 	"github.com/moby/buildkit/solver/pb"
 	"github.com/moby/buildkit/util/leaseutil"
+	dkrspecs "github.com/moby/docker-image-spec/specs-go/v1"
 	"github.com/opencontainers/go-digest"
-	specs "github.com/opencontainers/image-spec/specs-go/v1"
+	ocispecs "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/pkg/errors"
 	"github.com/vektah/gqlparser/v2/ast"
 
@@ -60,7 +61,7 @@ type Container struct {
 	FS *pb.Definition `json:"fs"`
 
 	// Image configuration (env, workdir, etc)
-	Config specs.ImageConfig `json:"cfg"`
+	Config dkrspecs.DockerOCIImageConfig `json:"cfg"`
 
 	// List of GPU devices that will be exposed to the container
 	EnabledGPUs []string `json:"enabledGPUs,omitempty"`
@@ -312,7 +313,7 @@ func (container *Container) From(ctx context.Context, addr string) (*Container, 
 		return nil, err
 	}
 
-	var imgSpec specs.Image
+	var imgSpec dkrspecs.DockerOCIImage
 	if err := json.Unmarshal(cfgBytes, &imgSpec); err != nil {
 		return nil, err
 	}
@@ -452,7 +453,7 @@ func (container *Container) Build(
 
 	cfgBytes, found := res.Metadata[exptypes.ExporterImageConfigKey]
 	if found {
-		var imgSpec specs.Image
+		var imgSpec dkrspecs.DockerOCIImage
 		if err := json.Unmarshal(cfgBytes, &imgSpec); err != nil {
 			return nil, err
 		}
@@ -1016,11 +1017,11 @@ func (container *Container) writeToPath(ctx context.Context, subdir string, fn f
 	return container.withMounted(ctx, mount.Target, dir.LLB, mount.SourcePath, nil, "", false)
 }
 
-func (container *Container) ImageConfig(ctx context.Context) (specs.ImageConfig, error) {
+func (container *Container) ImageConfig(ctx context.Context) (dkrspecs.DockerOCIImageConfig, error) {
 	return container.Config, nil
 }
 
-func (container *Container) UpdateImageConfig(ctx context.Context, updateFn func(specs.ImageConfig) specs.ImageConfig) (*Container, error) {
+func (container *Container) UpdateImageConfig(ctx context.Context, updateFn func(dkrspecs.DockerOCIImageConfig) dkrspecs.DockerOCIImageConfig) (*Container, error) {
 	container = container.Clone()
 	container.Config = updateFn(container.Config)
 	return container, nil
@@ -1385,7 +1386,7 @@ func (container *Container) Import(
 	container = container.Clone()
 
 	var release func(context.Context) error
-	loadManifest := func(ctx context.Context) (*specs.Descriptor, error) {
+	loadManifest := func(ctx context.Context) (*ocispecs.Descriptor, error) {
 		src, err := source.Open(ctx)
 		if err != nil {
 			return nil, err
@@ -1451,7 +1452,7 @@ func (container *Container) Import(
 		return nil, fmt.Errorf("image archive read manifest blob: %w", err)
 	}
 
-	var man specs.Manifest
+	var man ocispecs.Manifest
 	err = json.Unmarshal(manifestBlob, &man)
 	if err != nil {
 		return nil, fmt.Errorf("image archive unmarshal manifest: %w", err)
@@ -1462,7 +1463,7 @@ func (container *Container) Import(
 		return nil, fmt.Errorf("image archive read image config blob %s: %w", man.Config.Digest, err)
 	}
 
-	var imgSpec specs.Image
+	var imgSpec dkrspecs.DockerOCIImage
 	err = json.Unmarshal(configBlob, &imgSpec)
 	if err != nil {
 		return nil, fmt.Errorf("load image config: %w", err)
@@ -1621,8 +1622,8 @@ func (BuildArg) TypeDescription() string {
 // OCI manifest annotation that specifies an image's tag
 const ociTagAnnotation = "org.opencontainers.image.ref.name"
 
-func resolveIndex(ctx context.Context, store content.Store, desc specs.Descriptor, platform specs.Platform, tag string) (*specs.Descriptor, error) {
-	if desc.MediaType != specs.MediaTypeImageIndex {
+func resolveIndex(ctx context.Context, store content.Store, desc ocispecs.Descriptor, platform ocispecs.Platform, tag string) (*ocispecs.Descriptor, error) {
+	if desc.MediaType != ocispecs.MediaTypeImageIndex {
 		return nil, fmt.Errorf("expected index, got %s", desc.MediaType)
 	}
 
@@ -1631,7 +1632,7 @@ func resolveIndex(ctx context.Context, store content.Store, desc specs.Descripto
 		return nil, fmt.Errorf("read index blob: %w", err)
 	}
 
-	var idx specs.Index
+	var idx ocispecs.Index
 	err = json.Unmarshal(indexBlob, &idx)
 	if err != nil {
 		return nil, fmt.Errorf("unmarshal index: %w", err)
@@ -1659,11 +1660,11 @@ func resolveIndex(ctx context.Context, store content.Store, desc specs.Descripto
 		}
 
 		switch m.MediaType {
-		case specs.MediaTypeImageManifest, // OCI
+		case ocispecs.MediaTypeImageManifest, // OCI
 			images.MediaTypeDockerSchema2Manifest: // Docker
 			return &m, nil
 
-		case specs.MediaTypeImageIndex, // OCI
+		case ocispecs.MediaTypeImageIndex, // OCI
 			images.MediaTypeDockerSchema2ManifestList: // Docker
 			return resolveIndex(ctx, store, m, platform, tag)
 

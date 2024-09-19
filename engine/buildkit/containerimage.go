@@ -16,14 +16,15 @@ import (
 	bkgw "github.com/moby/buildkit/frontend/gateway/client"
 	bksolverpb "github.com/moby/buildkit/solver/pb"
 	solverresult "github.com/moby/buildkit/solver/result"
-	specs "github.com/opencontainers/image-spec/specs-go/v1"
+	specs "github.com/moby/docker-image-spec/specs-go/v1"
+	ocispecs "github.com/opencontainers/image-spec/specs-go/v1"
 
 	"github.com/dagger/dagger/engine"
 )
 
 type ContainerExport struct {
 	Definition *bksolverpb.Definition
-	Config     specs.ImageConfig
+	Config     specs.DockerOCIImageConfig
 }
 
 func (c *Client) PublishContainerImage(
@@ -123,7 +124,7 @@ func (c *Client) ExportContainerImage(
 
 func (c *Client) ContainerImageToTarball(
 	ctx context.Context,
-	engineHostPlatform specs.Platform,
+	engineHostPlatform ocispecs.Platform,
 	fileName string,
 	inputByPlatform map[string]ContainerExport,
 	opts map[string]string,
@@ -208,19 +209,14 @@ func (c *Client) getContainerResult(
 			return nil, err
 		}
 
-		platform, err := platforms.Parse(platformString)
+		image := specs.DockerOCIImage{
+			Config: input.Config,
+		}
+		image.Platform, err = platforms.Parse(platformString)
 		if err != nil {
 			return nil, err
 		}
-		cfgBytes, err := json.Marshal(specs.Image{
-			Platform: specs.Platform{
-				Architecture: platform.Architecture,
-				OS:           platform.OS,
-				OSVersion:    platform.OSVersion,
-				OSFeatures:   platform.OSFeatures,
-			},
-			Config: input.Config,
-		})
+		cfgBytes, err := json.Marshal(image)
 		if err != nil {
 			return nil, err
 		}
@@ -231,7 +227,7 @@ func (c *Client) getContainerResult(
 		} else {
 			expPlatforms.Platforms[len(combinedResult.Refs)] = exptypes.Platform{
 				ID:       platformString,
-				Platform: platform,
+				Platform: image.Platform,
 			}
 			combinedResult.AddRef(platformString, ref)
 		}
