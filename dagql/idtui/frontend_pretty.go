@@ -240,9 +240,9 @@ func (fe *frontendPretty) runWithTUI(ctx context.Context, ttyIn *os.File, ttyOut
 	return fe.err
 }
 
-func (fe *frontendPretty) renderErrorLogs(out *termenv.Output, r *renderer) error {
+func (fe *frontendPretty) renderErrorLogs(out *termenv.Output, r *renderer) {
 	if fe.rowsView == nil {
-		return nil
+		return
 	}
 	rowsView := fe.db.RowsView(dagui.FrontendOpts{
 		ZoomedSpan: fe.db.PrimarySpan,
@@ -272,7 +272,6 @@ func (fe *frontendPretty) renderErrorLogs(out *termenv.Output, r *renderer) erro
 		}
 		return false
 	})
-	return nil
 }
 
 // FinalRender is called after the program has finished running and prints the
@@ -504,7 +503,7 @@ func (fe *frontendPretty) recalculateViewLocked() {
 func (fe *frontendPretty) renderedRowLines(r *renderer, row *dagui.TraceRow, prefix string) []string {
 	buf := new(strings.Builder)
 	out := NewOutput(buf, termenv.WithProfile(fe.profile))
-	fe.renderRow(out, r, row, false, prefix)
+	fe.renderRow(out, r, row, prefix)
 	return strings.Split(strings.TrimSuffix(buf.String(), "\n"), "\n")
 }
 
@@ -517,7 +516,7 @@ func (fe *frontendPretty) renderProgress(out *termenv.Output, r *renderer, full 
 
 	if full {
 		for _, row := range rows.Order {
-			fe.renderRow(out, r, row, full, "")
+			fe.renderRow(out, r, row, "")
 		}
 		return
 	}
@@ -924,7 +923,7 @@ func (fe *frontendPretty) renderLocked() {
 	fe.Render(fe.viewOut)
 }
 
-func (fe *frontendPretty) renderRow(out *termenv.Output, r *renderer, row *dagui.TraceRow, final bool, prefix string) {
+func (fe *frontendPretty) renderRow(out *termenv.Output, r *renderer, row *dagui.TraceRow, prefix string) {
 	if row.Previous != nil &&
 		row.Previous.Depth >= row.Depth &&
 		!row.Chained &&
@@ -935,11 +934,11 @@ func (fe *frontendPretty) renderRow(out *termenv.Output, r *renderer, row *dagui
 		fmt.Fprintln(out)
 	}
 	fe.renderStep(out, r, row.Span, row.Chained, row.Depth, prefix)
-	fe.renderStepLogs(out, r, row, final, prefix)
+	fe.renderStepLogs(out, r, row, prefix)
 	fe.renderStepError(out, r, row.Span, row.Depth, prefix)
 }
 
-func (fe *frontendPretty) renderStepLogs(out *termenv.Output, r *renderer, row *dagui.TraceRow, final bool, prefix string) {
+func (fe *frontendPretty) renderStepLogs(out *termenv.Output, r *renderer, row *dagui.TraceRow, prefix string) {
 	if row.IsRunningOrChildRunning || row.Span.IsFailedOrCausedFailure() || fe.Verbosity >= dagui.ExpandCompletedVerbosity {
 		if logs := fe.logs.Logs[row.Span.ID]; logs != nil {
 			fe.renderLogs(out, r,
