@@ -308,7 +308,7 @@ func (*Viztest) Pending(ctx context.Context) error {
 		From("alpine").
 		WithEnvVariable("NOW", time.Now().String()).
 		WithExec([]string{"sleep", "1"}). // wait a bit to help eyeballing
-		WithExec([]string{"false"}).      // fail the pipeline
+		// WithExec([]string{"false"}).      // fail the pipeline
 		WithExec([]string{"sleep", "1"}). // will be pending at the end
 		Sync(ctx)
 	return err
