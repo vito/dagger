@@ -23,7 +23,7 @@ func New(
 	source *dagger.Directory,
 	// Go version
 	// +optional
-	// +default="1.23.2"
+	// +default="1.24rc2"
 	version string,
 	// Use a custom module cache
 	// +optional
@@ -70,18 +70,8 @@ func New(
 	}
 	if base == nil {
 		base = dag.
-			Wolfi().
-			Container(dagger.WolfiContainerOpts{Packages: []string{
-				"go~" + version,
-				// gcc is needed to run go test -race https://github.com/golang/go/issues/9918 (???)
-				"build-base",
-				// adding the git CLI to inject vcs info into the go binaries
-				"git",
-				// Install protoc for protobug support by default
-				// The specific version is dictated by Dagger's own requirement
-				// FIXME: make this optional with overlay support
-				"protoc~3.21.12",
-			}}).
+			Container().
+			From("golang:"+version).
 			WithEnvVariable("GOLANG_VERSION", version).
 			WithEnvVariable("GOPATH", "/go").
 			WithEnvVariable("PATH", "${GOPATH}/bin:${PATH}", dagger.ContainerWithEnvVariableOpts{Expand: true}).

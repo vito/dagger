@@ -119,6 +119,12 @@ func (t Engine) Dev(ctx context.Context) error {
 		// "-p", "6060:6060",
 		"--name", containerName,
 		"--privileged",
+		"-p", "6060:6060", // expose pprof
+		"--memory", "4g", // don't wait so long for leak to accumulate before crash
+		// these env vars tell the go runtime to try really really hard to GC as much as possible, at the expense of CPU
+		// that makes it easier to distinguish genuine leaks from stuff getting cached in sync.Pools and just not GC'd yet
+		"-e", "GOGC=1",
+		"-e", "GOMEMLIMIT=1MiB",
 	}...)
 
 	runArgs = append(runArgs, imageName, "--extra-debug", "--debugaddr=0.0.0.0:6060")

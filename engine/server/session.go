@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -104,6 +105,8 @@ const (
 )
 
 type daggerClient struct {
+	waste [10485760]byte
+
 	daggerSession  *daggerSession
 	clientID       string
 	clientVersion  string
@@ -187,6 +190,7 @@ func (client *daggerClient) FlushTelemetry(ctx context.Context) error {
 }
 
 func (client *daggerClient) ShutdownTelemetry(ctx context.Context) error {
+	slog.Warn("!!! SHUTTING DOWN CLIENT TELEMETRY", "client", client.clientID)
 	slog := slog.With("client", client.clientID)
 	var errs error
 	if client.tracerProvider != nil {
@@ -658,6 +662,7 @@ func (srv *Server) initializeDaggerClient(
 	}
 	client.tracerProvider = sdktrace.NewTracerProvider(tracerOpts...)
 	client.loggerProvider = sdklog.NewLoggerProvider(loggerOpts...)
+	runtime.AddCleanup(client.loggerProvider, finalizer, "logger provider: "+client.clientID)
 	client.meterProvider = sdkmetric.NewMeterProvider(meterOpts...)
 
 	client.state = clientStateInitialized
@@ -692,6 +697,10 @@ func (srv *Server) clientFromIDs(sessID, clientID string) (*daggerClient, bool) 
 	}
 
 	return client, true
+}
+
+func finalizer[T any](arg T) {
+	slog.Warn("!!! IT'S FINAL", "tag", arg)
 }
 
 // initialize session+client if needed, return:
@@ -768,6 +777,8 @@ func (srv *Server) getOrInitClient(
 			shutdownCh:     make(chan struct{}),
 			clientMetadata: opts.ClientMetadata,
 		}
+		rand.Read(client.waste[:])
+		runtime.AddCleanup(client, finalizer, "client: "+client.clientID)
 		sess.clients[clientID] = client
 
 		// initialize SQLite DB early so we can subscribe to it immediately
