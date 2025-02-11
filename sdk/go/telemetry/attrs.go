@@ -98,6 +98,11 @@ const (
 	// Indicates whether the log stream has ended.
 	StdioEOFAttr = "stdio.eof"
 
+	// The MIME type of the associated content (i.e. log message).
+	//
+	// Example: text/plain, text/markdown, text/html
+	ContentTypeAttr = "dagger.io/content.type"
+
 	// Indicates whether the log should be shown globally.
 	LogsGlobalAttr = "dagger.io/logs.global"
 
