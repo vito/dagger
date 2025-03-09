@@ -26,7 +26,6 @@ type Llm struct {
 
 	maxAPICalls int
 	apiCalls    int
-	Model       string
 	Endpoint    *LlmEndpoint
 
 	// If true: has un-synced state
@@ -105,9 +104,10 @@ type LlmRouter struct {
 	AnthropicBaseURL string
 	AnthropicModel   string
 
-	OpenAIAPIKey  string
-	OpenAIBaseURL string
-	OpenAIModel   string
+	OpenAIAPIKey       string
+	OpenAIAzureVersion string
+	OpenAIBaseURL      string
+	OpenAIModel        string
 
 	GeminiAPIKey  string
 	GeminiBaseURL string
@@ -148,7 +148,7 @@ func (r *LlmRouter) routeOpenAIModel() *LlmEndpoint {
 		Key:      r.OpenAIAPIKey,
 		Provider: OpenAI,
 	}
-	endpoint.Client = newOpenAIClient(endpoint)
+	endpoint.Client = newOpenAIClient(endpoint, r.OpenAIAzureVersion)
 
 	return endpoint
 }
@@ -176,7 +176,7 @@ func (r *LlmRouter) routeOtherModel() *LlmEndpoint {
 		Key:      r.OpenAIAPIKey,
 		Provider: Other,
 	}
-	endpoint.Client = newOpenAIClient(endpoint)
+	endpoint.Client = newOpenAIClient(endpoint, r.OpenAIAzureVersion)
 
 	return endpoint
 }
@@ -252,6 +252,10 @@ func (r *LlmRouter) LoadConfig(ctx context.Context, getenv func(context.Context,
 	if err != nil {
 		return err
 	}
+	r.OpenAIAzureVersion, err = getenv(ctx, "OPENAI_AZURE_VERSION")
+	if err != nil {
+		return err
+	}
 	r.OpenAIBaseURL, err = getenv(ctx, "OPENAI_BASE_URL")
 	if err != nil {
 		return err
@@ -275,7 +279,7 @@ func (r *LlmRouter) LoadConfig(ctx context.Context, getenv func(context.Context,
 	return nil
 }
 
-func NewLlmRouter(ctx context.Context, srv *dagql.Server) (*LlmRouter, error) {
+func NewLlmRouter(ctx context.Context, srv *dagql.Server) (_ *LlmRouter, rerr error) {
 	router := new(LlmRouter)
 	// Get the secret plaintext, from either a URI (provider lookup) or a plaintext (no-op)
 	loadSecret := func(ctx context.Context, uriOrPlaintext string) (string, error) {
@@ -298,6 +302,8 @@ func NewLlmRouter(ctx context.Context, srv *dagql.Server) (*LlmRouter, error) {
 		// If it's a regular plaintext:
 		return uriOrPlaintext, nil
 	}
+	ctx, span := Tracer(ctx).Start(ctx, "load LLM router config", telemetry.Internal(), telemetry.Encapsulate())
+	defer telemetry.End(span, func() error { return rerr })
 	env := make(map[string]string)
 	// Load .env from current directory, if it exists
 	if envFile, err := loadSecret(ctx, "file://.env"); err == nil {
@@ -344,10 +350,8 @@ func NewLlm(ctx context.Context, query *Query, srv *dagql.Server, model string, 
 	if endpoint.Model == "" {
 		return nil, fmt.Errorf("no valid LLM endpoint configuration")
 	}
-	// FIXME: merge model into endpoint
 	return &Llm{
 		Query:       query,
-		Model:       model,
 		Endpoint:    endpoint,
 		maxAPICalls: maxAPICalls,
 		calls:       map[string]string{},
@@ -385,6 +389,23 @@ func (llm *Llm) ToolsDoc(ctx context.Context, srv *dagql.Server) (string, error)
 		result = fmt.Sprintf("%s## %s\n\n%s\n\n%s\n\n", result, tool.Name, tool.Description, string(schema))
 	}
 	return result, nil
+}
+
+func (llm *Llm) WithModel(ctx context.Context, model string, srv *dagql.Server) (*Llm, error) {
+	llm = llm.Clone()
+	router, err := NewLlmRouter(ctx, srv)
+	if err != nil {
+		return nil, err
+	}
+	endpoint, err := router.Route(model)
+	if err != nil {
+		return nil, err
+	}
+	if endpoint.Model == "" {
+		return nil, fmt.Errorf("no valid LLM endpoint configuration")
+	}
+	llm.Endpoint = endpoint
+	return llm, nil
 }
 
 // Append a user message (prompt) to the message history

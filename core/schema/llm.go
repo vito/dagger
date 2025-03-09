@@ -23,10 +23,15 @@ func (s llmSchema) Install() {
 	llmType := dagql.Fields[*core.Llm]{
 		dagql.Func("model", s.model).
 			Doc("return the model used by the llm"),
+		dagql.Func("provider", s.provider).
+			Doc("return the provider used by the llm"),
 		dagql.Func("history", s.history).
 			Doc("return the llm message history"),
 		dagql.Func("lastReply", s.lastReply).
 			Doc("return the last llm reply from the history"),
+		dagql.Func("withModel", s.withModel).
+			Doc("swap out the llm model").
+			ArgDoc("model", "The model to use"),
 		dagql.Func("withPrompt", s.withPrompt).
 			Doc("append a prompt to the llm context").
 			ArgDoc("prompt", "The prompt to send"),
@@ -58,12 +63,12 @@ func (s llmSchema) Install() {
 	s.srv.SetMiddleware(core.LlmMiddleware{Server: s.srv})
 }
 
-func (s *llmSchema) model(ctx context.Context, llm *core.Llm, args struct{}) (dagql.String, error) {
-	var provider string
-	if llm.Endpoint != nil {
-		provider = string(llm.Endpoint.Provider)
-	}
-	return dagql.NewString(llm.Model + "(" + provider + ")"), nil
+func (s *llmSchema) model(ctx context.Context, llm *core.Llm, args struct{}) (string, error) {
+	return llm.Endpoint.Model, nil
+}
+
+func (s *llmSchema) provider(ctx context.Context, llm *core.Llm, args struct{}) (string, error) {
+	return string(llm.Endpoint.Provider), nil
 }
 
 func (s *llmSchema) lastReply(ctx context.Context, llm *core.Llm, args struct{}) (dagql.String, error) {
@@ -73,6 +78,13 @@ func (s *llmSchema) lastReply(ctx context.Context, llm *core.Llm, args struct{})
 	}
 	return dagql.NewString(reply), nil
 }
+
+func (s *llmSchema) withModel(ctx context.Context, llm *core.Llm, args struct {
+	Model string
+}) (*core.Llm, error) {
+	return llm.WithModel(ctx, args.Model, s.srv)
+}
+
 func (s *llmSchema) withPrompt(ctx context.Context, llm *core.Llm, args struct {
 	Prompt string
 }) (*core.Llm, error) {

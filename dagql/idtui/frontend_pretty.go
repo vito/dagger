@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -72,6 +73,8 @@ type frontendPretty struct {
 	editline        *editline.Model
 	editlineFocused bool
 	flushed         map[dagui.SpanID]bool
+	scrollback      *strings.Builder
+	shellDone       bool
 
 	// updated as events are written
 	db           *dagui.DB
@@ -128,7 +131,8 @@ func NewWithDB(db *dagui.DB) *frontendPretty {
 		rows:     &dagui.Rows{BySpan: map[dagui.SpanID]*dagui.TraceRow{}},
 
 		// shell state
-		flushed: map[dagui.SpanID]bool{},
+		flushed:    map[dagui.SpanID]bool{},
+		scrollback: new(strings.Builder),
 
 		// initial TUI state
 		window:     tea.WindowSizeMsg{Width: -1, Height: -1}, // be clear that it's not set
@@ -366,6 +370,9 @@ func (fe *frontendPretty) FinalRender(w io.Writer) error {
 	fe.mu.Lock()
 	defer fe.mu.Unlock()
 
+	// Print the scrollback.
+	fmt.Fprint(w, fe.scrollback.String())
+
 	// Render the full trace.
 	fe.ZoomedSpan = fe.db.PrimarySpan
 	if fe.reportOnly && fe.Verbosity < dagui.ExpandCompletedVerbosity {
@@ -385,10 +392,7 @@ func (fe *frontendPretty) FinalRender(w io.Writer) error {
 
 		if fe.msgPreFinalRender.Len() > 0 {
 			defer func() {
-				if fe.shell == nil {
-					// shell already prints blank line as it flushes
-					fmt.Fprintln(os.Stderr)
-				}
+				fmt.Fprintln(os.Stderr)
 				fmt.Fprintln(os.Stderr, fe.msgPreFinalRender.String())
 			}()
 		}
@@ -584,7 +588,7 @@ func (fe *frontendPretty) Render(out TermOutput) error {
 
 	r := newRenderer(fe.db, fe.window.Width, fe.FrontendOpts)
 
-	if fe.shell != nil {
+	if fe.hlProgress() {
 		out = focusedBg(out)
 	}
 
@@ -597,7 +601,7 @@ func (fe *frontendPretty) Render(out TermOutput) error {
 
 	below := new(strings.Builder)
 	var countOut TermOutput = NewOutput(below, termenv.WithProfile(fe.profile))
-	if fe.shell != nil {
+	if fe.hlProgress() {
 		countOut = focusedBg(countOut)
 	}
 
@@ -663,14 +667,18 @@ func (fe *frontendPretty) recalculateViewLocked() {
 func (fe *frontendPretty) renderedRowLines(r *renderer, row *dagui.TraceRow, prefix string) []string {
 	buf := new(strings.Builder)
 	var out TermOutput = NewOutput(buf, termenv.WithProfile(fe.profile))
-	if fe.shell != nil {
+	if fe.hlProgress() {
 		out = focusedBg(out)
 	}
-	fe.renderRow(out, r, row, prefix, fe.shell != nil)
+	fe.renderRow(out, r, row, prefix, fe.hlProgress())
 	if buf.String() == "" {
 		return nil
 	}
 	return strings.Split(strings.TrimSuffix(buf.String(), "\n"), "\n")
+}
+
+func (fe *frontendPretty) hlProgress() bool {
+	return fe.shell != nil && !fe.editlineFocused
 }
 
 func (fe *frontendPretty) renderProgress(out TermOutput, r *renderer, full bool, height int, prefix string) (rendered bool) {
@@ -682,7 +690,7 @@ func (fe *frontendPretty) renderProgress(out TermOutput, r *renderer, full bool,
 
 	if full {
 		for _, row := range rows.Order {
-			if fe.renderRow(out, r, row, "", fe.shell != nil) {
+			if fe.renderRow(out, r, row, "", fe.hlProgress()) {
 				rendered = true
 			}
 		}
@@ -835,9 +843,18 @@ func (fe *frontendPretty) View() string {
 		return ""
 	}
 	if fe.shell != nil {
-		prog := strings.TrimSpace(fe.view.String())
-		if prog != "" {
-			// keep an extra line above the prompt
+		prog := ""
+		if fe.scrollback.Len() > 0 {
+			prog += fe.scrollback.String()
+			// prog += "> " + strings.ReplaceAll(
+			// 	strings.TrimSuffix(fe.scrollback.String(), "\n"),
+			// 	"\n",
+			// 	"\n> ",
+			// ) + "\n"
+		}
+		prog += "\n"
+		if view := strings.TrimSpace(fe.view.String()); view != "" {
+			prog += view
 			prog += "\n\n"
 		}
 		return prog + fe.editlineView()
@@ -927,41 +944,14 @@ func (fe *frontendPretty) update(msg tea.Msg) (*frontendPretty, tea.Cmd) { //nol
 
 		return fe, tea.Batch(
 			tea.Printf(
-				`Experimental Dagger interactive shell. Type ".help" for more information. Press Ctrl+D to exit.`+
-					"\n"),
+				`Experimental Dagger interactive shell.`+
+					`Type ".help" for more information. Press Ctrl+D to exit.`),
 			fe.editline.Focus(),
 			tea.DisableMouse,
 		)
 
 	case flushMsg:
-		if fe.shell == nil {
-			return fe, nil
-		}
-		buf := new(strings.Builder)
-		out := NewOutput(buf, termenv.WithProfile(fe.profile))
-		r := newRenderer(fe.db, 100, fe.FrontendOpts)
-		for _, row := range fe.rows.Order {
-			var shouldFlush bool
-			if row.Depth == 0 && !row.IsRunningOrChildRunning && fe.logs.SawEOF[row.Span.ID] {
-				// we're a top-level completed span and we've seen EOF, so flush
-				shouldFlush = true
-			}
-			if row.Parent != nil && fe.flushed[row.Parent.Span.ID] {
-				// our parent flushed, so we should too
-				shouldFlush = true
-			}
-			if !shouldFlush {
-				continue
-			}
-			if !fe.flushed[row.Span.ID] {
-				fe.renderRow(out, r, row, "", false)
-				fe.flushed[row.Span.ID] = true
-			}
-		}
-		if buf.Len() > 0 {
-			return fe, tea.Printf("%s", strings.TrimLeft(buf.String(), "\n"))
-		}
-		return fe, nil
+		return fe.flushScrollback()
 
 	case backgroundMsg:
 		fe.backgrounded = true
@@ -1018,6 +1008,7 @@ func (fe *frontendPretty) update(msg tea.Msg) (*frontendPretty, tea.Cmd) { //nol
 
 			ctx, cancel := context.WithCancelCause(fe.shellCtx)
 			fe.shellInterrupt = cancel
+			fe.shellDone = false
 
 			return fe, func() tea.Msg {
 				return shellDoneMsg{fe.shell(ctx, value)}
@@ -1032,6 +1023,9 @@ func (fe *frontendPretty) update(msg tea.Msg) (*frontendPretty, tea.Cmd) { //nol
 			fe.promptFg = termenv.ANSIRed
 		}
 		fe.updatePrompt()
+		// NOTE: we switch back from the alt screen only when the scrollback is
+		// written
+		fe.shellDone = true
 		return fe, nil
 
 	case tea.KeyMsg:
@@ -1170,14 +1164,112 @@ func (fe *frontendPretty) update(msg tea.Msg) (*frontendPretty, tea.Cmd) { //nol
 
 	case frameMsg:
 		fe.renderLocked()
+		fe, flushCmd := fe.flushScrollback()
 		// NB: take care not to forward Frame downstream, since that will result
 		// in runaway ticks. instead inner components should send a SetFpsMsg to
 		// adjust the outermost layer.
-		return fe, frame(fe.fps)
+		return fe, tea.Batch(flushCmd, frame(fe.fps))
 
 	default:
 		return fe, nil
 	}
+}
+
+func (fe *frontendPretty) flushScrollback() (*frontendPretty, tea.Cmd) {
+	if fe.shell == nil {
+		return fe, nil
+	}
+	if !fe.shellDone {
+		// don't flush scrollback when in alt screen, because active progress
+		// may consume entire height and then disappear, placing the prompt at
+		// the top of the screen, which is exactly what we're trying to avoid
+		dbg.Println("alt screen and shell not done")
+		return fe, nil
+	}
+
+	// Calculate visible area height
+	visibleHeight := fe.window.Height
+	if fe.editline != nil {
+		visibleHeight -= lipgloss.Height(fe.editlineView())
+	}
+
+	// Create buffer for flushing
+	out := NewOutput(fe.scrollback, termenv.WithProfile(fe.profile))
+	r := newRenderer(fe.db, 100, fe.FrontendOpts)
+
+	var anyFlushed bool
+	for _, row := range fe.rows.Order {
+		// Skip if row is already flushed
+		if fe.flushed[row.Span.ID] {
+			continue
+		}
+		if row.IsRunningOrChildRunning || !fe.logsDone(row.Span.ID, row.Depth == 0) {
+			break
+		}
+		if row.Depth == 0 {
+			// NOTE: better to do this above a root span than after its last child,
+			// since we sometimes will have a child show up late if a tree finishes
+			// quickly.
+			fmt.Fprintln(out)
+		}
+		fe.renderRow(out, r, row, "", false)
+		fe.flushed[row.Span.ID] = true
+		anyFlushed = true
+	}
+	if !anyFlushed {
+		dbg.Println("no flushed rows")
+		return fe, nil
+	}
+
+	// If nothing was written, we're done
+	if fe.scrollback.Len() == 0 {
+		dbg.Println("scrollback is empty")
+		return fe, nil
+	}
+
+	// Calculate how many lines need to be flushed
+	scrollbackHeight := lipgloss.Height(fe.scrollback.String())
+	if scrollbackHeight < visibleHeight {
+		return fe, nil
+	}
+
+	offscreenHeight := scrollbackHeight - visibleHeight
+	dbg.Printf("!!! height=%d, offscreenHeight=%d, visibleHeight=%d, scrollbackHeight=%d",
+		fe.window.Height,
+		offscreenHeight,
+		visibleHeight,
+		scrollbackHeight)
+
+	// Split into lines, being careful to preserve empty lines
+	lines := strings.Split(fe.scrollback.String(), "\n")
+
+	// Build new buffers
+	offscreen := new(strings.Builder)
+	screen := new(strings.Builder)
+
+	// Write lines to appropriate buffers
+	for i, line := range lines {
+		if offscreenHeight > 0 {
+			fmt.Fprint(offscreen, line)
+			if i < len(lines)-1 {
+				fmt.Fprintln(offscreen)
+			}
+			offscreenHeight--
+		} else {
+			fmt.Fprint(screen, line)
+			if i < len(lines)-1 {
+				fmt.Fprintln(screen)
+			}
+		}
+	}
+
+	// Replace scrollback with remaining visible lines
+	fe.scrollback = screen
+
+	// Return command to print offscreen lines
+	msg := strings.TrimSuffix(offscreen.String(), "\n")
+	dbg.Println("flushing offscreen lines", strconv.Quote(msg))
+	return fe, tea.Printf("%s", msg)
 }
 
 func (fe *frontendPretty) updatePrompt() {
@@ -1491,6 +1583,18 @@ func (fe *frontendPretty) renderLogs(out TermOutput, r *renderer, logs *Vterm, d
 	return true
 }
 
+func (fe *frontendPretty) logsDone(id dagui.SpanID, waitForLogs bool) bool {
+	if fe.logs == nil {
+		// no logs to begin with
+		return true
+	}
+	if _, ok := fe.logs.Logs[id]; !ok && !waitForLogs {
+		// no logs to begin with
+		return true
+	}
+	return fe.logs.SawEOF[id]
+}
+
 type prettyLogs struct {
 	Logs     map[dagui.SpanID]*Vterm
 	LogWidth int
@@ -1515,11 +1619,9 @@ func (l *prettyLogs) Export(ctx context.Context, logs []sdklog.Record) error {
 		for attr := range log.WalkAttributes {
 			if attr.Key == telemetry.ContentTypeAttr {
 				contentType = attr.Value.AsString()
-				break
 			}
 			if attr.Key == telemetry.StdioEOFAttr {
 				eof = attr.Value.AsBool()
-				break
 			}
 		}
 
