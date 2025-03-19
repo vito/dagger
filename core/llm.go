@@ -29,16 +29,15 @@ func init() {
 
 // TODO: is this the right place for this? is there an argument for or against
 // it being here, and/or for it being overrideable?
-const defaultSystemPrompt = `You are an AI assistant that interacts with an immutable GraphQL API by calling tools that return new state objects.
-Instead of modifying objects in place, each tool call produces a new state, which updates the available set of tools.
-Your environment changes dynamically as you navigate through different states.
+const defaultSystemPrompt = `You are an AI assistant that interacts with an immutable GraphQL API using bindings.
+Bindings automatically update when a tool returns a value of the same type.
+If a tool returns a different type, the binding remains unchanged, and the new value is available but not stored unless explicitly saved.
 
-State is preserved, and previous states can be accessed by saving them as variables using the _save tool.
-To explore effectively, prioritize discovering new states over efficiency.
-You may need to make exploratory tool calls to understand the available actions.
+Errors do not modify bindings.
+Use ` + "`" + `_save` + "`" + ` only when switching to a different type or when no existing binding matches the result.
+Use ` + "`" + `_undo` + "`" + ` to revert a binding to its previous state.
 
-Your goal is to autonomously interact with the API, selecting and chaining tools to achieve tasks.
-When completing a task, save the final result using the _save tool.`
+Prioritize exploration over efficiency.`
 
 // An instance of a LLM (large language model), with its state and tool calling environment
 type LLM struct {
@@ -478,7 +477,7 @@ func (llm *LLM) WithPrompt(
 	prompt string,
 	srv *dagql.Server,
 ) (*LLM, error) {
-	if len(llm.env.vars) > 0 {
+	if len(llm.env.bindings) > 0 {
 		prompt = os.Expand(prompt, func(key string) string {
 			val, err := llm.env.Get(key)
 			if err != nil {
@@ -729,15 +728,12 @@ func (llm *LLM) HistoryJSON(ctx context.Context, dag *dagql.Server) (string, err
 }
 
 func (llm *LLM) Set(ctx context.Context, dag *dagql.Server, key string, value dagql.Typed) (*LLM, error) {
-	if id, ok := value.(dagql.IDType); ok {
-		obj, err := dag.Load(ctx, id.ID())
-		if err != nil {
-			return nil, err
-		}
-		value = obj
+	obj, err := llm.loadObject(ctx, dag, value)
+	if err != nil {
+		return nil, err
 	}
 	llm = llm.Clone()
-	llm.env.Set(key, value)
+	llm.env.Set(key, obj)
 	// llm.messages = append(llm.messages, ModelMessage{
 	// 	Role:    "user",
 	// 	Content: llm.env.Set(key, value),
@@ -755,17 +751,24 @@ func (llm *LLM) Get(ctx context.Context, dag *dagql.Server, key string) (dagql.T
 }
 
 func (llm *LLM) With(ctx context.Context, dag *dagql.Server, value dagql.Typed) (*LLM, error) {
-	if id, ok := value.(dagql.IDType); ok {
-		obj, err := dag.Load(ctx, id.ID())
-		if err != nil {
-			return nil, err
-		}
-		value = obj
+	obj, err := llm.loadObject(ctx, dag, value)
+	if err != nil {
+		return nil, err
 	}
 	llm = llm.Clone()
-	llm.env.With(value)
+	llm.env.With(obj)
 	llm.dirty = true
 	return llm, nil
+}
+
+func (llm *LLM) loadObject(ctx context.Context, dag *dagql.Server, value dagql.Typed) (dagql.Object, error) {
+	if id, ok := value.(dagql.IDType); ok {
+		return dag.Load(ctx, id.ID())
+	} else if o, ok := dagql.UnwrapAs[dagql.Object](value); !ok {
+		return o, nil
+	} else {
+		return nil, fmt.Errorf("LLM.Set: expected object, got %T", value)
+	}
 }
 
 // A variable in the LLM environment
@@ -792,8 +795,8 @@ func (llm *LLM) Variables(ctx context.Context, dag *dagql.Server) ([]*LLMVariabl
 	if err != nil {
 		return nil, err
 	}
-	vars := make([]*LLMVariable, 0, len(llm.env.vars))
-	for k, v := range llm.env.vars {
+	vars := make([]*LLMVariable, 0, len(llm.env.bindings))
+	for k, v := range llm.env.bindings {
 		var hash string
 		if obj, ok := dagql.UnwrapAs[dagql.Object](v); ok {
 			hash = obj.ID().Digest().String()
@@ -806,7 +809,7 @@ func (llm *LLM) Variables(ctx context.Context, dag *dagql.Server) ([]*LLMVariabl
 		}
 		vars = append(vars, &LLMVariable{
 			Name:     k,
-			TypeName: v.Type().Name(),
+			TypeName: v.Value.Type().Name(),
 			Hash:     hash,
 		})
 	}

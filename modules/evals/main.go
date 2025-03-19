@@ -8,16 +8,28 @@ type Evals struct {
 	Model string
 }
 
-func (m *Evals) UndoSingle() *dagger.Container {
+// func (m *Evals) UndoSingle() *dagger.Container {
+// 	return dag.Llm(dagger.LlmOpts{Model: m.Model}).
+// 		WithQuery().
+// 		WithPrompt("give me a container for PHP 7 development").
+// 		Loop().
+// 		WithPrompt("now install nano").
+// 		Loop().
+// 		WithPrompt("undo that and install vim instead").
+// 		Loop().
+// 		Container()
+// }
+
+func (m *Evals) UndoMulti() *dagger.Container {
 	return dag.Llm(dagger.LlmOpts{Model: m.Model}).
-		WithQuery().
-		WithPrompt("give me a container for PHP 7 development").
+		SetContainer("ctr", dag.Container()).
+		WithPrompt("set up $ctr for PHP 7 development").
 		Loop().
 		WithPrompt("now install nano").
 		Loop().
 		WithPrompt("undo that and install vim instead").
 		Loop().
-		Container()
+		GetContainer("ctr")
 }
 
 func (m *Evals) BuildMulti() *dagger.File {
