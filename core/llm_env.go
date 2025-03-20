@@ -98,6 +98,7 @@ func (env *LLMEnv) Set(key string, value dagql.Object) string {
 
 // Get a value saved at the given key
 func (env *LLMEnv) Get(key string) (dagql.Object, error) {
+	key = strings.TrimPrefix(key, "$")
 	if val, exists := env.bindings[key]; exists {
 		return val.Value, nil
 	}
@@ -137,6 +138,9 @@ func (env *LLMEnv) tools(srv *dagql.Server, obj dagql.Typed) []LLMTool {
 			continue
 		}
 		if strings.HasPrefix(field.Name, "load") && strings.HasSuffix(field.Name, "FromID") {
+			continue
+		}
+		if field.Name == "id" || field.Name == "sync" {
 			continue
 		}
 		tools = append(tools, LLMTool{
@@ -369,13 +373,13 @@ func (env *LLMEnv) Builtins(srv *dagql.Server) []LLMTool {
 		// },
 		{
 			Name:        "_save",
-			Description: "Save the current object as a named variable",
+			Description: "Bind the current value to a name in the environment. Bindings are referred to as $foo, and each get a tool named _select_foo to switch to its tools.",
 			Schema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"name": map[string]any{
 						"type":        "string",
-						"description": "Variable name to save the object as",
+						"description": "Binding name to save the object as",
 					},
 				},
 				"required":             []string{"name"},
@@ -386,7 +390,7 @@ func (env *LLMEnv) Builtins(srv *dagql.Server) []LLMTool {
 		},
 		{
 			Name:        "_undo",
-			Description: "Roll back the last action",
+			Description: "Roll back the current binding to its previous value",
 			Schema: map[string]any{
 				"type":                 "object",
 				"properties":           map[string]any{},
@@ -422,7 +426,7 @@ func (env *LLMEnv) Builtins(srv *dagql.Server) []LLMTool {
 		// },
 		{
 			Name:        "_scratch",
-			Description: "Clear the current environment",
+			Description: "Reset the environment to its initial empty state",
 			Schema: map[string]any{
 				"type":                 "object",
 				"properties":           map[string]any{},
@@ -442,7 +446,7 @@ func (env *LLMEnv) Builtins(srv *dagql.Server) []LLMTool {
 		},
 	}
 	for name, bnd := range env.bindings {
-		desc := fmt.Sprintf("Bind the environment to %s (%s):\n", name, env.describe(bnd.Value))
+		desc := fmt.Sprintf("Switch the environment to $%s (%s), providing the following tools:\n", name, env.describe(bnd.Value))
 		tools := env.tools(srv, bnd.Value)
 		for _, tool := range tools {
 			desc += fmt.Sprintf("\n- %s", tool.Name)
@@ -545,7 +549,9 @@ func fieldArgsToJSONSchema(field *ast.FieldDefinition) map[string]any {
 		argSchema := typeToJSONSchema(arg.Type)
 
 		// Add description if present
-		if arg.Description != "" {
+		if strings.HasSuffix(arg.Type.Name(), "ID") {
+			argSchema["description"] = "Binding name, e.g. $foo. " + arg.Description
+		} else if arg.Description != "" {
 			argSchema["description"] = arg.Description
 		}
 
@@ -587,13 +593,14 @@ func typeToJSONSchema(t *ast.Type) map[string]any {
 		schema["type"] = "string"
 	case "Boolean":
 		schema["type"] = "boolean"
-	case "ID":
-		schema["type"] = "string"
-		schema["format"] = "id"
 	default:
 		// For custom types, use string format with the type name
 		schema["type"] = "string"
-		schema["format"] = t.NamedType
+		if strings.HasSuffix(t.NamedType, "ID") {
+			schema["format"] = "binding"
+		} else {
+			schema["format"] = t.NamedType
+		}
 	}
 
 	return schema

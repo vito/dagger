@@ -29,15 +29,24 @@ func init() {
 
 // TODO: is this the right place for this? is there an argument for or against
 // it being here, and/or for it being overrideable?
-const defaultSystemPrompt = `You are an AI assistant that interacts with an immutable GraphQL API using bindings.
-Bindings automatically update when a tool returns a value of the same type.
-If a tool returns a different type, the binding remains unchanged, and the new value is available but not stored unless explicitly saved.
+// const defaultSystemPrompt = `You are an AI assistant. Use your available tools to complete tasks.`
 
-Errors do not modify bindings.
-Use ` + "`" + `_save` + "`" + ` only when switching to a different type or when no existing binding matches the result.
-Use ` + "`" + `_undo` + "`" + ` to revert a binding to its previous state.
+// const defaultSystemPrompt = `You are an AI assistant that interacts with an immutable GraphQL API using bindings.
+// Bindings automatically update when a tool returns a value of the same type.
+// If a tool returns a different type, the binding remains unchanged, and the new value is available but not stored unless explicitly saved.
 
-Prioritize exploration over efficiency.`
+// Errors do not modify bindings.
+// Use ` + "`" + `_save` + "`" + ` only when switching to a different type or when no existing binding matches the result.
+// Use ` + "`" + `_undo` + "`" + ` to revert a binding to its previous state.`
+const defaultSystemPrompt = `You are an AI assistant that interacts with named objects bound to your environment, known as bindings.
+Bindings are referred to with a $ prefix like $binding_name.
+Each binding is exposed as tool like _select_binding_name.
+Selecting a binding makes its tools available.
+
+Bindings automatically update their value when a tool returns a value of the same type.
+If a tool returns a different type, the binding remains unchanged, and the new value is available but not stored unless explicitly _saved.
+
+Don't ask me to do things - just do it.`
 
 // An instance of a LLM (large language model), with its state and tool calling environment
 type LLM struct {
@@ -866,17 +875,17 @@ func (s LLMHook) ExtendLLMType(targetType dagql.ObjectType) error {
 	llmType.Extend(
 		dagql.FieldSpec{
 			Name:        "set" + typename,
-			Description: fmt.Sprintf("Set a variable of type %s in the llm environment", typename),
+			Description: fmt.Sprintf("Bind a %s object to a name in the LLM environment", typename),
 			Type:        llmType.Typed(),
 			Args: dagql.InputSpecs{
 				{
 					Name:        "name",
-					Description: "The name of the variable",
+					Description: "The name of the binding",
 					Type:        dagql.NewString(""),
 				},
 				{
 					Name:        "value",
-					Description: fmt.Sprintf("The %s value to assign to the variable", typename),
+					Description: fmt.Sprintf("The %s value to assign to the binding", typename),
 					Type:        idType,
 				},
 			},
