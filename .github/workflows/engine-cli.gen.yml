@@ -627,6 +627,7 @@ jobs:
               shell: bash
         timeout-minutes: 20
     run-evals:
+        if: ${{ github.repository == "dagger/dagger" }}
         runs-on:
             - ${{ github.repository == 'dagger/dagger' && 'dagger-g3-v0-18-2-4c' || 'ubuntu-24.04' }}
         name: run-evals
