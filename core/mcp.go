@@ -944,7 +944,7 @@ func (m *MCP) Builtins(srv *dagql.Server, typeTools []LLMTool) ([]LLMTool, error
 					if foundTool.Name == "" {
 						unknownTools = append(unknownTools, tool)
 					} else {
-						m.selectedTools[tool] = true
+						// m.selectedTools[tool] = true
 						selectedTools = append(selectedTools, foundTool)
 					}
 				}
