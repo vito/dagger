@@ -141,7 +141,7 @@ func (d *Dump) DumpID(out *termenv.Output, id *call.ID) error {
 	if d.Newline != "" {
 		r.newline = d.Newline
 	}
-	err = r.renderCall(out, nil, id.Call(), d.Prefix, true, 0, false, false, false)
+	err = r.renderCall(out, nil, id.Call(), d.Prefix, true, 0, false, false)
 	fmt.Fprint(out, r.newline)
 	return err
 }
@@ -198,7 +198,6 @@ func (r *renderer) renderCall(
 	prefix string,
 	chained bool,
 	depth int,
-	inline bool,
 	internal bool,
 	focused bool,
 ) error {
@@ -208,15 +207,6 @@ func (r *renderer) renderCall(
 	}
 	r.rendering[call.Digest] = true
 	defer func() { delete(r.rendering, call.Digest) }()
-
-	if !inline {
-		fmt.Fprint(out, prefix)
-		r.indent(out, depth)
-	}
-
-	if span != nil {
-		r.renderStatus(out, span, focused, chained)
-	}
 
 	if call.ReceiverDigest != "" {
 		if !chained {
@@ -258,7 +248,7 @@ func (r *renderer) renderCall(
 						}
 					}
 					argCall := r.db.Simplify(r.db.MustCall(argDig), forceSimplify)
-					if err := r.renderCall(out, argSpan, argCall, prefix, false, depth-1, true, internal, false); err != nil {
+					if err := r.renderCall(out, argSpan, argCall, prefix, false, depth-1, internal, false); err != nil {
 						return err
 					}
 				} else {
@@ -291,12 +281,6 @@ func (r *renderer) renderCall(
 		fmt.Fprint(out, out.String(fmt.Sprintf(" = %s", call.Digest)).Foreground(faintColor))
 	}
 
-	if span != nil {
-		r.renderDuration(out, span)
-		r.renderMetrics(out, span)
-		r.renderCached(out, span)
-	}
-
 	return nil
 }
 
@@ -308,12 +292,8 @@ func (r *renderer) renderSpan(
 	depth int,
 	focused, chained bool,
 ) error {
-	fmt.Fprint(out, prefix)
-	r.indent(out, depth)
-
 	var contentType string
 	if span != nil {
-		r.renderStatus(out, span, focused, chained)
 		contentType = span.ContentType
 	}
 
@@ -328,14 +308,6 @@ func (r *renderer) renderSpan(
 			label = label.Italic()
 		}
 		fmt.Fprint(out, label)
-	}
-
-	if span != nil {
-		// TODO: when a span has child spans that have progress, do 2-d progress
-		// fe.renderVertexTasks(out, span, depth)
-		r.renderDuration(out, span)
-		r.renderMetrics(out, span)
-		r.renderCached(out, span)
 	}
 
 	return nil
@@ -386,55 +358,51 @@ func (r *renderer) renderLiteral(out TermOutput, lit *callpbv1.Literal) {
 	}
 }
 
-func (r *renderer) renderStatus(out TermOutput, span *dagui.Span, focused, chained bool) {
-	var symbol string
-	var color termenv.Color
+func statusColor(span *dagui.Span) termenv.Color {
 	switch {
 	case span.IsRunningOrEffectsRunning():
-		symbol = DotFilled
-		color = termenv.ANSIYellow
+		return termenv.ANSIYellow
+	case span.IsCached():
+		return termenv.ANSIBlue
+	case span.IsCanceled():
+		return termenv.ANSIBrightBlack
+	case span.IsFailedOrCausedFailure():
+		return termenv.ANSIRed
+	case span.IsPending():
+		return termenv.ANSIBrightBlack
+	default:
+		return termenv.ANSIGreen
+	}
+}
+
+func (r *renderer) renderStatus(out TermOutput, span *dagui.Span, chained bool) {
+	var symbol string
+	switch {
+	case span.IsRunningOrEffectsRunning():
+		// don't show status for running; duration is enough
+		return
 	case span.IsCached():
 		symbol = IconCached
-		color = termenv.ANSIBlue
 	case span.IsCanceled():
 		symbol = IconSkipped
-		color = termenv.ANSIBrightBlack
 	case span.IsFailedOrCausedFailure():
 		symbol = IconFailure
-		color = termenv.ANSIRed
 	case span.IsPending():
-		symbol = DotEmpty
-		color = termenv.ANSIBrightBlack
+		// don't show pending state
+		return
 	default:
 		symbol = IconSuccess
-		color = termenv.ANSIGreen
 	}
 
-	emoji := span.ActorEmoji
-	if chained && span.Message == "" {
-		// don't show an emoji for chained tool calls, too redundant
-		emoji = ""
-	}
-
-	if emoji != "" {
-		symbol = emoji
-	}
-
-	style := out.String(symbol).Foreground(color)
-	if focused {
-		style = style.Reverse()
-	}
+	style := out.String(symbol)
+	style = style.Foreground(statusColor(span))
 	symbol = style.String()
 
-	if emoji != "" {
-		fmt.Fprint(out, "\b") // emojis take up two columns, so make room
-	}
-
+	fmt.Fprint(out, " ")
 	fmt.Fprint(out, symbol)
-	fmt.Fprint(out, out.String(" "))
 
 	if r.Debug {
-		fmt.Fprintf(out, out.String("%s ").Foreground(termenv.ANSIBrightBlack).String(), span.ID)
+		fmt.Fprintf(out, out.String(" %s").Foreground(termenv.ANSIBrightBlack).String(), span.ID)
 	}
 }
 
