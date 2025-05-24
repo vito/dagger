@@ -1272,10 +1272,10 @@ func (fe *frontendPretty) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 		fe.goUp()
 		return nil
 	case "left", "h":
-		fe.goOut()
+		fe.closeOrGoOut()
 		return nil
 	case "right", "l":
-		fe.goIn()
+		fe.openOrGoIn()
 		return nil
 	case "home":
 		fe.goStart()
@@ -1581,6 +1581,56 @@ func (fe *frontendPretty) goIn() {
 	fe.focus(next)
 }
 
+func (fe *frontendPretty) closeOrGoOut() {
+	// Initialize SpanExpanded map if it doesn't exist
+	if fe.SpanExpanded == nil {
+		fe.SpanExpanded = make(map[dagui.SpanID]bool)
+	}
+
+	// Only toggle if we have a valid focused span
+	if fe.FocusedSpan.IsValid() {
+		// Get the either explicitly set or defaulted value
+		var isExpanded bool
+		if tree, ok := fe.rowsView.BySpan[fe.FocusedSpan]; ok {
+			isExpanded = tree.IsExpanded(fe.FrontendOpts)
+		}
+		if !isExpanded {
+			// already closed; move up
+			fe.goOut()
+			return
+		}
+		// Toggle the expanded state for the focused span
+		fe.SpanExpanded[fe.FocusedSpan] = !isExpanded
+		// Recalculate view to reflect changes
+		fe.recalculateViewLocked()
+	}
+}
+
+func (fe *frontendPretty) openOrGoIn() {
+	// Initialize SpanExpanded map if it doesn't exist
+	if fe.SpanExpanded == nil {
+		fe.SpanExpanded = make(map[dagui.SpanID]bool)
+	}
+
+	// Only toggle if we have a valid focused span
+	if fe.FocusedSpan.IsValid() {
+		// Get the either explicitly set or defaulted value
+		var isExpanded bool
+		if tree, ok := fe.rowsView.BySpan[fe.FocusedSpan]; ok {
+			isExpanded = tree.IsExpanded(fe.FrontendOpts)
+		}
+		if isExpanded {
+			// already expanded; go in
+			fe.goIn()
+			return
+		}
+		// Toggle the expanded state for the focused span
+		fe.SpanExpanded[fe.FocusedSpan] = true
+		// Recalculate view to reflect changes
+		fe.recalculateViewLocked()
+	}
+}
+
 func (fe *frontendPretty) setWindowSizeLocked(msg tea.WindowSizeMsg) {
 	fe.window = msg
 	fe.logs.SetWidth(msg.Width)
@@ -1605,7 +1655,6 @@ func (fe *frontendPretty) renderRow(out TermOutput, r *renderer, row *dagui.Trac
 	if fe.flushed[row.Span.ID] && fe.editlineFocused {
 		return false
 	}
-	focused := row.Span.ID == fe.FocusedSpan && !fe.editlineFocused
 	if fe.shell != nil {
 		if row.IsLastChild() {
 			defer func() {
@@ -1649,32 +1698,13 @@ func (fe *frontendPretty) renderRow(out TermOutput, r *renderer, row *dagui.Trac
 		fmt.Fprintln(out)
 	}
 	span := row.Span
-	if span.Message != "" {
-		// when a span represents a message, we don't need to print its name
-		//
-		// NOTE: arguably this should be opt-in, but it's not clear how the
-		// span name relates to the message in all cases; is it the
-		// subject? or author? better to be explicit with attributes.
-		r.indent(out, row.Depth)
-		r.renderStatus(out, span, focused, row.Chained)
-		if fe.renderStepLogs(out, r, row, prefix) {
-			r.indent(out, row.Depth)
-			fmt.Fprint(out, out.String(VertBoldBar).Foreground(termenv.ANSIBrightBlack))
-		} else {
-			// no logs were printed, so snug the duration up against the emoji
-			fmt.Fprint(out, "\b")
-		}
-		r.renderDuration(out, span)
-		r.renderMetrics(out, span)
-		fmt.Fprintln(out)
-	} else {
-		fe.renderStep(out, r, row.Span, row.Chained, row.Depth, prefix)
-		if row.IsRunningOrChildRunning ||
+	fe.renderStep(out, r, row.Span, row.Chained, row.Depth, prefix)
+	if span.Message == "" && // messages are displayed in renderStep
+		(row.IsRunningOrChildRunning ||
 			row.Span.IsFailedOrCausedFailure() ||
 			row.Span.IsCanceled() ||
-			fe.Verbosity >= dagui.ExpandCompletedVerbosity {
-			fe.renderStepLogs(out, r, row, prefix)
-		}
+			fe.Verbosity >= dagui.ExpandCompletedVerbosity) {
+		fe.renderStepLogs(out, r, row.Span, row.Depth, prefix)
 	}
 	fe.renderStepError(out, r, row.Span, row.Depth, prefix)
 	fe.renderDebug(out, row.Span, prefix+Block25+" ", false)
@@ -1713,11 +1743,11 @@ func (fe *frontendPretty) renderDebug(out TermOutput, span *dagui.Span, prefix s
 	fmt.Fprint(out, prefix+vt.View())
 }
 
-func (fe *frontendPretty) renderStepLogs(out TermOutput, r *renderer, row *dagui.TraceRow, prefix string) bool {
-	if logs := fe.logs.Logs[row.Span.ID]; logs != nil {
+func (fe *frontendPretty) renderStepLogs(out TermOutput, r *renderer, span *dagui.Span, depth int, prefix string) bool {
+	if logs := fe.logs.Logs[span.ID]; logs != nil {
 		return fe.renderLogs(out, r,
 			logs,
-			row.Depth,
+			depth,
 			fe.window.Height/3,
 			prefix,
 		)
@@ -1761,8 +1791,53 @@ func (fe *frontendPretty) renderStepError(out TermOutput, r *renderer, span *dag
 func (fe *frontendPretty) renderStep(out TermOutput, r *renderer, span *dagui.Span, chained bool, depth int, prefix string) error {
 	isFocused := span.ID == fe.FocusedSpan && !fe.editlineFocused
 
-	if call := span.Call(); call != nil {
-		if err := r.renderCall(out, span, call, prefix, chained, depth, false, span.Internal, isFocused); err != nil {
+	fmt.Fprint(out, prefix)
+	r.indent(out, depth)
+
+	var toggler termenv.Style
+	if tree, ok := fe.rowsView.BySpan[span.ID]; ok {
+		if len(tree.Children) > 0 {
+			if tree.IsExpanded(fe.FrontendOpts) {
+				toggler = out.String(CaretDownFilled).Foreground(termenv.ANSIWhite)
+			} else {
+				toggler = out.String(CaretRightFilled).Foreground(termenv.ANSIBrightBlack)
+			}
+		} else if span.IsPending() {
+			toggler = out.String(DotEmpty).Foreground(termenv.ANSIBrightBlack)
+		} else {
+			toggler = out.String(DotFilled).Foreground(termenv.ANSIBrightBlack)
+		}
+	}
+	if span.ActorEmoji != "" && span.Message != "" {
+		toggler = out.String(span.ActorEmoji)
+	}
+	if isFocused {
+		// TODO: light/dark
+		toggler = toggler.Foreground(termenv.ANSIWhite).Reverse()
+	}
+
+	if span.ActorEmoji != "" && span.Message != "" {
+		// make room for the emoji, since they're 2 cells wide
+		fmt.Fprint(out, "\b")
+	}
+
+	fmt.Fprint(out, toggler.String()+" ")
+
+	if span.Message != "" {
+		// when a span represents a message, we don't need to print its name
+		//
+		// NOTE: arguably this should be opt-in, but it's not clear how the
+		// span name relates to the message in all cases; is it the
+		// subject? or author? better to be explicit with attributes.
+		if fe.renderStepLogs(out, r, span, depth, prefix) {
+			r.indent(out, depth)
+			fmt.Fprint(out, out.String(VertBoldBar).Foreground(termenv.ANSIBrightBlack))
+		} else {
+			// no logs were printed, so snug the duration up against the emoji
+			fmt.Fprint(out, "\b")
+		}
+	} else if call := span.Call(); call != nil {
+		if err := r.renderCall(out, span, call, prefix, chained, depth, span.Internal, isFocused); err != nil {
 			return err
 		}
 	} else if span != nil {
@@ -1770,6 +1845,16 @@ func (fe *frontendPretty) renderStep(out TermOutput, r *renderer, span *dagui.Sp
 			return err
 		}
 	}
+
+	if span != nil {
+		// TODO: when a span has child spans that have progress, do 2-d progress
+		// fe.renderVertexTasks(out, span, depth)
+		r.renderDuration(out, span)
+		r.renderStatus(out, span, chained)
+		r.renderMetrics(out, span)
+		r.renderCached(out, span)
+	}
+
 	fmt.Fprintln(out)
 
 	return nil
