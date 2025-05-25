@@ -271,6 +271,7 @@ func (row *TraceTree) IsExpanded(opts FrontendOpts) bool {
 	return row.Depth() < 2 && (row.RevealedChildren ||
 		row.IsRunningOrChildRunning ||
 		row.Span.IsFailedOrCausedFailure() ||
+		row.Span.IsCanceled() ||
 		opts.Verbosity >= ExpandCompletedVerbosity)
 }
 
