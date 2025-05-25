@@ -1697,13 +1697,14 @@ func (fe *frontendPretty) renderRow(out TermOutput, r *renderer, row *dagui.Trac
 		r.indent(out, row.Depth)
 		fmt.Fprintln(out)
 	}
+	var expanded bool
+	if tree, ok := fe.rowsView.BySpan[row.Span.ID]; ok {
+		expanded = tree.IsExpanded(fe.FrontendOpts)
+	}
 	span := row.Span
 	fe.renderStep(out, r, row.Span, row.Chained, row.Depth, prefix)
 	if span.Message == "" && // messages are displayed in renderStep
-		(row.IsRunningOrChildRunning ||
-			row.Span.IsFailedOrCausedFailure() ||
-			row.Span.IsCanceled() ||
-			fe.Verbosity >= dagui.ExpandCompletedVerbosity) {
+		expanded {
 		fe.renderStepLogs(out, r, row.Span, row.Depth, prefix)
 	}
 	fe.renderStepError(out, r, row.Span, row.Depth, prefix)
