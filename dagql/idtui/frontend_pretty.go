@@ -356,9 +356,9 @@ func (fe *frontendPretty) renderErrorLogs(out TermOutput, r *renderer) bool {
 		logs := fe.logs.Logs[tree.Span.ID]
 		if logs != nil && logs.UsedHeight() > 0 {
 			row := &dagui.TraceRow{
-				Span:    tree.Span,
-				Chained: tree.Chained,
-				Tree:    tree,
+				Span:     tree.Span,
+				Chained:  tree.Chained,
+				Expanded: true,
 			}
 			fmt.Fprintln(out)
 			fe.renderStep(out, r, row, "")
@@ -624,8 +624,8 @@ func (fe *frontendPretty) Render(out TermOutput) error {
 	var progPrefix string
 	if fe.rowsView != nil && fe.rowsView.Zoomed != nil && fe.rowsView.Zoomed.ID != fe.db.PrimarySpan {
 		fe.renderStep(out, r, &dagui.TraceRow{
-			Span: fe.rowsView.Zoomed,
-			Tree: nil,
+			Span:     fe.rowsView.Zoomed,
+			Expanded: true,
 		}, "")
 		progHeight -= 1
 		progPrefix = "  "
@@ -1808,7 +1808,7 @@ func (fe *frontendPretty) renderStep(out TermOutput, r *renderer, row *dagui.Tra
 
 	var toggler termenv.Style
 	if row.HasChildren {
-		if row.Tree.IsExpanded(fe.FrontendOpts) {
+		if row.Expanded {
 			toggler = out.String(CaretDownFilled)
 		} else {
 			toggler = out.String(CaretRightFilled)
