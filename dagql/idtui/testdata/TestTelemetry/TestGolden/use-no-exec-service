@@ -34,8 +34,8 @@ Expected stderr:
 │ ┃ X:M XX XXX 20XX XX:XX:XX.XXX * Ready to accept connections tcp
 │
 ├─● Container.withServiceBinding(
-│     alias: "redis"
-│     service: Container.asService: Service!
+│   ┆ alias: "redis"
+│   ┆ service: Container.asService: Service!
 │   ): Container! X.Xs
 ├─● .withEnvVariable(name: "NOW", value: "20XX-XX-XX XX:XX:XX.XXXX +XXXX UTC m=+X.X"): Container! X.Xs
 ├─● .withExec(args: ["redis-cli", "-h", "redis", "ping"]): Container! X.Xs

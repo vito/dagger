@@ -22,11 +22,11 @@ Expected stderr:
 ┃ AAABBBCCC
 ├─● dep: Dep! X.Xs
 ├─▼ .getFiles: [File!]! X.Xs
-│ ├─$ file(contents: "AAA", name: "a"): File! X.Xs CACHED
+│ ├─$ file(name: "a", contents: "AAA"): File! X.Xs CACHED
 │ │
-│ ├─$ file(contents: "BBB", name: "b"): File! X.Xs CACHED
+│ ├─$ file(name: "b", contents: "BBB"): File! X.Xs CACHED
 │ │
-│ ╰─$ file(contents: "CCC", name: "c"): File! X.Xs CACHED
+│ ╰─$ file(name: "c", contents: "CCC"): File! X.Xs CACHED
 │  
 ╰─▼ Dep.fileContents(files: [xxh3:XXXXXXXXXXXXXXXX, xxh3:XXXXXXXXXXXXXXXX, xxh3:XXXXXXXXXXXXXXXX]): String! X.Xs
   ┃ AAABBBCCC

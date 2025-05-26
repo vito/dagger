@@ -24,15 +24,15 @@ Expected stderr:
 ├─● .withExec(args: ["sleep", "1"]): Container! X.Xs
 ├─● .withExec(args: ["echo", "im busted by that buster"]): Container! X.Xs
 │ ┃ im busted by that buster
-├─● .withNewFile(contents: "<h1>hello, world!</h1>", path: "/srv/index.html"): Container! X.Xs
+├─● .withNewFile(path: "/srv/index.html", contents: "<h1>hello, world!</h1>"): Container! X.Xs
 ├─● .withExposedPort(port: 80): Container! X.Xs
 ├─● .asService(args: ["httpd", "-v", "-h", "/srv", "-f"]): Service! X.Xs
 │ ┃ [::ffff:10.XX.XX.XX]:XXXXX: response:200
 │
 ├─$ Container.from(address: "alpine"): Container! X.Xs CACHED
 ├─● .withServiceBinding(
-│     alias: "exec-service"
-│     service: Container.asService(args: ["httpd", "-v", "-h", "/srv", "-f"]): Service!
+│   ┆ alias: "exec-service"
+│   ┆ service: Container.asService(args: ["httpd", "-v", "-h", "/srv", "-f"]): Service!
 │   ): Container! X.Xs
 ├─● .withEnvVariable(name: "NOW", value: "20XX-XX-XX XX:XX:XX.XXXX +XXXX UTC m=+X.X"): Container! X.Xs
 ╰─● .withExec(args: ["wget", "-q", "-O-", "http://exec-service"]): Container! X.Xs
