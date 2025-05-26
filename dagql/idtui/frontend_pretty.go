@@ -1662,7 +1662,6 @@ func (fe *frontendPretty) renderLocked() {
 	fe.Render(fe.viewOut)
 }
 
-//nolint:gocyclo
 func (fe *frontendPretty) renderRow(out TermOutput, r *renderer, row *dagui.TraceRow, prefix string) bool {
 	if fe.flushed[row.Span.ID] && fe.editlineFocused {
 		return false
@@ -1842,6 +1841,10 @@ func (fe *frontendPretty) renderStep(out TermOutput, r *renderer, row *dagui.Tra
 
 	fmt.Fprint(out, toggler.String()+" ")
 
+	if r.Debug {
+		fmt.Fprintf(out, out.String(" %s").Foreground(termenv.ANSIBrightBlack).String(), span.ID)
+	}
+
 	if span.Message != "" {
 		// when a span represents a message, we don't need to print its name
 		//
@@ -1856,11 +1859,11 @@ func (fe *frontendPretty) renderStep(out TermOutput, r *renderer, row *dagui.Tra
 			fmt.Fprint(out, "\b")
 		}
 	} else if call := span.Call(); call != nil {
-		if err := r.renderCall(out, span, call, prefix, chained, depth, span.Internal, isFocused, row); err != nil {
+		if err := r.renderCall(out, span, call, prefix, chained, depth, span.Internal, row); err != nil {
 			return err
 		}
 	} else if span != nil {
-		if err := r.renderSpan(out, span, span.Name, prefix, depth, isFocused, chained); err != nil {
+		if err := r.renderSpan(out, span, span.Name); err != nil {
 			return err
 		}
 	}

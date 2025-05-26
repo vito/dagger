@@ -141,7 +141,7 @@ func (d *Dump) DumpID(out *termenv.Output, id *call.ID) error {
 	if d.Newline != "" {
 		r.newline = d.Newline
 	}
-	err = r.renderCall(out, nil, id.Call(), d.Prefix, true, 0, false, false, nil)
+	err = r.renderCall(out, nil, id.Call(), d.Prefix, true, 0, false, nil)
 	fmt.Fprint(out, r.newline)
 	return err
 }
@@ -177,23 +177,6 @@ func (r *renderer) indent(out TermOutput, depth int) {
 	fmt.Fprint(out, out.String(strings.Repeat(VertBar+" ", depth)).
 		Foreground(termenv.ANSIBrightBlack).
 		Faint())
-}
-
-// Helper methods for tree navigation
-func (r *renderer) hasMoreSiblings(row *dagui.TraceRow) bool {
-	return row.Next != nil
-}
-
-func (r *renderer) isLastInGroup(row *dagui.TraceRow) bool {
-	return row.IsLastChild()
-}
-
-func (r *renderer) shouldShowVerticalBar(parent *dagui.TraceRow) bool {
-	if parent == nil {
-		return false
-	}
-	// Show vertical bar if the parent has more siblings coming after it
-	return r.hasMoreSiblings(parent)
 }
 
 func (r *renderer) fancyIndent(out TermOutput, row *dagui.TraceRow, selfBar, selfHoriz bool) {
@@ -277,7 +260,6 @@ func (r *renderer) renderCall(
 	chained bool,
 	depth int,
 	internal bool,
-	focused bool,
 	row *dagui.TraceRow,
 ) error {
 	if r.rendering[call.Digest] {
@@ -333,7 +315,7 @@ func (r *renderer) renderCall(
 						}
 					}
 					argCall := r.db.Simplify(r.db.MustCall(argDig), forceSimplify)
-					if err := r.renderCall(out, argSpan, argCall, prefix, false, depth-1, internal, false, row); err != nil {
+					if err := r.renderCall(out, argSpan, argCall, prefix, false, depth-1, internal, row); err != nil {
 						return err
 					}
 				} else {
@@ -377,9 +359,6 @@ func (r *renderer) renderSpan(
 	out TermOutput,
 	span *dagui.Span,
 	name string,
-	prefix string,
-	depth int,
-	focused, chained bool,
 ) error {
 	var contentType string
 	if span != nil {
@@ -472,37 +451,6 @@ func restrainedStatusColor(span *dagui.Span) termenv.Color {
 		return termenv.ANSIRed
 	default:
 		return termenv.ANSIBrightBlack
-	}
-}
-
-func (r *renderer) renderStatus(out TermOutput, span *dagui.Span, chained bool) {
-	var symbol string
-	switch {
-	case span.IsRunningOrEffectsRunning():
-		// don't show status for running; duration is enough
-		return
-	case span.IsCached():
-		symbol = IconCached
-	case span.IsCanceled():
-		symbol = IconSkipped
-	case span.IsFailedOrCausedFailure():
-		symbol = IconFailure
-	case span.IsPending():
-		// don't show pending state
-		return
-	default:
-		symbol = IconSuccess
-	}
-
-	style := out.String(symbol)
-	style = style.Foreground(statusColor(span))
-	symbol = style.String()
-
-	fmt.Fprint(out, " ")
-	fmt.Fprint(out, symbol)
-
-	if r.Debug {
-		fmt.Fprintf(out, out.String(" %s").Foreground(termenv.ANSIBrightBlack).String(), span.ID)
 	}
 }
 
