@@ -18,6 +18,7 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/cellbuf"
 	"github.com/muesli/termenv"
 	"github.com/pkg/browser"
 	"github.com/vito/bubbline/editline"
@@ -354,16 +355,17 @@ func (fe *frontendPretty) renderErrorLogs(out TermOutput, r *renderer) bool {
 	dagui.WalkTree(errTree, func(tree *dagui.TraceTree, _ int) dagui.WalkDecision {
 		logs := fe.logs.Logs[tree.Span.ID]
 		if logs != nil && logs.UsedHeight() > 0 {
-			fmt.Fprintln(out)
-			fe.renderStep(out, r, &dagui.TraceRow{
+			row := &dagui.TraceRow{
 				Span:    tree.Span,
 				Chained: tree.Chained,
 				Tree:    tree,
-			}, "")
+			}
+			fmt.Fprintln(out)
+			fe.renderStep(out, r, row, "")
 			logs.SetHeight(logs.UsedHeight())
 			logs.SetPrefix("")
 			fmt.Fprint(out, logs.View())
-			// fe.renderStepError(out, r, tree.Span, 0, "", tree)
+			fe.renderStepError(out, r, row, "")
 		}
 		return dagui.WalkContinue
 	})
@@ -1677,7 +1679,7 @@ func (fe *frontendPretty) renderRow(out TermOutput, r *renderer, row *dagui.Trac
 					}
 					fe.renderLogs(out, r, row, logs, logs.UsedHeight(), prefix)
 				}
-				// fe.renderStepError(out, r, root.Span, 0, prefix, root.Tree)
+				fe.renderStepError(out, r, root, prefix)
 			}()
 		}
 		if row.Depth == 0 {
@@ -1718,7 +1720,7 @@ func (fe *frontendPretty) renderRow(out TermOutput, r *renderer, row *dagui.Trac
 		expanded {
 		fe.renderStepLogs(out, r, row, prefix)
 	}
-	// fe.renderStepError(out, r, row.Span, row.Depth, prefix, row.Tree)
+	fe.renderStepError(out, r, row, prefix)
 	fe.renderDebug(out, row.Span, prefix+Block25+" ", false)
 	return true
 }
@@ -1762,42 +1764,38 @@ func (fe *frontendPretty) renderStepLogs(out TermOutput, r *renderer, row *dagui
 	return false
 }
 
-// func (fe *frontendPretty) renderStepError(out TermOutput, r *renderer, span *dagui.Span, depth int, prefix string, tree *dagui.TraceTree) {
-// 	for _, span := range span.Errors().Order {
-// 		errText := span.Status.Description
-// 		if errText == "" {
-// 			continue
-// 		}
+func (fe *frontendPretty) renderStepError(out TermOutput, r *renderer, row *dagui.TraceRow, prefix string) {
+	for _, span := range row.Span.Errors().Order {
+		errText := span.Status.Description
+		if errText == "" {
+			continue
+		}
 
-// 		// Calculate available width for text
-// 		prefixWidth := lipgloss.Width(prefix)
-// 		indentWidth := depth * 2 // Assuming indent is 2 spaces per depth level
-// 		markerWidth := 2         // "! " prefix
-// 		availableWidth := fe.window.Width - prefixWidth - indentWidth - markerWidth
-// 		if availableWidth > 0 {
-// 			errText = cellbuf.Wrap(errText, availableWidth, "")
-// 		}
+		// Calculate available width for text
+		prefixWidth := lipgloss.Width(prefix)
+		indentWidth := row.Depth * 2 // Assuming indent is 2 spaces per depth level
+		markerWidth := 2             // "! " prefix
+		availableWidth := fe.window.Width - prefixWidth - indentWidth - markerWidth
+		if availableWidth > 0 {
+			errText = cellbuf.Wrap(errText, availableWidth, "")
+		}
 
-// 		// Print each wrapped line with proper indentation
-// 		for line := range strings.SplitSeq(errText, "\n") {
-// 			if line == "" {
-// 				continue
-// 			}
+		// Print each wrapped line with proper indentation
+		for line := range strings.SplitSeq(errText, "\n") {
+			if line == "" {
+				continue
+			}
 
-// 			fmt.Fprint(out, prefix)
-// 			if tree != nil {
-// 				r.fancyIndent(out, tree, false)
-// 			} else {
-// 				r.indent(out, depth)
-// 			}
-// 			fmt.Fprintf(out,
-// 				out.String("! %s").Foreground(termenv.ANSIYellow).String(),
-// 				line,
-// 			)
-// 			fmt.Fprintln(out)
-// 		}
-// 	}
-// }
+			fmt.Fprint(out, prefix)
+			r.fancyIndent(out, row, false, false)
+			fmt.Fprintf(out,
+				out.String("! %s").Foreground(termenv.ANSIYellow).String(),
+				line,
+			)
+			fmt.Fprintln(out)
+		}
+	}
+}
 
 func (fe *frontendPretty) renderStep(out TermOutput, r *renderer, row *dagui.TraceRow, prefix string) error {
 	span := row.Span
