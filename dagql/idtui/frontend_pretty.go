@@ -1691,20 +1691,22 @@ func (fe *frontendPretty) renderRow(out TermOutput, r *renderer, row *dagui.Trac
 			return true
 		}
 	}
-	if row.Previous != nil &&
+	if row.PreviousVisual != nil &&
 		row.PreviousVisual.Depth >= row.Depth &&
 		!row.Chained &&
-		( // ensure gaps before unchained calls
-		row.Span.Call() != nil ||
+		( // ensure gaps after last nested child
+		row.PreviousVisual.Depth > row.Depth ||
+			// ensure gaps before unchained calls
+			row.Span.Call() != nil ||
 			// ensure gaps between calls and non-calls
-			(row.Previous.Span.Call() != nil && row.Span.Call() == nil) ||
+			(row.PreviousVisual.Span.Call() != nil && row.Span.Call() == nil) ||
 			// ensure gaps between messages
-			(row.Previous.Span.Message != "" && row.Span.Message != "") ||
+			(row.PreviousVisual.Span.Message != "" && row.Span.Message != "") ||
 			// ensure gaps going from tool calls to messages
-			(row.Previous.Span.Message == "" && row.Span.Message != "")) {
+			(row.PreviousVisual.Span.Message == "" && row.Span.Message != "")) {
 		fmt.Fprint(out, prefix)
-		r.fancyIndent(out, row, false, false)
-		fmt.Fprintln(out)
+		r.fancyIndent(out, row.PreviousVisual, false, false)
+		fmt.Fprintln(out, "")
 	}
 	var expanded bool
 	if tree, ok := fe.rowsView.BySpan[row.Span.ID]; ok {

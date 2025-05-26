@@ -265,8 +265,14 @@ func (lv *RowsView) Rows(opts FrontendOpts) *Rows {
 		}
 		return row
 	}
+	var lastChild *TraceRow
 	for _, tree := range lv.Body {
-		walk(tree, nil, 0)
+		childRow := walk(tree, nil, 0)
+		if lastChild != nil {
+			childRow.Previous = lastChild
+			lastChild.Next = childRow
+		}
+		lastChild = childRow
 	}
 	return rows
 }

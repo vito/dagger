@@ -212,24 +212,24 @@ func (r *renderer) fancyIndent(out TermOutput, row *dagui.TraceRow, selfBar, sel
 	// Print tree symbols from root to current (reverse order)
 	for i := len(parentRows) - 1; i >= 0; i-- {
 		parent := parentRows[i]
+		var nextChild *dagui.TraceRow
+		if i > 0 {
+			nextChild = parentRows[i-1]
+		} else {
+			nextChild = row
+		}
 		span := parent.Span
 		color := restrainedStatusColor(span)
 
-		// Determine if this parent has more siblings coming after it
-		parentHasMoreSiblings := parent.Next != nil
-
 		var prefix string
 		if i == 0 && selfHoriz {
-			if row.Next == nil && parent.Next == nil {
-				prefix = CornerBottomLeft + HorizBar
-			} else if parentHasMoreSiblings || row.Next != nil {
+			if row.Next != nil {
 				prefix = VertRightBar + HorizBar
 			} else {
 				prefix = CornerBottomLeft + HorizBar
 			}
 		} else {
-			// This is a vertical connector for a parent level
-			if parentHasMoreSiblings {
+			if nextChild.Next != nil {
 				prefix = VertBar + " "
 			} else {
 				prefix = "  "
@@ -245,7 +245,13 @@ func (r *renderer) fancyIndent(out TermOutput, row *dagui.TraceRow, selfBar, sel
 		span := row.Span
 		color := restrainedStatusColor(span)
 
-		fmt.Fprint(out, out.String(VertBar+" ").
+		var symbol string
+		if row.ShowingChildren {
+			symbol = VertBar
+		} else {
+			symbol = " "
+		}
+		fmt.Fprint(out, out.String(symbol+" ").
 			Foreground(color).
 			Faint())
 	}
