@@ -29,7 +29,11 @@ const (
 	TaskSymbol          = VertRightBoldBar
 	VertBar             = "│"
 	VertBoldBar         = "┃"
-	VertDottedBar       = "┊" // ┊┆┇┋╎
+	VertDash2           = "╎"
+	VertDash3           = "┆"
+	VertBoldDash3       = "┇"
+	VertDash4           = "┊"
+	VertBoldDash4       = "┋"
 	VertLeftBar         = "┤"
 	VertLeftBoldBar     = "┫"
 	VertRightBar        = "├"

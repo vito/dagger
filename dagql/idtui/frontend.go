@@ -174,7 +174,7 @@ const (
 )
 
 func (r *renderer) indent(out TermOutput, depth int) {
-	fmt.Fprint(out, out.String(strings.Repeat(VertBar+" ", depth)).
+	fmt.Fprint(out, out.String(strings.Repeat(VertDash3+" ", depth)).
 		Foreground(termenv.ANSIBrightBlack).
 		Faint())
 }
@@ -293,13 +293,14 @@ func (r *renderer) renderCall(
 			depth++
 			for _, arg := range call.Args {
 				fmt.Fprint(out, prefix)
+				indentLevel := depth
 				if row != nil {
 					r.fancyIndent(out, row, true, false)
-					fmt.Fprint(out, "  ")
+					indentLevel -= row.Depth
+					indentLevel -= 1
 					// r.indent(out, 1)
-				} else {
-					r.indent(out, depth)
 				}
+				r.indent(out, indentLevel)
 				fmt.Fprintf(out, out.String("%s:").Foreground(kwColor).String(), arg.GetName())
 				val := arg.GetValue()
 				fmt.Fprint(out, out.String(" "))
@@ -325,11 +326,13 @@ func (r *renderer) renderCall(
 			}
 			depth--
 			fmt.Fprint(out, prefix)
+			indentLevel := depth
 			if row != nil {
 				r.fancyIndent(out, row, true, false)
-			} else {
-				r.indent(out, depth)
+				indentLevel -= row.Depth
+				indentLevel -= 1
 			}
+			r.indent(out, indentLevel)
 			depth-- //nolint:ineffassign
 		} else {
 			for i, arg := range call.Args {
