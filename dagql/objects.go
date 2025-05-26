@@ -426,9 +426,17 @@ func (r Instance[T]) preselect(ctx context.Context, s *Server, sel Selector) (*p
 			return nil, fmt.Errorf("missing required argument: %q", argSpec.Name)
 		}
 	}
-	// TODO: it's better DX if it matches schema order
+
+	// sort args by schema definition order
+	inputs := field.Spec.Args.Inputs(view)
 	sort.Slice(idArgs, func(i, j int) bool {
-		return idArgs[i].Name() < idArgs[j].Name()
+		iIdx := slices.IndexFunc(inputs, func(input InputSpec) bool {
+			return input.Name == idArgs[i].Name()
+		})
+		jIdx := slices.IndexFunc(inputs, func(input InputSpec) bool {
+			return input.Name == idArgs[j].Name()
+		})
+		return iIdx < jIdx
 	})
 
 	astType := field.Spec.Type.Type()
