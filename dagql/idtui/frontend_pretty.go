@@ -1667,7 +1667,7 @@ func (fe *frontendPretty) renderRow(out TermOutput, r *renderer, row *dagui.Trac
 		return false
 	}
 	if fe.shell != nil {
-		if row.IsLastChild() {
+		if row.NextVisual == nil {
 			defer func() {
 				root := row.Root()
 				if logs := fe.logs.Logs[root.Span.ID]; logs != nil && logs.UsedHeight() > 0 {

@@ -311,10 +311,6 @@ func (row *TraceTree) setRunning() {
 	}
 }
 
-func (row *TraceRow) IsLastChild() bool {
-	return row.Next == nil || row.Next.Depth != row.Depth
-}
-
 func (row *TraceRow) Root() *TraceRow {
 	if row.Parent == nil {
 		return row
