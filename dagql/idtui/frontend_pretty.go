@@ -1811,9 +1811,9 @@ func (fe *frontendPretty) renderStep(out TermOutput, r *renderer, row *dagui.Tra
 	var toggler termenv.Style
 	if row.HasChildren {
 		if row.Tree.IsExpanded(fe.FrontendOpts) {
-			toggler = out.String(DotFilled)
+			toggler = out.String(CaretDownFilled)
 		} else {
-			toggler = out.String(DotCenter)
+			toggler = out.String(CaretRightFilled)
 		}
 	} else if span.IsPending() {
 		toggler = out.String(DotEmpty)
@@ -1821,12 +1821,10 @@ func (fe *frontendPretty) renderStep(out TermOutput, r *renderer, row *dagui.Tra
 		toggler = out.String(IconFailure)
 	} else if span.IsCached() {
 		toggler = out.String(IconCached)
-	} else if span.IsPending() {
-		toggler = out.String(DotEmpty)
 	} else if span.IsCanceled() {
 		toggler = out.String(IconSkipped)
 	} else if span.IsRunning() {
-		toggler = out.String(DotFilled)
+		toggler = out.String(DotHalf)
 	} else {
 		toggler = out.String(DotFilled)
 	}
