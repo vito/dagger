@@ -40,9 +40,11 @@ type TraceRow struct {
 	// A reference back to the original Tree form, for convenience.
 	Tree *TraceTree
 
-	Parent   *TraceRow `json:"-"`
-	Previous *TraceRow `json:"-"`
-	Next     *TraceRow `json:"-"`
+	Parent         *TraceRow `json:"-"`
+	Previous       *TraceRow `json:"-"`
+	PreviousVisual *TraceRow `json:"-"`
+	Next           *TraceRow `json:"-"`
+	NextVisual     *TraceRow `json:"-"`
 
 	Chained                 bool
 	Final                   bool
@@ -243,7 +245,9 @@ func (lv *RowsView) Rows(opts FrontendOpts) *Rows {
 			HasChildren:             len(tree.Children) > 0,
 		}
 		if len(rows.Order) > 0 {
-			row.Previous = rows.Order[len(rows.Order)-1]
+			prev := rows.Order[len(rows.Order)-1]
+			row.PreviousVisual = prev
+			prev.NextVisual = row
 		}
 		rows.Order = append(rows.Order, row)
 		rows.BySpan[tree.Span.ID] = row
@@ -280,6 +284,21 @@ func (row *TraceTree) IsExpanded(opts FrontendOpts) bool {
 		opts.Verbosity >= ExpandCompletedVerbosity
 }
 
+// TODO: pick one
+func (row *TraceRow) IsExpanded(opts FrontendOpts) bool {
+	expanded, toggled := opts.SpanExpanded[row.Span.ID]
+	if toggled {
+		return expanded
+	}
+	return (row.Depth < 2 &&
+		((row.ShowingChildren &&
+			len(row.Span.RevealedSpans.Order) > 0) ||
+			row.IsRunningOrChildRunning)) ||
+		row.Span.IsFailedOrCausedFailure() ||
+		row.Span.IsCanceled() ||
+		opts.Verbosity >= ExpandCompletedVerbosity
+}
+
 func (row *TraceTree) Depth() int {
 	if row.Parent == nil {
 		return 0
@@ -303,7 +322,7 @@ func (row *TraceTree) setRunning() {
 }
 
 func (row *TraceRow) IsLastChild() bool {
-	return row.Next == nil && !row.ShowingChildren
+	return row.Next == nil || row.Next.Depth != row.Depth
 }
 
 func (row *TraceRow) Root() *TraceRow {

@@ -18,7 +18,6 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/charmbracelet/x/cellbuf"
 	"github.com/muesli/termenv"
 	"github.com/pkg/browser"
 	"github.com/vito/bubbline/editline"
@@ -356,8 +355,14 @@ func (fe *frontendPretty) renderErrorLogs(out TermOutput, r *renderer) bool {
 		logs := fe.logs.Logs[tree.Span.ID]
 		if logs != nil && logs.UsedHeight() > 0 {
 			fmt.Fprintln(out)
-			fe.renderStep(out, r, tree.Span, tree.Chained, 0, "", nil)
-			fe.renderLogs(out, r, tree.Span, logs, -1, logs.UsedHeight(), "", nil)
+			fe.renderStep(out, r, &dagui.TraceRow{
+				Span:    tree.Span,
+				Chained: tree.Chained,
+				Tree:    tree,
+			}, "")
+			logs.SetHeight(logs.UsedHeight())
+			logs.SetPrefix("")
+			fmt.Fprint(out, logs.View())
 			// fe.renderStepError(out, r, tree.Span, 0, "", tree)
 		}
 		return dagui.WalkContinue
@@ -616,7 +621,10 @@ func (fe *frontendPretty) Render(out TermOutput) error {
 
 	var progPrefix string
 	if fe.rowsView != nil && fe.rowsView.Zoomed != nil && fe.rowsView.Zoomed.ID != fe.db.PrimarySpan {
-		fe.renderStep(out, r, fe.rowsView.Zoomed, false, 0, "", nil)
+		fe.renderStep(out, r, &dagui.TraceRow{
+			Span: fe.rowsView.Zoomed,
+			Tree: nil,
+		}, "")
 		progHeight -= 1
 		progPrefix = "  "
 	}
@@ -640,7 +648,9 @@ func (fe *frontendPretty) Render(out TermOutput) error {
 
 	if logs := fe.logs.Logs[fe.ZoomedSpan]; logs != nil && logs.UsedHeight() > 0 {
 		fmt.Fprintln(below)
-		fe.renderLogs(countOut, r, fe.db.Spans.Map[fe.ZoomedSpan], logs, -1, fe.window.Height/3, progPrefix, nil)
+		logs.SetHeight(fe.window.Height / 3)
+		logs.SetPrefix(progPrefix)
+		fmt.Fprint(below, logs.View())
 	}
 
 	belowOut := strings.TrimRight(below.String(), "\n")
@@ -1660,11 +1670,12 @@ func (fe *frontendPretty) renderRow(out TermOutput, r *renderer, row *dagui.Trac
 			defer func() {
 				root := row.Root()
 				if logs := fe.logs.Logs[root.Span.ID]; logs != nil && logs.UsedHeight() > 0 {
-					logDepth := 0
 					if fe.Verbosity < dagui.ExpandCompletedVerbosity {
-						logDepth = -1
+						cp := *row
+						cp.Depth = -1
+						row = &cp
 					}
-					fe.renderLogs(out, r, row.Span, logs, logDepth, logs.UsedHeight(), prefix, root.Tree)
+					fe.renderLogs(out, r, row, logs, logs.UsedHeight(), prefix)
 				}
 				// fe.renderStepError(out, r, root.Span, 0, prefix, root.Tree)
 			}()
@@ -1675,18 +1686,16 @@ func (fe *frontendPretty) renderRow(out TermOutput, r *renderer, row *dagui.Trac
 				(row.Previous != nil && !fe.flushed[row.Previous.Span.ID]) {
 				fmt.Fprintln(out, out.String(prefix))
 			}
-			fe.renderStep(out, r, row.Span, row.Chained, row.Depth, prefix, row.Tree)
+			fe.renderStep(out, r, row, prefix)
 			fe.renderDebug(out, row.Span, prefix+Block25+" ", false)
 			return true
 		}
 	}
 	if row.Previous != nil &&
-		row.Previous.Depth >= row.Depth &&
+		row.PreviousVisual.Depth >= row.Depth &&
 		!row.Chained &&
-		( // ensure gaps after last nested child
-		row.Previous.Depth > row.Depth ||
-			// ensure gaps before unchained calls
-			row.Span.Call() != nil ||
+		( // ensure gaps before unchained calls
+		row.Span.Call() != nil ||
 			// ensure gaps between calls and non-calls
 			(row.Previous.Span.Call() != nil && row.Span.Call() == nil) ||
 			// ensure gaps between messages
@@ -1694,7 +1703,7 @@ func (fe *frontendPretty) renderRow(out TermOutput, r *renderer, row *dagui.Trac
 			// ensure gaps going from tool calls to messages
 			(row.Previous.Span.Message == "" && row.Span.Message != "")) {
 		fmt.Fprint(out, prefix)
-		r.fancyIndent(out, row.Tree, false)
+		r.fancyIndent(out, row, false, false)
 		fmt.Fprintln(out)
 	}
 	var expanded bool
@@ -1702,10 +1711,10 @@ func (fe *frontendPretty) renderRow(out TermOutput, r *renderer, row *dagui.Trac
 		expanded = tree.IsExpanded(fe.FrontendOpts)
 	}
 	span := row.Span
-	fe.renderStep(out, r, row.Span, row.Chained, row.Depth, prefix, row.Tree)
+	fe.renderStep(out, r, row, prefix)
 	if span.Message == "" && // messages are displayed in renderStep
 		expanded {
-		fe.renderStepLogs(out, r, row.Span, row.Depth, prefix, row.Tree)
+		fe.renderStepLogs(out, r, row, prefix)
 	}
 	// fe.renderStepError(out, r, row.Span, row.Depth, prefix, row.Tree)
 	fe.renderDebug(out, row.Span, prefix+Block25+" ", false)
@@ -1744,90 +1753,80 @@ func (fe *frontendPretty) renderDebug(out TermOutput, span *dagui.Span, prefix s
 	fmt.Fprint(out, prefix+vt.View())
 }
 
-func (fe *frontendPretty) renderStepLogs(out TermOutput, r *renderer, span *dagui.Span, depth int, prefix string, tree *dagui.TraceTree) bool {
-	if logs := fe.logs.Logs[span.ID]; logs != nil {
-		return fe.renderLogs(out, r,
-			span,
-			logs,
-			depth,
-			fe.window.Height/3,
-			prefix,
-			tree,
-		)
+func (fe *frontendPretty) renderStepLogs(out TermOutput, r *renderer, row *dagui.TraceRow, prefix string) bool {
+	if logs := fe.logs.Logs[row.Span.ID]; logs != nil {
+		return fe.renderLogs(out, r, row, logs, fe.window.Height/3, prefix)
 	}
 	return false
 }
 
-func (fe *frontendPretty) renderStepError(out TermOutput, r *renderer, span *dagui.Span, depth int, prefix string, tree *dagui.TraceTree) {
-	for _, span := range span.Errors().Order {
-		errText := span.Status.Description
-		if errText == "" {
-			continue
-		}
+// func (fe *frontendPretty) renderStepError(out TermOutput, r *renderer, span *dagui.Span, depth int, prefix string, tree *dagui.TraceTree) {
+// 	for _, span := range span.Errors().Order {
+// 		errText := span.Status.Description
+// 		if errText == "" {
+// 			continue
+// 		}
 
-		// Calculate available width for text
-		prefixWidth := lipgloss.Width(prefix)
-		indentWidth := depth * 2 // Assuming indent is 2 spaces per depth level
-		markerWidth := 2         // "! " prefix
-		availableWidth := fe.window.Width - prefixWidth - indentWidth - markerWidth
-		if availableWidth > 0 {
-			errText = cellbuf.Wrap(errText, availableWidth, "")
-		}
+// 		// Calculate available width for text
+// 		prefixWidth := lipgloss.Width(prefix)
+// 		indentWidth := depth * 2 // Assuming indent is 2 spaces per depth level
+// 		markerWidth := 2         // "! " prefix
+// 		availableWidth := fe.window.Width - prefixWidth - indentWidth - markerWidth
+// 		if availableWidth > 0 {
+// 			errText = cellbuf.Wrap(errText, availableWidth, "")
+// 		}
 
-		// Print each wrapped line with proper indentation
-		for line := range strings.SplitSeq(errText, "\n") {
-			if line == "" {
-				continue
-			}
+// 		// Print each wrapped line with proper indentation
+// 		for line := range strings.SplitSeq(errText, "\n") {
+// 			if line == "" {
+// 				continue
+// 			}
 
-			fmt.Fprint(out, prefix)
-			if tree != nil {
-				r.fancyIndent(out, tree, false)
-			} else {
-				r.indent(out, depth)
-			}
-			fmt.Fprintf(out,
-				out.String("! %s").Foreground(termenv.ANSIYellow).String(),
-				line,
-			)
-			fmt.Fprintln(out)
-		}
-	}
-}
+// 			fmt.Fprint(out, prefix)
+// 			if tree != nil {
+// 				r.fancyIndent(out, tree, false)
+// 			} else {
+// 				r.indent(out, depth)
+// 			}
+// 			fmt.Fprintf(out,
+// 				out.String("! %s").Foreground(termenv.ANSIYellow).String(),
+// 				line,
+// 			)
+// 			fmt.Fprintln(out)
+// 		}
+// 	}
+// }
 
-func (fe *frontendPretty) renderStep(out TermOutput, r *renderer, span *dagui.Span, chained bool, depth int, prefix string, tree *dagui.TraceTree) error {
+func (fe *frontendPretty) renderStep(out TermOutput, r *renderer, row *dagui.TraceRow, prefix string) error {
+	span := row.Span
+	chained := row.Chained
+	depth := row.Depth
 	isFocused := span.ID == fe.FocusedSpan && !fe.editlineFocused
 
 	fmt.Fprint(out, prefix)
-	if tree != nil {
-		r.fancyIndent(out, tree, false)
-	} else {
-		r.indent(out, depth)
-	}
+	r.fancyIndent(out, row, false, true)
 
 	var toggler termenv.Style
-	if tree != nil {
-		if len(tree.Children) > 0 {
-			if tree.IsExpanded(fe.FrontendOpts) {
-				toggler = out.String(CaretDownFilled)
-			} else {
-				toggler = out.String(CaretRightFilled)
-			}
-		} else if span.IsPending() {
-			toggler = out.String(DotEmpty)
-		} else if span.IsFailedOrCausedFailure() {
-			toggler = out.String(IconFailure)
-		} else if span.IsCached() {
-			toggler = out.String(IconCached)
-		} else if span.IsPending() {
-			toggler = out.String(DotEmpty)
-		} else if span.IsCanceled() {
-			toggler = out.String(IconSkipped)
-		} else if span.IsRunning() {
+	if row.HasChildren {
+		if row.Tree.IsExpanded(fe.FrontendOpts) {
 			toggler = out.String(DotFilled)
 		} else {
-			toggler = out.String(IconSuccess)
+			toggler = out.String(DotCenter)
 		}
+	} else if span.IsPending() {
+		toggler = out.String(DotEmpty)
+	} else if span.IsFailedOrCausedFailure() {
+		toggler = out.String(IconFailure)
+	} else if span.IsCached() {
+		toggler = out.String(IconCached)
+	} else if span.IsPending() {
+		toggler = out.String(DotEmpty)
+	} else if span.IsCanceled() {
+		toggler = out.String(IconSkipped)
+	} else if span.IsRunning() {
+		toggler = out.String(DotFilled)
+	} else {
+		toggler = out.String(DotFilled)
 	}
 	if span.ActorEmoji != "" && span.Message != "" {
 		toggler = out.String(span.ActorEmoji)
@@ -1851,20 +1850,15 @@ func (fe *frontendPretty) renderStep(out TermOutput, r *renderer, span *dagui.Sp
 		// NOTE: arguably this should be opt-in, but it's not clear how the
 		// span name relates to the message in all cases; is it the
 		// subject? or author? better to be explicit with attributes.
-		if fe.renderStepLogs(out, r, span, depth, prefix, tree) {
-			if tree != nil {
-				r.fancyIndent(out, tree, false)
-			} else {
-				r.indent(out, depth)
-			}
-			fmt.Fprint(out, out.String(VertBoldBar).
-				Foreground(restrainedStatusColor(span)))
+		if fe.renderStepLogs(out, r, row, prefix) {
+			r.fancyIndent(out, row, false, false)
+			fmt.Fprint(out, out.String(VertBoldBar).Foreground(termenv.ANSIBrightBlack))
 		} else {
 			// no logs were printed, so snug the duration up against the emoji
 			fmt.Fprint(out, "\b")
 		}
 	} else if call := span.Call(); call != nil {
-		if err := r.renderCall(out, span, call, prefix, chained, depth, span.Internal, isFocused, tree); err != nil {
+		if err := r.renderCall(out, span, call, prefix, chained, depth, span.Internal, isFocused, row); err != nil {
 			return err
 		}
 	} else if span != nil {
@@ -1887,7 +1881,9 @@ func (fe *frontendPretty) renderStep(out TermOutput, r *renderer, span *dagui.Sp
 	return nil
 }
 
-func (fe *frontendPretty) renderLogs(out TermOutput, r *renderer, span *dagui.Span, logs *Vterm, depth int, height int, prefix string, tree *dagui.TraceTree) bool {
+func (fe *frontendPretty) renderLogs(out TermOutput, r *renderer, row *dagui.TraceRow, logs *Vterm, height int, prefix string) bool {
+	span := row.Span
+	depth := row.Depth
 	pipe := out.String(VertBoldBar).Foreground(restrainedStatusColor(span))
 	if depth == -1 {
 		// clear prefix when zoomed
@@ -1896,11 +1892,7 @@ func (fe *frontendPretty) renderLogs(out TermOutput, r *renderer, span *dagui.Sp
 		buf := new(strings.Builder)
 		fmt.Fprint(buf, prefix)
 		indentOut := NewOutput(buf, termenv.WithProfile(fe.profile))
-		if tree != nil {
-			r.fancyIndent(indentOut, tree, false)
-		} else {
-			r.indent(indentOut, depth)
-		}
+		r.fancyIndent(indentOut, row, false, false)
 		fmt.Fprint(indentOut, pipe)
 		fmt.Fprint(indentOut, out.String(" "))
 		logs.SetPrefix(buf.String())

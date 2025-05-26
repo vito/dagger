@@ -11,7 +11,7 @@ const (
 	CaretRightEmpty     = "▷" // ">"
 	CaretRightFilled    = "▶" // ">"
 	CornerBottomLeft    = "╰"
-	CornerBottomRight   = "╯"
+	CornerBottoRight    = "╯"
 	CornerTopLeft       = "╭"
 	CornerTopRight      = "╮"
 	CrossBar            = "┼"

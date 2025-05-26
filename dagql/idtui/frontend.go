@@ -179,30 +179,72 @@ func (r *renderer) indent(out TermOutput, depth int) {
 		Faint())
 }
 
-func (r *renderer) fancyIndent(out TermOutput, row *dagui.TraceTree, self bool) {
-	// like indent, but each bar should be colored to match the status
-	// color of the corresponding span (i.e. if a span's parent failed, the bar
-	// descending from it should be red)
+// Helper methods for tree navigation
+func (r *renderer) hasMoreSiblings(row *dagui.TraceRow) bool {
+	return row.Next != nil
+}
 
-	// Collect parent spans from root to current
-	var parentSpans []*dagui.Span
+func (r *renderer) isLastInGroup(row *dagui.TraceRow) bool {
+	return row.IsLastChild()
+}
+
+func (r *renderer) shouldShowVerticalBar(parent *dagui.TraceRow) bool {
+	if parent == nil {
+		return false
+	}
+	// Show vertical bar if the parent has more siblings coming after it
+	return r.hasMoreSiblings(parent)
+}
+
+func (r *renderer) fancyIndent(out TermOutput, row *dagui.TraceRow, selfBar, selfHoriz bool) {
+	// like indent, but render tree-style prefixes with status-colored symbols
+	// ◐ for running, ● for completed/successful, ◯ for pending/failed
+	// ├─ for intermediate children, └─ for last child
+
+	// Collect parent spans and their tree context from root to current
+	var parentRows []*dagui.TraceRow
 	current := row.Parent
 	for current != nil {
-		parentSpans = append(parentSpans, current.Span)
+		parentRows = append(parentRows, current)
 		current = current.Parent
 	}
 
-	// Print bars from root to current (reverse order)
-	for i := len(parentSpans) - 1; i >= 0; i-- {
-		span := parentSpans[i]
+	// Print tree symbols from root to current (reverse order)
+	for i := len(parentRows) - 1; i >= 0; i-- {
+		parent := parentRows[i]
+		span := parent.Span
 		color := restrainedStatusColor(span)
-		fmt.Fprint(out, out.String(VertBar+" ").
+
+		// Determine if this parent has more siblings coming after it
+		parentHasMoreSiblings := parent.Next != nil
+
+		var prefix string
+		if i == 0 && selfHoriz {
+			if row.Next == nil && parent.Next == nil {
+				prefix = CornerBottomLeft + HorizBar
+			} else if parentHasMoreSiblings || row.Next != nil {
+				prefix = VertRightBar + HorizBar
+			} else {
+				prefix = CornerBottomLeft + HorizBar
+			}
+		} else {
+			// This is a vertical connector for a parent level
+			if parentHasMoreSiblings {
+				prefix = VertBar + " "
+			} else {
+				prefix = "  "
+			}
+		}
+
+		fmt.Fprint(out, out.String(prefix).
 			Foreground(color).
 			Faint())
 	}
 
-	if self {
-		color := restrainedStatusColor(row.Span)
+	if selfBar {
+		span := row.Span
+		color := restrainedStatusColor(span)
+
 		fmt.Fprint(out, out.String(VertBar+" ").
 			Foreground(color).
 			Faint())
@@ -230,7 +272,7 @@ func (r *renderer) renderCall(
 	depth int,
 	internal bool,
 	focused bool,
-	tree *dagui.TraceTree,
+	row *dagui.TraceRow,
 ) error {
 	if r.rendering[call.Digest] {
 		fmt.Fprintf(out, "<cycle detected: %s>", call.Digest)
@@ -263,8 +305,8 @@ func (r *renderer) renderCall(
 			depth++
 			for _, arg := range call.Args {
 				fmt.Fprint(out, prefix)
-				if tree != nil {
-					r.fancyIndent(out, tree, true)
+				if row != nil {
+					r.fancyIndent(out, row, true, false)
 					fmt.Fprint(out, "  ")
 					// r.indent(out, 1)
 				} else {
@@ -285,7 +327,7 @@ func (r *renderer) renderCall(
 						}
 					}
 					argCall := r.db.Simplify(r.db.MustCall(argDig), forceSimplify)
-					if err := r.renderCall(out, argSpan, argCall, prefix, false, depth-1, internal, false, tree); err != nil {
+					if err := r.renderCall(out, argSpan, argCall, prefix, false, depth-1, internal, false, row); err != nil {
 						return err
 					}
 				} else {
@@ -295,8 +337,8 @@ func (r *renderer) renderCall(
 			}
 			depth--
 			fmt.Fprint(out, prefix)
-			if tree != nil {
-				r.fancyIndent(out, tree, true)
+			if row != nil {
+				r.fancyIndent(out, row, true, false)
 			} else {
 				r.indent(out, depth)
 			}
