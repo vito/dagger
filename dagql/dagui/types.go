@@ -37,6 +37,9 @@ type TraceRow struct {
 
 	Span *Span
 
+	// A reference back to the original Tree form, for convenience.
+	Tree *TraceTree
+
 	Parent   *TraceRow `json:"-"`
 	Previous *TraceRow `json:"-"`
 	Next     *TraceRow `json:"-"`
@@ -230,6 +233,7 @@ func (lv *RowsView) Rows(opts FrontendOpts) *Rows {
 			Index: len(rows.Order),
 			Span:  tree.Span,
 
+			Tree:   tree,
 			Parent: parent,
 
 			Chained:                 tree.Chained,
@@ -268,11 +272,12 @@ func (row *TraceTree) IsExpanded(opts FrontendOpts) bool {
 	if toggled {
 		return expanded
 	}
-	return row.Depth() < 2 && (row.RevealedChildren ||
-		row.IsRunningOrChildRunning ||
+	return (row.Depth() < 2 &&
+		(row.RevealedChildren ||
+			row.IsRunningOrChildRunning)) ||
 		row.Span.IsFailedOrCausedFailure() ||
 		row.Span.IsCanceled() ||
-		opts.Verbosity >= ExpandCompletedVerbosity)
+		opts.Verbosity >= ExpandCompletedVerbosity
 }
 
 func (row *TraceTree) Depth() int {

@@ -141,7 +141,7 @@ func (d *Dump) DumpID(out *termenv.Output, id *call.ID) error {
 	if d.Newline != "" {
 		r.newline = d.Newline
 	}
-	err = r.renderCall(out, nil, id.Call(), d.Prefix, true, 0, false, false)
+	err = r.renderCall(out, nil, id.Call(), d.Prefix, true, 0, false, false, nil)
 	fmt.Fprint(out, r.newline)
 	return err
 }
@@ -179,6 +179,36 @@ func (r *renderer) indent(out TermOutput, depth int) {
 		Faint())
 }
 
+func (r *renderer) fancyIndent(out TermOutput, row *dagui.TraceTree, self bool) {
+	// like indent, but each bar should be colored to match the status
+	// color of the corresponding span (i.e. if a span's parent failed, the bar
+	// descending from it should be red)
+
+	// Collect parent spans from root to current
+	var parentSpans []*dagui.Span
+	current := row.Parent
+	for current != nil {
+		parentSpans = append(parentSpans, current.Span)
+		current = current.Parent
+	}
+
+	// Print bars from root to current (reverse order)
+	for i := len(parentSpans) - 1; i >= 0; i-- {
+		span := parentSpans[i]
+		color := restrainedStatusColor(span)
+		fmt.Fprint(out, out.String(VertBar+" ").
+			Foreground(color).
+			Faint())
+	}
+
+	if self {
+		color := restrainedStatusColor(row.Span)
+		fmt.Fprint(out, out.String(VertBar+" ").
+			Foreground(color).
+			Faint())
+	}
+}
+
 func (r *renderer) renderIDBase(out TermOutput, call *callpbv1.Call) {
 	typeName := call.Type.ToAST().Name()
 	parent := out.String(typeName)
@@ -200,6 +230,7 @@ func (r *renderer) renderCall(
 	depth int,
 	internal bool,
 	focused bool,
+	tree *dagui.TraceTree,
 ) error {
 	if r.rendering[call.Digest] {
 		fmt.Fprintf(out, "<cycle detected: %s>", call.Digest)
@@ -232,7 +263,13 @@ func (r *renderer) renderCall(
 			depth++
 			for _, arg := range call.Args {
 				fmt.Fprint(out, prefix)
-				r.indent(out, depth)
+				if tree != nil {
+					r.fancyIndent(out, tree, true)
+					fmt.Fprint(out, "  ")
+					// r.indent(out, 1)
+				} else {
+					r.indent(out, depth)
+				}
 				fmt.Fprintf(out, out.String("%s:").Foreground(kwColor).String(), arg.GetName())
 				val := arg.GetValue()
 				fmt.Fprint(out, out.String(" "))
@@ -248,7 +285,7 @@ func (r *renderer) renderCall(
 						}
 					}
 					argCall := r.db.Simplify(r.db.MustCall(argDig), forceSimplify)
-					if err := r.renderCall(out, argSpan, argCall, prefix, false, depth-1, internal, false); err != nil {
+					if err := r.renderCall(out, argSpan, argCall, prefix, false, depth-1, internal, false, tree); err != nil {
 						return err
 					}
 				} else {
@@ -258,7 +295,11 @@ func (r *renderer) renderCall(
 			}
 			depth--
 			fmt.Fprint(out, prefix)
-			r.indent(out, depth)
+			if tree != nil {
+				r.fancyIndent(out, tree, true)
+			} else {
+				r.indent(out, depth)
+			}
 			depth-- //nolint:ineffassign
 		} else {
 			for i, arg := range call.Args {
@@ -372,6 +413,17 @@ func statusColor(span *dagui.Span) termenv.Color {
 		return termenv.ANSIBrightBlack
 	default:
 		return termenv.ANSIGreen
+	}
+}
+
+func restrainedStatusColor(span *dagui.Span) termenv.Color {
+	switch {
+	case span.IsRunningOrEffectsRunning():
+		return termenv.ANSIYellow
+	case span.IsFailedOrCausedFailure():
+		return termenv.ANSIRed
+	default:
+		return termenv.ANSIBrightBlack
 	}
 }
 
