@@ -1845,7 +1845,7 @@ func (fe *frontendPretty) renderStep(out TermOutput, r *renderer, row *dagui.Tra
 		toggler = out.String(IconCached)
 	} else if span.IsCanceled() {
 		toggler = out.String(IconSkipped)
-	} else if span.IsRunning() {
+	} else if span.IsRunningOrEffectsRunning() {
 		toggler = out.String(DotHalf)
 	} else {
 		toggler = out.String(DotFilled)
