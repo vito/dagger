@@ -194,15 +194,13 @@ func (r *renderer) fancyIndent(out TermOutput, row *dagui.TraceRow, selfBar, sel
 
 	// Print tree symbols from root to current (reverse order)
 	for i := len(parentRows) - 1; i >= 0; i-- {
-		parent := parentRows[i]
 		var nextChild *dagui.TraceRow
 		if i > 0 {
 			nextChild = parentRows[i-1]
 		} else {
 			nextChild = row
 		}
-		span := parent.Span
-		color := restrainedStatusColor(span)
+		color := termenv.ANSIBrightBlack
 
 		var prefix string
 		if i == 0 && selfHoriz {
@@ -225,8 +223,7 @@ func (r *renderer) fancyIndent(out TermOutput, row *dagui.TraceRow, selfBar, sel
 	}
 
 	if selfBar {
-		span := row.Span
-		color := restrainedStatusColor(span)
+		color := termenv.ANSIBrightBlack
 
 		var symbol string
 		if row.ShowingChildren {
@@ -302,7 +299,6 @@ func (r *renderer) renderCall(
 					r.fancyIndent(out, row, true, false)
 					indentLevel -= row.Depth
 					indentLevel -= 1
-					// r.indent(out, 1)
 				}
 				r.indent(out, indentLevel)
 				fmt.Fprintf(out, out.String("%s:").Foreground(kwColor).String(), arg.GetName())
@@ -482,8 +478,11 @@ func (r *renderer) renderDuration(out TermOutput, span *dagui.Span) {
 	fmt.Fprint(out, duration)
 }
 
-func (r *renderer) renderCached(out TermOutput, span *dagui.Span) {
-	if !span.IsRunningOrEffectsRunning() && span.IsCached() {
+func (r *renderer) renderStatus(out TermOutput, span *dagui.Span) {
+	if span.IsFailedOrCausedFailure() && !span.IsCanceled() {
+		fmt.Fprint(out, out.String(" "))
+		fmt.Fprint(out, out.String("ERROR").Foreground(termenv.ANSIRed))
+	} else if !span.IsRunningOrEffectsRunning() && span.IsCached() {
 		fmt.Fprint(out, out.String(" "))
 		fmt.Fprint(out, out.String("CACHED").Foreground(termenv.ANSIBlue))
 	}
