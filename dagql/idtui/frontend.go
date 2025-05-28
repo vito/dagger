@@ -193,13 +193,15 @@ func (r *renderer) fancyIndent(out TermOutput, row *dagui.TraceRow, selfBar, sel
 
 	// Print tree symbols from root to current (reverse order)
 	for i := len(parentRows) - 1; i >= 0; i-- {
+		parent := parentRows[i]
 		var nextChild *dagui.TraceRow
 		if i > 0 {
 			nextChild = parentRows[i-1]
 		} else {
 			nextChild = row
 		}
-		color := termenv.ANSIBrightBlack
+		span := parent.Span
+		color := restrainedStatusColor(span)
 
 		var prefix string
 		if i == 0 && selfHoriz {
@@ -222,7 +224,8 @@ func (r *renderer) fancyIndent(out TermOutput, row *dagui.TraceRow, selfBar, sel
 	}
 
 	if selfBar {
-		color := termenv.ANSIBrightBlack
+		span := row.Span
+		color := restrainedStatusColor(span)
 
 		var symbol string
 		if row.ShowingChildren {
