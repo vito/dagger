@@ -583,6 +583,14 @@ func (fe *frontendPretty) keys(out *termenv.Output) []key.Binding {
 		quitMsg = "quit"
 	}
 
+	noExitHelp := "no exit"
+	if fe.NoExit {
+		color := termenv.ANSIYellow
+		if fe.done || fe.interrupted {
+			color = termenv.ANSIRed
+		}
+		noExitHelp = out.String(noExitHelp).Foreground(color).String()
+	}
 	return []key.Binding{
 		key.NewBinding(key.WithKeys("i", "tab"),
 			key.WithHelp("i", "input mode"),
@@ -601,6 +609,8 @@ func (fe *frontendPretty) keys(out *termenv.Output) []key.Binding {
 			KeyEnabled(fe.ZoomedSpan.IsValid() && fe.ZoomedSpan != fe.db.PrimarySpan)),
 		key.NewBinding(key.WithKeys("+/-", "+", "-"),
 			key.WithHelp("+/-", fmt.Sprintf("verbosity=%d", fe.Verbosity))),
+		key.NewBinding(key.WithKeys("E"),
+			key.WithHelp("E", noExitHelp)),
 		key.NewBinding(key.WithKeys("q", "ctrl+c"),
 			key.WithHelp("q", quitMsg)),
 	}
@@ -1275,7 +1285,7 @@ func (fe *frontendPretty) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 		sigquit()
 		return nil
 	case "E":
-		fe.NoExit = true
+		fe.NoExit = !fe.NoExit
 		return nil
 	case "down", "j":
 		fe.goDown()
