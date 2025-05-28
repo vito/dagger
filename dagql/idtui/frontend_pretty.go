@@ -573,6 +573,8 @@ func (fe *frontendPretty) keys(out *termenv.Output) []key.Binding {
 	var quitMsg string
 	if fe.interrupted {
 		quitMsg = "quit!"
+	} else if fe.shell != nil {
+		quitMsg = "interrupt"
 	} else {
 		quitMsg = "quit"
 	}
