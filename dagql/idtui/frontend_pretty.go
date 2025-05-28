@@ -250,12 +250,6 @@ func (fe *frontendPretty) Opts() *dagui.FrontendOpts {
 	return &fe.FrontendOpts
 }
 
-func (fe *frontendPretty) SetCustomExit(fn func()) {
-	fe.mu.Lock()
-	fe.Opts().CustomExit = fn
-	fe.mu.Unlock()
-}
-
 func (fe *frontendPretty) SetVerbosity(n int) {
 	fe.mu.Lock()
 	fe.Opts().Verbosity = n
@@ -1522,11 +1516,6 @@ func (fe *frontendPretty) updatePrompt() tea.Cmd {
 }
 
 func (fe *frontendPretty) quit(interruptErr error) tea.Cmd {
-	if fe.CustomExit != nil {
-		fe.CustomExit()
-		return nil
-	}
-
 	if fe.done && fe.eof {
 		fe.quitting = true
 		// must have configured NoExit, and now they want
