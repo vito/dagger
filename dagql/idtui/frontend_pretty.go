@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -540,21 +541,20 @@ func (fe *frontendPretty) renderKeymap(out *termenv.Output, style lipgloss.Style
 	var showedKey bool
 	// Blank line prior to keymap
 	for _, key := range fe.keys(out) {
-		if !key.Enabled() {
+		mainKey := key.Keys()[0]
+		var pressed bool
+		if time.Since(fe.pressedKeyAt) < 500*time.Millisecond {
+			pressed = slices.Contains(key.Keys(), fe.pressedKey)
+		}
+		if !key.Enabled() && !pressed {
 			continue
 		}
-		mainKey := key.Keys()[0]
+		keyStyle := style
+		if pressed {
+			keyStyle = keyStyle.Foreground(nil)
+		}
 		if showedKey {
 			fmt.Fprint(w, style.Render(" · "))
-		}
-		keyStyle := style
-		if time.Since(fe.pressedKeyAt) < 500*time.Millisecond {
-			for _, k := range key.Keys() {
-				if k == fe.pressedKey {
-					keyStyle = keyStyle.Foreground(nil)
-					// Reverse(true)
-				}
-			}
 		}
 		fmt.Fprint(w, keyStyle.Bold(true).Render(mainKey))
 		fmt.Fprint(w, keyStyle.Render(" "+key.Help().Desc))
@@ -591,6 +591,10 @@ func (fe *frontendPretty) keys(out *termenv.Output) []key.Binding {
 		}
 		noExitHelp = out.String(noExitHelp).Foreground(color).String()
 	}
+	var focused *dagui.Span
+	if fe.FocusedSpan.IsValid() {
+		focused, _ = fe.db.Spans.Map[fe.FocusedSpan]
+	}
 	return []key.Binding{
 		key.NewBinding(key.WithKeys("i", "tab"),
 			key.WithHelp("i", "input mode"),
@@ -605,14 +609,19 @@ func (fe *frontendPretty) keys(out *termenv.Output) []key.Binding {
 		key.NewBinding(key.WithKeys("end", " "),
 			key.WithHelp("end", "last")),
 		key.NewBinding(key.WithKeys("enter"),
-			key.WithHelp("enter", "zoom"),
-			KeyEnabled(fe.ZoomedSpan.IsValid() && fe.ZoomedSpan != fe.db.PrimarySpan)),
+			key.WithHelp("enter", "zoom")),
 		key.NewBinding(key.WithKeys("+/-", "+", "-"),
 			key.WithHelp("+/-", fmt.Sprintf("verbosity=%d", fe.Verbosity))),
 		key.NewBinding(key.WithKeys("E"),
 			key.WithHelp("E", noExitHelp)),
 		key.NewBinding(key.WithKeys("q", "ctrl+c"),
 			key.WithHelp("q", quitMsg)),
+		key.NewBinding(key.WithKeys("esc"),
+			key.WithHelp("esc", "unzoom"),
+			KeyEnabled(fe.ZoomedSpan.IsValid() && fe.ZoomedSpan != fe.db.PrimarySpan)),
+		key.NewBinding(key.WithKeys("r"),
+			key.WithHelp("r", "go to error"),
+			KeyEnabled(focused != nil && focused.ErrorOrigin != nil)),
 	}
 }
 
@@ -1909,12 +1918,31 @@ func (fe *frontendPretty) renderStep(out TermOutput, r *renderer, row *dagui.Tra
 		// fe.renderVertexTasks(out, span, depth)
 		r.renderDuration(out, span)
 		r.renderMetrics(out, span)
-		r.renderStatus(out, span)
+		fe.renderStatus(out, span)
 	}
 
 	fmt.Fprintln(out)
 
 	return nil
+}
+
+func (fe *frontendPretty) renderStatus(out TermOutput, span *dagui.Span) {
+	if span.IsFailedOrCausedFailure() && !span.IsCanceled() {
+		fmt.Fprint(out, out.String(" "))
+		if span.ErrorOrigin != nil {
+			fmt.Fprintf(out, "%s%s%s %s",
+				out.String("E").Foreground(termenv.ANSIRed),
+				out.String("R").Foreground(termenv.ANSIRed).Underline(),
+				out.String("ROR").Foreground(termenv.ANSIRed),
+				out.String("↗").Foreground(termenv.ANSIBrightBlack),
+			)
+		} else {
+			fmt.Fprint(out, out.String("ERROR").Foreground(termenv.ANSIRed))
+		}
+	} else if !span.IsRunningOrEffectsRunning() && span.IsCached() {
+		fmt.Fprint(out, out.String(" "))
+		fmt.Fprint(out, out.String("CACHED").Foreground(termenv.ANSIBlue))
+	}
 }
 
 func (fe *frontendPretty) renderLogs(out TermOutput, r *renderer, row *dagui.TraceRow, logs *Vterm, height int, prefix string) bool {
