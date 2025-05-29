@@ -300,12 +300,15 @@ func (row *TraceTree) IsExpanded(opts FrontendOpts) bool {
 	if toggled {
 		return expanded
 	}
-	return (row.Depth() < 2 &&
-		(row.RevealedChildren ||
-			row.IsRunningOrChildRunning)) ||
-		row.Span.IsFailedOrCausedFailure() ||
+
+	autoExpand := row.Depth() < 2 &&
+		(row.RevealedChildren || row.IsRunningOrChildRunning)
+
+	alwaysExpand := row.Span.IsFailedOrCausedFailure() ||
 		row.Span.IsCanceled() ||
 		opts.Verbosity >= ExpandCompletedVerbosity
+
+	return autoExpand || alwaysExpand
 }
 
 func (row *TraceTree) Depth() int {
