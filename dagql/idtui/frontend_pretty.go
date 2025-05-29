@@ -1858,16 +1858,16 @@ func (fe *frontendPretty) renderStep(out TermOutput, r *renderer, row *dagui.Tra
 		} else {
 			toggler = out.String(CaretRightFilled)
 		}
-	} else if span.IsPending() {
-		toggler = out.String(DotEmpty)
-	} else if span.IsFailedOrCausedFailure() {
-		toggler = out.String(IconFailure)
+	} else if span.IsRunningOrEffectsRunning() {
+		toggler = out.String(DotHalf)
 	} else if span.IsCached() {
 		toggler = out.String(IconCached)
 	} else if span.IsCanceled() {
 		toggler = out.String(IconSkipped)
-	} else if span.IsRunningOrEffectsRunning() {
-		toggler = out.String(DotHalf)
+	} else if span.IsFailedOrCausedFailure() {
+		toggler = out.String(IconFailure)
+	} else if span.IsPending() {
+		toggler = out.String(DotEmpty)
 	} else {
 		toggler = out.String(DotFilled)
 	}
