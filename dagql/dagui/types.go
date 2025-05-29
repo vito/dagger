@@ -52,6 +52,12 @@ type TraceRow struct {
 	Expanded                bool
 }
 
+type RowsView struct {
+	Zoomed *Span
+	Body   []*TraceTree
+	BySpan map[SpanID]*TraceTree
+}
+
 func (db *DB) AllSpans() iter.Seq[*Span] {
 	return db.Spans.Iter()
 }
@@ -70,44 +76,41 @@ func (db *DB) RowsView(opts FrontendOpts) *RowsView {
 			return view
 		}
 	}
-	var populateBySpan func(*TraceTree)
-	populateBySpan = func(tree *TraceTree) {
-		view.BySpan[tree.Span.ID] = tree
-		for _, child := range tree.Children {
-			populateBySpan(child)
-		}
-	}
-	root := db.RootSpan
+	var spans iter.Seq[*Span]
 	if view.Zoomed != nil {
-		root = view.Zoomed
+		spans = view.Zoomed.ChildSpans.Iter()
+	} else {
+		spans = db.AllSpans()
 	}
-	if root == nil {
-		return view
-	}
-	if tree := db.WalkSpan(opts, root); tree != nil {
-		view.Body = tree.Children
-		populateBySpan(tree)
-	}
+	db.WalkSpans(opts, spans, func(tree *TraceTree) {
+		if tree.Parent != nil {
+			tree.Parent.Children = append(tree.Parent.Children, tree)
+		} else {
+			view.Body = append(view.Body, tree)
+		}
+		view.BySpan[tree.Span.ID] = tree
+	})
 	return view
 }
 
 //nolint:gocyclo
-func (db *DB) WalkSpan(opts FrontendOpts, rootSpan *Span) *TraceTree {
+func (db *DB) WalkSpans(opts FrontendOpts, spans iter.Seq[*Span], f func(*TraceTree)) {
 	var lastTree *TraceTree
 	var lastCall *TraceTree
 	seen := make(map[SpanID]bool)
-	var walk func(*Span, *TraceTree) *TraceTree
-	walk = func(span *Span, parent *TraceTree) *TraceTree {
-		if seen[span.ID] {
-			return nil
+	var walk func(*Span, *TraceTree)
+	walk = func(span *Span, parent *TraceTree) {
+		spanID := span.ID
+		if seen[spanID] {
+			return
 		}
-		seen[span.ID] = true
+		seen[spanID] = true
 
 		// If the span should be hidden, don't even collect it into the tree so we
 		// can track relationships between rows accurately (e.g. chaining pipeline
 		// calls).
 		if !opts.ShouldShow(db, span) {
-			return nil
+			return
 		}
 
 		if (span.Passthrough && !opts.Debug) ||
@@ -116,13 +119,9 @@ func (db *DB) WalkSpan(opts FrontendOpts, rootSpan *Span) *TraceTree {
 			// but not actually see it, so just move along to its children.
 			!span.Received {
 			for _, child := range span.ChildSpans.Order {
-				if childTree := walk(child, parent); childTree != nil {
-					if parent != nil {
-						parent.Children = append(parent.Children, childTree)
-					}
-				}
+				walk(child, parent)
 			}
-			return nil
+			return
 		}
 
 		if opts.Filter != nil {
@@ -132,20 +131,16 @@ func (db *DB) WalkSpan(opts FrontendOpts, rootSpan *Span) *TraceTree {
 				if lastTree != nil {
 					lastTree.Final = true
 				}
-				return nil
+				return
 			case WalkPassthrough:
 				// TODO: this Final field is a bit tedious...
 				if lastTree != nil {
 					lastTree.Final = true
 				}
 				for _, child := range span.ChildSpans.Order {
-					if childTree := walk(child, parent); childTree != nil {
-						if parent != nil {
-							parent.Children = append(parent.Children, childTree)
-						}
-					}
+					walk(child, parent)
 				}
-				return nil
+				return
 			}
 		}
 
@@ -169,6 +164,7 @@ func (db *DB) WalkSpan(opts FrontendOpts, rootSpan *Span) *TraceTree {
 			tree.setRunning()
 		}
 
+		f(tree)
 		lastTree = tree
 		if tree.Span.CallDigest != "" {
 			lastCall = tree
@@ -179,9 +175,8 @@ func (db *DB) WalkSpan(opts FrontendOpts, rootSpan *Span) *TraceTree {
 			verbosity = v
 		}
 
-		if verbosity < ShowSpammyVerbosity && tree.Depth() != 0 {
-			// Process revealed spans before normal children, starting from beneath
-			// the root span. (TODO: reconsider, for 'extremely quiet' mode?)
+		if verbosity < ShowSpammyVerbosity {
+			// Process revealed spans before normal children
 			for _, revealed := range span.RevealedSpans.Order {
 				if revealed.Passthrough && !opts.Debug {
 					for _, child := range revealed.ChildSpans.Order {
@@ -191,14 +186,10 @@ func (db *DB) WalkSpan(opts FrontendOpts, rootSpan *Span) *TraceTree {
 						if child.ActorEmoji == "" && revealed.ActorEmoji != "" {
 							child.ActorEmoji = revealed.ActorEmoji
 						}
-						if childTree := walk(child, tree); childTree != nil {
-							tree.Children = append(tree.Children, childTree)
-						}
+						walk(child, tree)
 					}
 				} else {
-					if childTree := walk(revealed, tree); childTree != nil {
-						tree.Children = append(tree.Children, childTree)
-					}
+					walk(revealed, tree)
 				}
 				tree.RevealedChildren = true
 			}
@@ -207,9 +198,7 @@ func (db *DB) WalkSpan(opts FrontendOpts, rootSpan *Span) *TraceTree {
 		// Only process children if we didn't use revealed spans
 		if !tree.RevealedChildren {
 			for _, child := range span.ChildSpans.Order {
-				if childTree := walk(child, tree); childTree != nil {
-					tree.Children = append(tree.Children, childTree)
-				}
+				walk(child, tree)
 			}
 		}
 
@@ -220,21 +209,13 @@ func (db *DB) WalkSpan(opts FrontendOpts, rootSpan *Span) *TraceTree {
 		if tree.Span.CallDigest != "" {
 			lastCall = tree
 		}
-
-		return tree
 	}
-
-	tree := walk(rootSpan, nil)
+	for span := range spans {
+		walk(span, nil)
+	}
 	if lastTree != nil {
 		lastTree.Final = true
 	}
-	return tree
-}
-
-type RowsView struct {
-	Zoomed *Span
-	Body   []*TraceTree
-	BySpan map[SpanID]*TraceTree
 }
 
 type Rows struct {

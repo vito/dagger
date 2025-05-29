@@ -1573,20 +1573,20 @@ func (fe *frontendPretty) goDown() {
 
 func (fe *frontendPretty) goOut() {
 	fe.autoFocus = false
-	focused := fe.rowsView.BySpan[fe.FocusedSpan]
+	focused := fe.db.Spans.Map[fe.FocusedSpan]
 	if focused == nil {
 		return
 	}
-	parent := focused.Parent
+	parent := focused.VisibleParent(fe.FrontendOpts)
 	if parent == nil {
 		return
 	}
-	fe.FocusedSpan = parent.Span.ID
+	fe.FocusedSpan = parent.ID
 	// targeted the zoomed span; zoom on its parent instead
 	if fe.FocusedSpan == fe.ZoomedSpan {
-		zoomedParent := parent.Parent
+		zoomedParent := parent.VisibleParent(fe.FrontendOpts)
 		if zoomedParent != nil {
-			fe.ZoomedSpan = zoomedParent.Span.ID
+			fe.ZoomedSpan = zoomedParent.ID
 		}
 	}
 	fe.recalculateViewLocked()
