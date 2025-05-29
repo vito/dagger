@@ -514,6 +514,8 @@ func (fe *frontendPlain) renderStep(span *dagui.Span, depth int, done bool) {
 	r := newRenderer(fe.db, plainMaxLiteralLen, fe.FrontendOpts)
 
 	prefix := fe.stepPrefix(span, spanDt)
+	fmt.Fprint(fe.output, prefix)
+	r.indent(fe.output, depth)
 	if spanCall := span.Call(); spanCall != nil {
 		call := &callpbv1.Call{
 			Field:          spanCall.Field,
