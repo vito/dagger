@@ -76,7 +76,6 @@ type frontendPretty struct {
 	eof          bool
 	backgrounded bool
 	autoFocus    bool
-	debugged     dagui.SpanID
 	focusedIdx   int
 	rowsView     *dagui.RowsView
 	rows         *dagui.Rows
@@ -95,6 +94,8 @@ type frontendPretty struct {
 	browserBuf *strings.Builder // logs if browser fails
 	stdin      io.Reader        // used by backgroundMsg for running terminal
 	writer     io.Writer
+	debugged   dagui.SpanID
+	openedLogs dagui.SpanID
 
 	// held to synchronize tea.Model with updates
 	mu sync.Mutex
@@ -572,6 +573,18 @@ func (fe *frontendPretty) keys(out *termenv.Output) []key.Binding {
 		return bnds
 	}
 
+	if fe.openedLogs.IsValid() {
+		return []key.Binding{
+			key.NewBinding(key.WithKeys("j", "down"), key.WithHelp("j/↓", "scroll down")),
+			key.NewBinding(key.WithKeys("k", "up"), key.WithHelp("k/↑", "scroll up")),
+			key.NewBinding(key.WithKeys("pgdown", "ctrl+f"), key.WithHelp("pgdown", "page down")),
+			key.NewBinding(key.WithKeys("pgup", "ctrl+b"), key.WithHelp("pgup", "page up")),
+			key.NewBinding(key.WithKeys("home", "g"), key.WithHelp("home/g", "top")),
+			key.NewBinding(key.WithKeys("end", "G"), key.WithHelp("end/G", "bottom")),
+			key.NewBinding(key.WithKeys("q", "esc"), key.WithHelp("q/esc", "exit logs")),
+		}
+	}
+
 	var quitMsg string
 	if fe.interrupted {
 		quitMsg = "quit!"
@@ -590,8 +603,12 @@ func (fe *frontendPretty) keys(out *termenv.Output) []key.Binding {
 		noExitHelp = out.String(noExitHelp).Foreground(color).String()
 	}
 	var focused *dagui.Span
+	var hasLogs bool
 	if fe.FocusedSpan.IsValid() {
 		focused = fe.db.Spans.Map[fe.FocusedSpan]
+		if logs := fe.logs.Logs[focused.ID]; logs != nil {
+			hasLogs = logs.UsedHeight() > 0
+		}
 	}
 	return []key.Binding{
 		key.NewBinding(key.WithKeys("i", "tab"),
@@ -614,6 +631,9 @@ func (fe *frontendPretty) keys(out *termenv.Output) []key.Binding {
 			key.WithHelp("E", noExitHelp)),
 		key.NewBinding(key.WithKeys("q", "ctrl+c"),
 			key.WithHelp("q", quitMsg)),
+		key.NewBinding(key.WithKeys("o"),
+			key.WithHelp("o", "open logs"),
+			KeyEnabled(hasLogs)),
 		key.NewBinding(key.WithKeys("esc"),
 			key.WithHelp("esc", "unzoom"),
 			KeyEnabled(fe.ZoomedSpan.IsValid() && fe.ZoomedSpan != fe.db.PrimarySpan)),
@@ -631,6 +651,18 @@ func KeyEnabled(enabled bool) key.BindingOpt {
 
 func (fe *frontendPretty) Render(out TermOutput) error {
 	progHeight := fe.window.Height
+
+	if fe.openedLogs.IsValid() {
+		if logs := fe.logs.Logs[fe.openedLogs]; logs != nil && logs.UsedHeight() > 0 {
+			logs.SetHeight(fe.window.Height - 1) // account for keymap
+			logs.SetPrefix("")
+			fmt.Fprint(out, logs.View())
+		} else {
+			fmt.Fprintln(out, out.String("(no logs)").Faint())
+		}
+		fmt.Fprint(out, fe.viewKeymap())
+		return nil
+	}
 
 	if fe.editline != nil {
 		progHeight -= lipgloss.Height(fe.editlineView())
@@ -661,7 +693,7 @@ func (fe *frontendPretty) Render(out TermOutput) error {
 		fmt.Fprint(countOut, fe.viewStringPrompt())
 	}
 
-	if fe.editline == nil {
+	if fe.editline == nil || fe.openedLogs.IsValid() {
 		fmt.Fprint(countOut, fe.viewKeymap())
 	}
 
@@ -1151,6 +1183,8 @@ func (fe *frontendPretty) update(msg tea.Msg) (*frontendPretty, tea.Cmd) { //nol
 		// send all input to editline if it's focused
 		case fe.editlineFocused:
 			return fe, fe.handleEditlineKey(msg)
+		case fe.openedLogs.IsValid():
+			return fe, fe.handleZoomedLogsKey(msg)
 		default:
 			return fe, fe.handleNavKey(msg)
 		}
@@ -1272,6 +1306,48 @@ func (fe *frontendPretty) handleEditlineKey(msg tea.KeyMsg) (cmd tea.Cmd) {
 	return cmd
 }
 
+func (fe *frontendPretty) handleZoomedLogsKey(msg tea.KeyMsg) tea.Cmd {
+	fe.pressedKey = msg.String()
+	fe.pressedKeyAt = time.Now()
+
+	if !fe.openedLogs.IsValid() {
+		return nil
+	}
+
+	switch msg.String() {
+	case "q", "esc":
+		fe.openedLogs = dagui.SpanID{}
+		return nil
+	}
+
+	logs := fe.logs.Logs[fe.openedLogs]
+	if logs == nil {
+		return nil
+	}
+
+	switch msg.String() {
+	case "j", "down":
+		logs.Offset = min(logs.UsedHeight()-logs.Height, logs.Offset+1)
+		return nil
+	case "k", "up":
+		logs.Offset = max(0, logs.Offset-1)
+		return nil
+	case "pgdown", "ctrl+f":
+		logs.Offset = min(logs.UsedHeight()-logs.Height, logs.Offset+logs.Height)
+		return nil
+	case "pgup", "ctrl+b":
+		logs.Offset = max(0, logs.Offset-logs.Height)
+		return nil
+	case "home", "g":
+		logs.Offset = 0
+		return nil
+	case "end", "G":
+		logs.Offset = max(0, logs.UsedHeight()-logs.Height)
+		return nil
+	}
+	return nil
+}
+
 func (fe *frontendPretty) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 	lastKey := fe.pressedKey
 	fe.pressedKey = msg.String()
@@ -1358,6 +1434,9 @@ func (fe *frontendPretty) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 		} else {
 			fe.debugged = fe.FocusedSpan
 		}
+		return nil
+	case "o":
+		fe.openedLogs = fe.FocusedSpan
 		return nil
 	case "enter":
 		fe.ZoomedSpan = fe.FocusedSpan
