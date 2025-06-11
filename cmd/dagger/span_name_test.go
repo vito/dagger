@@ -17,6 +17,8 @@ func TestSpanName(t *testing.T) {
 		{args: []string{"dagger", "version"}, want: "dagger version"},
 		{args: []string{"dagger", "install", "foo"}, want: "dagger install foo"},
 		{args: []string{"dagger", "call", "foo"}, want: "foo"},
+		{args: []string{"dagger", "call", "-q", "evals"}, want: "evals"},
+		{args: []string{"dagger", "-q", "call", "evals"}, want: "evals"},
 		{args: []string{"dagger", "call", "echo", "--msg", ""}, want: "echo --msg "},
 		{args: []string{"dagger", "-m", "dev", "call", "foo"}, want: "foo"},
 		{args: []string{"dagger", "call", "-m", "dev", "foo"}, want: "foo"},

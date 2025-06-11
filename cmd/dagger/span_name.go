@@ -2,6 +2,8 @@ package main
 
 import (
 	"strings"
+
+	"github.com/spf13/pflag"
 )
 
 // this diastrous hack sanitizes the commandline so dagger call invocations get
@@ -17,9 +19,6 @@ import (
 //
 // eventually this should be replaced with browsing by function, rather than
 // browsing by CLI.
-//
-// NOTE: this will get confused by boolean flags. there's nothing we can do
-// about that. this should eventually be replaced with browse-by-function.
 func spanName(args []string) string {
 	keep := []string{}
 	fullCall := []string{}
@@ -34,8 +33,10 @@ func spanName(args []string) string {
 			// we're a flag
 			isFlag = true
 
+			// check if the flag is self-contained
 			if strings.Contains(arg, "=") {
-				// this flag is self-contained
+				isFlag = false
+			} else if flagIsSelfContained(arg, globalFlags) {
 				isFlag = false
 			}
 
@@ -100,4 +101,34 @@ func spanName(args []string) string {
 		keep = fullCall
 	}
 	return strings.Join(keep, " ")
+}
+
+// flagIsSelfContained returns true if the flag is known to be a boolean or
+// count flag that doesn't take a value by checking the actual flag definitions
+func flagIsSelfContained(flag string, flags *pflag.FlagSet) bool {
+	// Remove leading dashes and handle --flag=value format
+	cleanFlag := strings.TrimLeft(flag, "-")
+	if idx := strings.Index(cleanFlag, "="); idx != -1 {
+		cleanFlag = cleanFlag[:idx]
+	}
+
+	// Try to find the flag by name
+	if flagObj := flags.Lookup(cleanFlag); flagObj != nil {
+		flagType := flagObj.Value.Type()
+		return flagType == "bool" || flagType == "count"
+	}
+
+	// Try to find the flag by shorthand
+	isBoolOrCount := false
+	flags.VisitAll(func(f *pflag.Flag) {
+		if f.Shorthand == cleanFlag {
+			flagType := f.Value.Type()
+			if flagType == "bool" || flagType == "count" {
+				isBoolOrCount = true
+			}
+		}
+	})
+
+	// This will default to false for unknown flags
+	return isBoolOrCount
 }
