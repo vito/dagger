@@ -12,6 +12,7 @@ import (
 
 	"github.com/dagger/dagger/util/cleanups"
 	"github.com/moby/buildkit/util/bklog"
+	"github.com/opencontainers/runc/libcontainer"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/sourcegraph/conc/pool"
 	"golang.org/x/sys/unix"
@@ -67,32 +68,58 @@ func (w *Worker) runNetNSWorkers(ctx context.Context, state *execState) error {
 		return fmt.Errorf("failed to set network namespace: %w", err)
 	}
 	var ctrNetNSPath string
+	// var ctrMountNSPath string
 	for _, ns := range tmpSpec.Linux.Namespaces {
 		if ns.Type == specs.NetworkNamespace {
 			ctrNetNSPath = ns.Path
-			break
 		}
+		// if ns.Type == specs.MountNamespace {
+		// 	ctrMountNSPath = ns.Path
+		// }
 	}
+	ctr, err := libcontainer.Load(w.executorRoot, state.id)
 	if ctrNetNSPath == "" {
 		return fmt.Errorf("network namespace path not found")
 	}
-
-	hostFile, err := os.OpenFile("/proc/self/ns/net", os.O_RDONLY, 0)
+	state, err := ctr.OCIState()
 	if err != nil {
-		return fmt.Errorf("failed to open host netns file: %w", err)
+		return fmt.Errorf("failed to get container state: %w", err)
 	}
-	state.cleanups.Add("close host netns file", hostFile.Close)
-
-	ctrFile, err := os.OpenFile(ctrNetNSPath, os.O_RDONLY, 0)
-	if err != nil {
-		return fmt.Errorf("failed to open container netns file: %w", err)
+	if state.Name == "" {
+		return fmt.Errorf("container name not found")
 	}
-	state.cleanups.Add("close container netns file", ctrFile.Close)
+	// if ctrMountNSPath == "" {
+	// 	return fmt.Errorf("mount namespace path not found")
+	// }
 
 	ctx, cancel := context.WithCancelCause(ctx)
 	p := pool.New().WithContext(ctx)
 	state.cleanups.Add("stopping namespace workers", p.Wait)
 	state.cleanups.Add("canceling namespace workers", cleanups.Infallible(func() { cancel(fmt.Errorf("cleanup container: %w", context.Canceled)) }))
+
+	hostNetFile, err := os.OpenFile("/proc/self/ns/net", os.O_RDONLY, 0)
+	if err != nil {
+		return fmt.Errorf("failed to open host netns file: %w", err)
+	}
+	state.cleanups.Add("close host netns file", hostNetFile.Close)
+
+	ctrNetFile, err := os.OpenFile(ctrNetNSPath, os.O_RDONLY, 0)
+	if err != nil {
+		return fmt.Errorf("failed to open container netns file: %w", err)
+	}
+	state.cleanups.Add("close container netns file", ctrNetFile.Close)
+
+	// hostMountFile, err := os.OpenFile("/proc/self/ns/mnt", os.O_RDONLY, 0)
+	// if err != nil {
+	// 	return fmt.Errorf("failed to open host netns file: %w", err)
+	// }
+	// state.cleanups.Add("close host netns file", hostMountFile.Close)
+
+	// ctrMountFile, err := os.OpenFile(ctrMountNSPath, os.O_RDONLY, 0)
+	// if err != nil {
+	// 	return fmt.Errorf("failed to open container netns file: %w", err)
+	// }
+	// state.cleanups.Add("close container netns file", ctrMountFile.Close)
 
 	for range workerPoolSize {
 		p.Go(func(ctx context.Context) (rerr error) {
@@ -106,8 +133,12 @@ func (w *Worker) runNetNSWorkers(ctx context.Context, state *execState) error {
 				}
 
 				nsw := &namespaceWorker{namespaces: []*namespaceFiles{{
-					hostFile: hostFile,
-					ctrFile:  ctrFile,
+					// 	hostFile: hostMountFile,
+					// 	ctrFile:  ctrMountFile,
+					// 	setNSArg: unix.CLONE_NEWNS,
+					// }, {
+					hostFile: hostNetFile,
+					ctrFile:  ctrNetFile,
 					setNSArg: unix.CLONE_NEWNET,
 				}}}
 

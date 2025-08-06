@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -20,9 +21,11 @@ import (
 	gwpb "github.com/moby/buildkit/frontend/gateway/pb"
 	"github.com/moby/buildkit/solver/pb"
 	utilsystem "github.com/moby/buildkit/util/system"
+	"github.com/opencontainers/runc/libcontainer"
 	"github.com/sourcegraph/conc/pool"
 	"github.com/vektah/gqlparser/v2/ast"
 	"go.opentelemetry.io/otel/trace"
+	"golang.org/x/sys/unix"
 
 	"dagger.io/dagger/telemetry"
 	"github.com/dagger/dagger/dagql"
@@ -571,11 +574,12 @@ func (svc *Service) startContainer(
 		}
 
 		return &RunningService{
-			Service: svc,
-			Host:    fullHost,
-			Ports:   ctr.Ports,
-			Stop:    stopSvc,
-			Wait:    waitSvc,
+			Service:   svc,
+			Host:      fullHost,
+			Ports:     ctr.Ports,
+			Stop:      stopSvc,
+			Wait:      waitSvc,
+			Container: gc,
 		}, nil
 	case <-exited:
 		if exitErr != nil {
@@ -643,6 +647,50 @@ func (mwc multiWriteCloser) Close() error {
 		errs = errors.Join(errs, wc.Close())
 	}
 	return errs
+}
+
+func (svc *Service) Remount(ctx context.Context, id *call.ID, target string, source *Directory) error {
+	query, err := CurrentQuery(ctx)
+	if err != nil {
+		return err
+	}
+	svcs, err := query.Services(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get services: %w", err)
+	}
+	bk, err := query.Buildkit(ctx)
+	if err != nil {
+		return err
+	}
+	running, err := svcs.Get(ctx, id, true)
+	if err != nil {
+		return fmt.Errorf("failed to get service: %w", err)
+	}
+	if running.Container == nil {
+		return fmt.Errorf("service %s is not running in a container", id.DisplaySelf())
+	}
+	// TODO don't hardcode
+	ctr, err := libcontainer.Load("/var/lib/dagger/worker/executor",
+		running.Container.NamespaceID())
+	if ctrNetNSPath == "" {
+		return fmt.Errorf("network namespace path not found")
+	}
+	ociSt, err := ctr.OCIState()
+	if err != nil {
+		return fmt.Errorf("failed to get container state: %w", err)
+	}
+	if ociSt.Pid {
+		return fmt.Errorf("container name not found")
+	}
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(svc.Container.Config.WorkingDir, target)
+	}
+	_, err = buildkit.RunInNetNS(ctx, bk, running.Container, func() (any, error) {
+		return nil, source.Mount(ctx, func(dirPath string) error {
+			return unix.Mount(dirPath, target, "", unix.MS_BIND|unix.MS_REC, "")
+		})
+	})
+	return err
 }
 
 func (svc *Service) startTunnel(ctx context.Context) (running *RunningService, rerr error) {
