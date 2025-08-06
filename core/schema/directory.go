@@ -354,12 +354,6 @@ func (s *directorySchema) glob(ctx context.Context, parent *core.Directory, args
 	return parent.Glob(ctx, args.Pattern)
 }
 
-type withPatchArgs struct {
-	Patch string
-
-	FSDagOpInternalArgs
-}
-
 type searchArgs struct {
 	core.SearchOpts
 	Paths []string `default:"[]"`
@@ -369,6 +363,12 @@ type searchArgs struct {
 
 func (s *directorySchema) search(ctx context.Context, parent dagql.ObjectResult[*core.Directory], args searchArgs) (dagql.Array[*core.SearchResult], error) {
 	return parent.Self().Search(ctx, args.SearchOpts, args.Paths, args.Globs)
+}
+
+type withPatchArgs struct {
+	Patch string
+
+	FSDagOpInternalArgs
 }
 
 func (s *directorySchema) withPatch(ctx context.Context, parent dagql.ObjectResult[*core.Directory], args withPatchArgs) (inst dagql.ObjectResult[*core.Directory], _ error) {
