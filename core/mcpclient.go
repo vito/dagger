@@ -11,6 +11,7 @@ import (
 	"io"
 
 	"github.com/dagger/dagger/dagql"
+	"github.com/dagger/dagger/dagql/call"
 
 	bkgw "github.com/moby/buildkit/frontend/gateway/client"
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
@@ -19,27 +20,39 @@ import (
 
 type ServiceTransport struct {
 	Service dagql.ObjectResult[*Service]
-	nth     int
+	Env     dagql.ObjectResult[*Env]
 }
 
 var _ mcp.Transport = (*ServiceTransport)(nil)
 
 func (t *ServiceTransport) Connect(ctx context.Context) (mcp.Connection, error) {
 	// Give each connection a distinct service ID.
-	t.nth++
+	svc := t.Service.Self().Clone()
+	if svc.Container == nil {
+		return nil, fmt.Errorf("TODO: only container services are supported, got %s", svc.Type())
+	}
+
+	// TODO: support remounting service directories? should just need RunInMountNS
+
 	id := t.Service.ID().Append(
 		t.Service.Type(),
 		t.Service.ID().Field(),
 		"",
 		t.Service.ID().Module(),
-		t.nth,
+		0,
 		"",
+		call.NewArgument("env", call.NewLiteralID(t.Env.ID()), false),
 	)
+
+	var err error
+	svc.Container, err = svc.Container.WithMountedDirectory(ctx, ".", t.Env.Self().Hostfs.Self(), "", false)
+	if err != nil {
+		return nil, fmt.Errorf("failed to mount hostfs: %w", err)
+	}
 
 	conn := &svcMCPConn{}
 
-	var err error
-	conn.svc, err = t.Service.Self().Start(
+	conn.svc, err = svc.Start(
 		ctx,
 		id,
 		false, // MUST be false, otherwise
