@@ -272,6 +272,7 @@ func (build *Builder) containerMountBinary() *dagger.File {
 		Wolfi().
 		Container(dagger.WolfiContainerOpts{
 			Packages: []string{"build-base"},
+			Arch:     build.platformSpec.Architecture,
 		}).
 		WithWorkdir("/src").
 		WithMountedDirectory(".", build.source).
