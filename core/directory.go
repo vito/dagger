@@ -879,8 +879,6 @@ func (dir *Directory) WithNewDirectory(ctx context.Context, dest string, permiss
 }
 
 func (dir *Directory) Diff(ctx context.Context, other *Directory) (*Directory, error) {
-	dir = dir.Clone()
-
 	thisDirPath := dir.Dir
 	if thisDirPath == "" {
 		thisDirPath = "/"
@@ -893,23 +891,32 @@ func (dir *Directory) Diff(ctx context.Context, other *Directory) (*Directory, e
 		// TODO(vito): work around with llb.Copy shenanigans?
 		return nil, fmt.Errorf("cannot diff with different relative paths: %q != %q", dir.Dir, other.Dir)
 	}
-
-	lowerSt, err := dir.State()
+	dirRef, err := getRefOrEvaluate(ctx, dir)
 	if err != nil {
 		return nil, err
 	}
-
-	upperSt, err := other.State()
+	if dirRef == nil {
+		// base is empty; other is the entire diff
+		return other, nil
+	}
+	otherRef, err := getRefOrEvaluate(ctx, other)
 	if err != nil {
 		return nil, err
 	}
-
-	err = dir.SetState(ctx, llb.Diff(lowerSt, upperSt))
+	query, err := CurrentQuery(ctx)
 	if err != nil {
 		return nil, err
 	}
-
-	return dir, nil
+	diffRef, err := query.BuildkitCache().Diff(ctx, dirRef, otherRef, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to diff directories: %w", err)
+	}
+	diffDir, err := NewScratchDirectory(ctx, query.Platform())
+	if err != nil {
+		return nil, fmt.Errorf("failed to create scratch directory for diff: %w", err)
+	}
+	diffDir.Result = diffRef
+	return diffDir, nil
 }
 
 func (dir *Directory) Without(ctx context.Context, srv *dagql.Server, paths ...string) (*Directory, error) {
@@ -1071,7 +1078,7 @@ func (dir *Directory) Mount(ctx context.Context, f func(string) error) error {
 func validateFileName(file string) error {
 	baseFileName := filepath.Base(file)
 	if len(baseFileName) > 255 {
-		return errors.Errorf("File name length exceeds the maximum supported 255 characters")
+		return errors.New("File name length exceeds the maximum supported 255 characters")
 	}
 	return nil
 }
