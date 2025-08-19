@@ -19,6 +19,7 @@ import (
 	containerdfs "github.com/containerd/continuity/fs"
 	bkcache "github.com/moby/buildkit/cache"
 	bkclient "github.com/moby/buildkit/client"
+	cacheutil "github.com/moby/buildkit/cache/util"
 	"github.com/moby/buildkit/client/llb"
 	bkgw "github.com/moby/buildkit/frontend/gateway/client"
 	"github.com/moby/buildkit/solver/pb"
@@ -442,23 +443,15 @@ func (file *File) Digest(ctx context.Context, excludeMetadata bool) (string, err
 }
 
 func (file *File) Stat(ctx context.Context) (*fstypes.Stat, error) {
-	query, err := CurrentQuery(ctx)
+	ref, err := getRefOrEvaluate(ctx, file)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get single ref: %w", err)
 	}
-	bk, err := query.Buildkit(ctx)
+	mountable, err := ref.Mount(ctx, true, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get buildkit client: %w", err)
+		return nil, fmt.Errorf("failed to get single ref: %w", err)
 	}
-
-	ref, err := bkRef(ctx, bk, file.LLB)
-	if err != nil {
-		return nil, err
-	}
-
-	return ref.StatFile(ctx, bkgw.StatRequest{
-		Path: file.File,
-	})
+	return cacheutil.StatFile(ctx, mountable, file.File)
 }
 
 func (file *File) WithName(ctx context.Context, filename string) (*File, error) {
