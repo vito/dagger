@@ -18,8 +18,8 @@ import (
 
 	containerdfs "github.com/containerd/continuity/fs"
 	bkcache "github.com/moby/buildkit/cache"
-	bkclient "github.com/moby/buildkit/client"
 	cacheutil "github.com/moby/buildkit/cache/util"
+	bkclient "github.com/moby/buildkit/client"
 	"github.com/moby/buildkit/client/llb"
 	bkgw "github.com/moby/buildkit/frontend/gateway/client"
 	"github.com/moby/buildkit/solver/pb"
