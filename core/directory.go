@@ -978,10 +978,7 @@ func (dir *Directory) Diff(ctx context.Context, other *Directory) (*Directory, e
 	if err != nil {
 		return nil, fmt.Errorf("failed to diff directories: %w", err)
 	}
-	diffDir, err := NewScratchDirectory(ctx, query.Platform())
-	if err != nil {
-		return nil, fmt.Errorf("failed to create scratch directory for diff: %w", err)
-	}
+	diffDir := NewDirectory(nil, dir.Dir, dir.Platform, dir.Services)
 	diffDir.Result = diffRef
 	return diffDir, nil
 }
