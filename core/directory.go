@@ -127,7 +127,28 @@ func (dir *Directory) OnRelease(ctx context.Context) error {
 	return nil
 }
 
-func (dir *Directory) State() (llb.State, error) {
+func (dir *Directory) State(ctx context.Context) (llb.State, error) {
+	if dir.Result != nil {
+		return newDagOpLLB(context.TODO(),
+			&ImmutableRefDagOp{
+				Ref: dir.Result.ID(),
+			},
+			call.New().Append(
+				&ast.Type{
+					NamedType: "Directory",
+					NonNull:   true,
+				},
+				"__immutableRef",
+				"",
+				nil,
+				0,
+				"",
+				call.NewArgument("ref", call.NewLiteralString(dir.Result.ID()), false),
+			),
+			nil, // TODO: no inputs? or, use layer chain??
+		)
+	}
+
 	if dir.LLB == nil {
 		return llb.Scratch(), nil
 	}
@@ -135,8 +156,8 @@ func (dir *Directory) State() (llb.State, error) {
 	return defToState(dir.LLB)
 }
 
-func (dir *Directory) StateWithSourcePath() (llb.State, error) {
-	dirSt, err := dir.State()
+func (dir *Directory) StateWithSourcePath(ctx context.Context) (llb.State, error) {
+	dirSt, err := dir.State(ctx)
 	if err != nil {
 		return llb.State{}, err
 	}
@@ -368,7 +389,7 @@ func (dir *Directory) WithNewFile(ctx context.Context, dest string, content []by
 	// be sure to create the file under the working directory
 	dest = path.Join(dir.Dir, dest)
 
-	st, err := dir.State()
+	st, err := dir.State(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1009,7 +1030,7 @@ func (dir *Directory) Export(ctx context.Context, destPath string, merge bool) (
 
 	var defPB *pb.Definition
 	if dir.Dir != "" && dir.Dir != "/" {
-		src, err := dir.State()
+		src, err := dir.State(ctx)
 		if err != nil {
 			return err
 		}

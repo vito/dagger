@@ -27,6 +27,7 @@ import (
 
 func init() {
 	buildkit.RegisterCustomOp(FSDagOp{})
+	buildkit.RegisterCustomOp(ImmutableRefDagOp{})
 	buildkit.RegisterCustomOp(RawDagOp{})
 	buildkit.RegisterCustomOp(ContainerDagOp{})
 }
@@ -170,6 +171,46 @@ func (op FSDagOp) Exec(ctx context.Context, g bksession.Group, inputs []solver.R
 		// shouldn't happen, should have errored in DagLLB already
 		return nil, fmt.Errorf("expected FS to be selected, instead got %T", obj)
 	}
+}
+
+type ImmutableRefDagOp struct {
+	Ref string
+}
+
+func (op ImmutableRefDagOp) Name() string {
+	return "dagop.ref"
+}
+
+func (op ImmutableRefDagOp) Backend() buildkit.CustomOpBackend {
+	return &op
+}
+
+func (op ImmutableRefDagOp) Digest() (digest.Digest, error) {
+	return digest.FromString(strings.Join([]string{
+		engine.BaseVersion(engine.Version),
+		op.Ref,
+	}, "\x00")), nil
+}
+
+func (op ImmutableRefDagOp) CacheMap(ctx context.Context, cm *solver.CacheMap) (*solver.CacheMap, error) {
+	cm.Digest = digest.FromString(strings.Join([]string{
+		engine.BaseVersion(engine.Version),
+		op.Ref,
+	}, "\x00"))
+	return cm, nil
+}
+
+func (op ImmutableRefDagOp) Exec(ctx context.Context, g bksession.Group, inputs []solver.Result, opt buildkit.OpOpts) (outputs []solver.Result, err error) {
+	query, ok := opt.Server.Root().Unwrap().(*Query)
+	if !ok {
+		return nil, fmt.Errorf("server root was %T", opt.Server.Root())
+	}
+	immutable, err := query.BuildkitCache().Get(ctx, op.Ref, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get ref %q: %w", op.Ref, err)
+	}
+	ref := worker.NewWorkerRefResult(immutable.Clone(), opt.Worker)
+	return []solver.Result{ref}, nil
 }
 
 // NewRawDagOp takes a target ID for any JSON-serializable dagql type, and returns
