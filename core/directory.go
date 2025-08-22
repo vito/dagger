@@ -93,39 +93,7 @@ func (dir *Directory) PBDefinitions(ctx context.Context) ([]*pb.Definition, erro
 }
 
 func (dir *Directory) LLB(ctx context.Context) (*pb.Definition, error) {
-	if dir.RawLLB != nil {
-		return dir.RawLLB, nil
-	}
-	if dir.Result != nil {
-		op, err := newDagOpLLB(ctx,
-			&ImmutableRefDagOp{
-				Ref: dir.Result.ID(),
-			},
-			call.New().Append(
-				&ast.Type{
-					NamedType: "Directory",
-					NonNull:   true,
-				},
-				"__immutableRef",
-				"",
-				nil,
-				0,
-				"",
-				// NB: doesnt actually matter
-				call.NewArgument("ref", call.NewLiteralString(dir.Result.ID()), false),
-			),
-			nil, // TODO: no inputs? or, use layer chain??
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create file LLB: %w", err)
-		}
-		def, err := op.Marshal(ctx, llb.Platform(dir.Platform.Spec()))
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal file LLB: %w", err)
-		}
-		return def.ToPB(), nil
-	}
-	return nil, nil
+	return toDef(ctx, dir.RawLLB, dir.Result, dir.Platform)
 }
 
 func NewDirectory(def *pb.Definition, dir string, platform Platform, services ServiceBindings) *Directory {

@@ -13,6 +13,7 @@ import (
 	"github.com/dagger/dagger/dagql/call"
 	"github.com/dagger/dagger/engine"
 	"github.com/dagger/dagger/engine/buildkit"
+	"github.com/dagger/dagger/engine/slog"
 	bkcache "github.com/moby/buildkit/cache"
 	"github.com/moby/buildkit/client"
 	"github.com/moby/buildkit/client/llb"
@@ -201,6 +202,7 @@ func (op ImmutableRefDagOp) CacheMap(ctx context.Context, cm *solver.CacheMap) (
 }
 
 func (op ImmutableRefDagOp) Exec(ctx context.Context, g bksession.Group, inputs []solver.Result, opt buildkit.OpOpts) (outputs []solver.Result, err error) {
+	slog.Warn("!!! IMMUTABLE REF DAG OP EXEC", "ref", op.Ref)
 	query, ok := opt.Server.Root().Unwrap().(*Query)
 	if !ok {
 		return nil, fmt.Errorf("server root was %T", opt.Server.Root())

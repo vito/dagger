@@ -25,7 +25,6 @@ import (
 	"dagger.io/dagger/telemetry"
 	"github.com/dagger/dagger/core/reffs"
 	"github.com/dagger/dagger/dagql"
-	"github.com/dagger/dagger/dagql/call"
 	"github.com/dagger/dagger/engine/buildkit"
 )
 
@@ -41,42 +40,6 @@ type File struct {
 	Services ServiceBindings
 }
 
-func (file *File) LLB(ctx context.Context) (*pb.Definition, error) {
-	if file.RawLLB != nil {
-		return file.RawLLB, nil
-	}
-	if file.Result != nil {
-		op, err := newDagOpLLB(ctx,
-			&ImmutableRefDagOp{
-				Ref: file.Result.ID(),
-			},
-			call.New().Append(
-				&ast.Type{
-					NamedType: "Directory",
-					NonNull:   true,
-				},
-				"__immutableRef",
-				"",
-				nil,
-				0,
-				"",
-				// NB: doesnt actually matter
-				call.NewArgument("ref", call.NewLiteralString(file.Result.ID()), false),
-			),
-			nil, // TODO: no inputs? or, use layer chain??
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create file LLB: %w", err)
-		}
-		def, err := op.Marshal(ctx, llb.Platform(file.Platform.Spec()))
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal file LLB: %w", err)
-		}
-		return def.ToPB(), nil
-	}
-	return nil, nil
-}
-
 func (*File) Type() *ast.Type {
 	return &ast.Type{
 		NamedType: "File",
@@ -88,25 +51,29 @@ func (*File) TypeDescription() string {
 	return "A file."
 }
 
-func (dir *File) getResult() bkcache.ImmutableRef {
-	return dir.Result
+func (file *File) getResult() bkcache.ImmutableRef {
+	return file.Result
 }
-func (dir *File) setResult(ref bkcache.ImmutableRef) {
-	dir.Result = ref
+func (file *File) setResult(ref bkcache.ImmutableRef) {
+	file.Result = ref
+}
+
+func (file *File) LLB(ctx context.Context) (*pb.Definition, error) {
+	return toDef(ctx, file.RawLLB, file.Result, file.Platform)
 }
 
 var _ HasPBDefinitions = (*File)(nil)
 
-func (dir *File) PBDefinitions(ctx context.Context) ([]*pb.Definition, error) {
+func (file *File) PBDefinitions(ctx context.Context) ([]*pb.Definition, error) {
 	var defs []*pb.Definition
-	def, err := dir.LLB(ctx)
+	def, err := file.LLB(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get file LLB: %w", err)
 	}
 	if def != nil {
 		defs = append(defs, def)
 	}
-	for _, bnd := range dir.Services {
+	for _, bnd := range file.Services {
 		ctr := bnd.Service.Self().Container
 		if ctr == nil {
 			continue
@@ -122,9 +89,9 @@ func (dir *File) PBDefinitions(ctx context.Context) ([]*pb.Definition, error) {
 
 var _ dagql.OnReleaser = (*File)(nil)
 
-func (dir *File) OnRelease(ctx context.Context) error {
-	if dir.Result != nil {
-		return dir.Result.Release(ctx)
+func (file *File) OnRelease(ctx context.Context) error {
+	if file.Result != nil {
+		return file.Result.Release(ctx)
 	}
 	return nil
 }
@@ -171,26 +138,26 @@ func NewFileSt(ctx context.Context, st llb.State, file string, platform Platform
 
 // Clone returns a deep copy of the container suitable for modifying in a
 // WithXXX method.
-func (dir *File) Clone() *File {
-	cp := *dir
+func (file *File) Clone() *File {
+	cp := *file
 	cp.Services = slices.Clone(cp.Services)
 	return &cp
 }
 
-func (dir *File) State(ctx context.Context) (llb.State, error) {
-	def, err := dir.LLB(ctx)
+func (file *File) State(ctx context.Context) (llb.State, error) {
+	def, err := file.LLB(ctx)
 	if err != nil {
 		return llb.State{}, fmt.Errorf("failed to get file LLB: %w", err)
 	}
 	return defToState(def)
 }
 
-func (dir *File) Evaluate(ctx context.Context) (*buildkit.Result, error) {
+func (file *File) Evaluate(ctx context.Context) (*buildkit.Result, error) {
 	query, err := CurrentQuery(ctx)
 	if err != nil {
 		return nil, err
 	}
-	llb, err := dir.LLB(ctx)
+	llb, err := file.LLB(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get file LLB: %w", err)
 	}
@@ -206,7 +173,7 @@ func (dir *File) Evaluate(ctx context.Context) (*buildkit.Result, error) {
 }
 
 // Contents handles file content retrieval
-func (dir *File) Contents(ctx context.Context) ([]byte, error) {
+func (file *File) Contents(ctx context.Context) ([]byte, error) {
 	query, err := CurrentQuery(ctx)
 	if err != nil {
 		return nil, err
@@ -216,11 +183,11 @@ func (dir *File) Contents(ctx context.Context) ([]byte, error) {
 		return nil, fmt.Errorf("failed to get buildkit client: %w", err)
 	}
 
-	llbSt, err := dir.State(ctx)
+	llbSt, err := file.State(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get file state: %w", err)
 	}
-	def, err := llbSt.Marshal(ctx, llb.Platform(dir.Platform.Spec()))
+	def, err := llbSt.Marshal(ctx, llb.Platform(file.Platform.Spec()))
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal file state: %w", err)
 	}
@@ -230,7 +197,7 @@ func (dir *File) Contents(ctx context.Context) ([]byte, error) {
 	}
 
 	// Stat the file and preallocate file contents buffer:
-	st, err := dir.Stat(ctx)
+	st, err := file.Stat(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -250,7 +217,7 @@ func (dir *File) Contents(ctx context.Context) ([]byte, error) {
 	var offset int
 	for offset < fileSize {
 		chunk, err := ref.ReadFile(ctx, bkgw.ReadRequest{
-			Filename: dir.File,
+			Filename: file.File,
 			Range: &bkgw.FileRange{
 				Offset: offset,
 				Length: buildkit.MaxFileContentsChunkSize,
@@ -267,15 +234,15 @@ func (dir *File) Contents(ctx context.Context) ([]byte, error) {
 	return contents, nil
 }
 
-func (dir *File) Digest(ctx context.Context, excludeMetadata bool) (string, error) {
+func (file *File) Digest(ctx context.Context, excludeMetadata bool) (string, error) {
 	// If metadata are included, directly compute the digest of the file
 	if !excludeMetadata {
-		result, err := dir.Evaluate(ctx)
+		result, err := file.Evaluate(ctx)
 		if err != nil {
 			return "", fmt.Errorf("failed to evaluate file: %w", err)
 		}
 
-		digest, err := result.Ref.Digest(ctx, dir.File)
+		digest, err := result.Ref.Digest(ctx, file.File)
 		if err != nil {
 			return "", fmt.Errorf("failed to compute digest: %w", err)
 		}
@@ -284,7 +251,7 @@ func (dir *File) Digest(ctx context.Context, excludeMetadata bool) (string, erro
 	}
 
 	// If metadata are excluded, compute the digest of the file from its content.
-	reader, err := dir.Open(ctx)
+	reader, err := file.Open(ctx)
 	if err != nil {
 		return "", fmt.Errorf("failed to open file to compute digest: %w", err)
 	}
@@ -299,8 +266,8 @@ func (dir *File) Digest(ctx context.Context, excludeMetadata bool) (string, erro
 	return digest.FromBytes(h.Sum(nil)).String(), nil
 }
 
-func (dir *File) Stat(ctx context.Context) (*fstypes.Stat, error) {
-	ref, err := getRefOrEvaluate(ctx, dir)
+func (file *File) Stat(ctx context.Context) (*fstypes.Stat, error) {
+	ref, err := getRefOrEvaluate(ctx, file)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get single ref: %w", err)
 	}
@@ -308,36 +275,36 @@ func (dir *File) Stat(ctx context.Context) (*fstypes.Stat, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to get single ref: %w", err)
 	}
-	return cacheutil.StatFile(ctx, mountable, dir.File)
+	return cacheutil.StatFile(ctx, mountable, file.File)
 }
 
-func (dir *File) WithName(ctx context.Context, filename string) (*File, error) {
+func (file *File) WithName(ctx context.Context, filename string) (*File, error) {
 	// Clone the file
-	dir = dir.Clone()
+	file = file.Clone()
 
-	st, err := dir.State(ctx)
+	st, err := file.State(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	// Create a new file with the new name
-	newFile := llb.Scratch().File(llb.Copy(st, dir.File, path.Base(filename)))
+	newFile := llb.Scratch().File(llb.Copy(st, file.File, path.Base(filename)))
 
-	def, err := newFile.Marshal(ctx, llb.Platform(dir.Platform.Spec()))
+	def, err := newFile.Marshal(ctx, llb.Platform(file.Platform.Spec()))
 	if err != nil {
 		return nil, err
 	}
 
-	dir.RawLLB = def.ToPB()
-	dir.File = path.Base(filename)
+	file.RawLLB = def.ToPB()
+	file.File = path.Base(filename)
 
-	return dir, nil
+	return file, nil
 }
 
-func (dir *File) WithTimestamps(ctx context.Context, unix int) (*File, error) {
-	dir = dir.Clone()
-	return execInMount(ctx, dir, func(root string) error {
-		fullPath, err := RootPathWithoutFinalSymlink(root, dir.File)
+func (file *File) WithTimestamps(ctx context.Context, unix int) (*File, error) {
+	file = file.Clone()
+	return execInMount(ctx, file, func(root string) error {
+		fullPath, err := RootPathWithoutFinalSymlink(root, file.File)
 		if err != nil {
 			return err
 		}
@@ -350,7 +317,7 @@ func (dir *File) WithTimestamps(ctx context.Context, unix int) (*File, error) {
 	}, withSavedSnapshot("withTimestamps %d", unix))
 }
 
-func (dir *File) Open(ctx context.Context) (io.ReadCloser, error) {
+func (file *File) Open(ctx context.Context) (io.ReadCloser, error) {
 	query, err := CurrentQuery(ctx)
 	if err != nil {
 		return nil, err
@@ -360,7 +327,7 @@ func (dir *File) Open(ctx context.Context) (io.ReadCloser, error) {
 		return nil, fmt.Errorf("failed to get buildkit client: %w", err)
 	}
 
-	def, err := dir.LLB(ctx)
+	def, err := file.LLB(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get file LLB: %w", err)
 	}
@@ -369,10 +336,10 @@ func (dir *File) Open(ctx context.Context) (io.ReadCloser, error) {
 		return nil, err
 	}
 
-	return fs.Open(dir.File)
+	return fs.Open(file.File)
 }
 
-func (dir *File) Export(ctx context.Context, dest string, allowParentDirPath bool) (rerr error) {
+func (file *File) Export(ctx context.Context, dest string, allowParentDirPath bool) (rerr error) {
 	query, err := CurrentQuery(ctx)
 	if err != nil {
 		return err
@@ -382,28 +349,28 @@ func (dir *File) Export(ctx context.Context, dest string, allowParentDirPath boo
 		return fmt.Errorf("failed to get buildkit client: %w", err)
 	}
 
-	src, err := dir.State(ctx)
+	src, err := file.State(ctx)
 	if err != nil {
 		return err
 	}
-	def, err := src.Marshal(ctx, llb.Platform(dir.Platform.Spec()))
+	def, err := src.Marshal(ctx, llb.Platform(file.Platform.Spec()))
 	if err != nil {
 		return err
 	}
 
-	ctx, vtx := Tracer(ctx).Start(ctx, fmt.Sprintf("export file %s to host %s", dir.File, dest))
+	ctx, vtx := Tracer(ctx).Start(ctx, fmt.Sprintf("export file %s to host %s", file.File, dest))
 	defer telemetry.End(vtx, func() error { return rerr })
 
-	return bk.LocalFileExport(ctx, def.ToPB(), dest, dir.File, allowParentDirPath)
+	return bk.LocalFileExport(ctx, def.ToPB(), dest, file.File, allowParentDirPath)
 }
 
-func (dir *File) Mount(ctx context.Context, f func(string) error) error {
-	def, err := dir.LLB(ctx)
+func (file *File) Mount(ctx context.Context, f func(string) error) error {
+	def, err := file.LLB(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get file LLB: %w", err)
 	}
 	return mountLLB(ctx, def, func(root string) error {
-		src, err := containerdfs.RootPath(root, dir.File)
+		src, err := containerdfs.RootPath(root, file.File)
 		if err != nil {
 			return err
 		}
