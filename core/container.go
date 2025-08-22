@@ -985,7 +985,7 @@ func (container *Container) WithoutSecretVariable(ctx context.Context, name stri
 }
 
 func (container *Container) Directory(ctx context.Context, dirPath string) (*Directory, error) {
-	dir, _, err := locatePath(container, dirPath, NewDirectory)
+	dir, _, err := locatePath(ctx, container, dirPath, NewDirectory)
 	if err != nil {
 		return nil, err
 	}
@@ -1014,7 +1014,7 @@ func (container *Container) Directory(ctx context.Context, dirPath string) (*Dir
 }
 
 func (container *Container) File(ctx context.Context, filePath string) (*File, error) {
-	file, _, err := locatePath(container, filePath, NewFile)
+	file, _, err := locatePath(ctx, container, filePath, NewFile)
 	if err != nil {
 		return nil, err
 	}
@@ -1034,6 +1034,7 @@ func (container *Container) File(ctx context.Context, filePath string) (*File, e
 }
 
 func locatePath[T *File | *Directory](
+	ctx context.Context,
 	container *Container,
 	containerPath string,
 	init func(*pb.Definition, string, Platform, ServiceBindings) T,
@@ -1062,8 +1063,12 @@ func locatePath[T *File | *Directory](
 				}
 			}
 
+			def, err := toDef(ctx, mnt.Source, mnt.Result, container.Platform)
+			if err != nil {
+				return nil, nil, fmt.Errorf("failed to get mount definition: %w", err)
+			}
 			return init(
-				mnt.Source,
+				def,
 				sub,
 				container.Platform,
 				container.Services,
@@ -1071,9 +1076,12 @@ func locatePath[T *File | *Directory](
 		}
 	}
 
-	// Not found in a mount
+	def, err := toDef(ctx, container.FS, container.FSResult, container.Platform)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to get root filesystem definition: %w", err)
+	}
 	return init(
-		container.FS,
+		def,
 		containerPath,
 		container.Platform,
 		container.Services,
@@ -1236,7 +1244,7 @@ func (container *Container) chown(
 }
 
 func (container *Container) writeToPath(ctx context.Context, subdir string, fn func(dir *Directory) (*Directory, error)) (*Container, error) {
-	dir, mount, err := locatePath(container, subdir, NewDirectory)
+	dir, mount, err := locatePath(ctx, container, subdir, NewDirectory)
 	if err != nil {
 		return nil, err
 	}
@@ -1269,8 +1277,8 @@ func (container *Container) writeToPath(ctx context.Context, subdir string, fn f
 	return container.replaceMount(ctx, mount.Target, def, dir.Result, mount.SourcePath, "", false)
 }
 
-func (container *Container) runUnderPath(subdir string, fn func(dir *Directory) error) error {
-	dir, _, err := locatePath(container, subdir, NewDirectory)
+func (container *Container) runUnderPath(ctx context.Context, subdir string, fn func(dir *Directory) error) error {
+	dir, _, err := locatePath(ctx, container, subdir, NewDirectory)
 	if err != nil {
 		return err
 	}
@@ -1333,7 +1341,7 @@ func (container *Container) Evaluate(ctx context.Context) (*buildkit.Result, err
 func (container *Container) Exists(ctx context.Context, srv *dagql.Server, targetPath string, targetType ExistsType, doNotFollowSymlinks bool) (bool, error) {
 	dir, targetPath := filepath.Split(filepath.Clean(targetPath))
 	exists := false
-	err := container.runUnderPath(dir, func(dir *Directory) error {
+	err := container.runUnderPath(ctx, dir, func(dir *Directory) error {
 		var err error
 		exists, err = dir.Exists(ctx, srv, targetPath, targetType, doNotFollowSymlinks)
 		return err

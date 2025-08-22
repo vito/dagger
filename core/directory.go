@@ -91,39 +91,7 @@ func (dir *Directory) PBDefinitions(ctx context.Context) ([]*pb.Definition, erro
 }
 
 func (dir *Directory) LLB(ctx context.Context) (*pb.Definition, error) {
-	if dir.RawLLB != nil {
-		return dir.RawLLB, nil
-	}
-	if dir.Result != nil {
-		op, err := newDagOpLLB(ctx,
-			&ImmutableRefDagOp{
-				Ref: dir.Result.ID(),
-			},
-			call.New().Append(
-				&ast.Type{
-					NamedType: "Directory",
-					NonNull:   true,
-				},
-				"__immutableRef",
-				"",
-				nil,
-				0,
-				"",
-				// NB: doesnt actually matter
-				call.NewArgument("ref", call.NewLiteralString(dir.Result.ID()), false),
-			),
-			nil, // TODO: no inputs? or, use layer chain??
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create file LLB: %w", err)
-		}
-		def, err := op.Marshal(ctx, llb.Platform(dir.Platform.Spec()))
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal file LLB: %w", err)
-		}
-		return def.ToPB(), nil
-	}
-	return nil, nil
+	return toDef(ctx, dir.RawLLB, dir.Result, dir.Platform)
 }
 
 func NewDirectory(def *pb.Definition, dir string, platform Platform, services ServiceBindings) *Directory {
@@ -249,8 +217,12 @@ func (dir *Directory) Digest(ctx context.Context) (string, error) {
 func (dir *Directory) Stat(ctx context.Context, bk *buildkit.Client, src string) (*fstypes.Stat, error) {
 	src = path.Join(dir.Dir, src)
 
+	def, err := dir.LLB(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get directory LLB: %w", err)
+	}
 	res, err := bk.Solve(ctx, bkgw.SolveRequest{
-		Definition: dir.LLB,
+		Definition: def,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to solve: %w", err)
@@ -639,12 +611,12 @@ type CopyFilter struct {
 func (dir *Directory) WithDirectory(ctx context.Context, destDir string, src *Directory, filter CopyFilter, owner *Ownership) (*Directory, error) {
 	dir = dir.Clone()
 
-	destSt, err := dir.State()
+	destSt, err := dir.State(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	srcSt, err := src.State()
+	srcSt, err := src.State(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -957,12 +929,12 @@ func (dir *Directory) Diff(ctx context.Context, other *Directory) (*Directory, e
 		return nil, fmt.Errorf("cannot diff with different relative paths: %q != %q", dir.Dir, other.Dir)
 	}
 
-	lowerSt, err := dir.State()
+	lowerSt, err := dir.State(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	upperSt, err := other.State()
+	upperSt, err := other.State(ctx)
 	if err != nil {
 		return nil, err
 	}
