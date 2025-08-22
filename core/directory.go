@@ -39,7 +39,7 @@ import (
 
 // Directory is a content-addressed directory.
 type Directory struct {
-	LLB    *pb.Definition
+	RawLLB *pb.Definition
 	Result bkcache.ImmutableRef // only valid when returned by dagop
 
 	Dir      string
@@ -71,8 +71,12 @@ var _ HasPBDefinitions = (*Directory)(nil)
 
 func (dir *Directory) PBDefinitions(ctx context.Context) ([]*pb.Definition, error) {
 	var defs []*pb.Definition
-	if dir.LLB != nil {
-		defs = append(defs, dir.LLB)
+	def, err := dir.LLB(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get directory LLB: %w", err)
+	}
+	if def != nil {
+		defs = append(defs, def)
 	}
 	for _, bnd := range dir.Services {
 		ctr := bnd.Service.Self().Container
@@ -88,9 +92,45 @@ func (dir *Directory) PBDefinitions(ctx context.Context) ([]*pb.Definition, erro
 	return defs, nil
 }
 
+func (dir *Directory) LLB(ctx context.Context) (*pb.Definition, error) {
+	if dir.RawLLB != nil {
+		return dir.RawLLB, nil
+	}
+	if dir.Result != nil {
+		op, err := newDagOpLLB(ctx,
+			&ImmutableRefDagOp{
+				Ref: dir.Result.ID(),
+			},
+			call.New().Append(
+				&ast.Type{
+					NamedType: "Directory",
+					NonNull:   true,
+				},
+				"__immutableRef",
+				"",
+				nil,
+				0,
+				"",
+				// NB: doesnt actually matter
+				call.NewArgument("ref", call.NewLiteralString(dir.Result.ID()), false),
+			),
+			nil, // TODO: no inputs? or, use layer chain??
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create file LLB: %w", err)
+		}
+		def, err := op.Marshal(ctx, llb.Platform(dir.Platform.Spec()))
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal file LLB: %w", err)
+		}
+		return def.ToPB(), nil
+	}
+	return nil, nil
+}
+
 func NewDirectory(def *pb.Definition, dir string, platform Platform, services ServiceBindings) *Directory {
 	return &Directory{
-		LLB:      def,
+		RawLLB:   def,
 		Dir:      dir,
 		Platform: platform,
 		Services: services,
@@ -128,32 +168,14 @@ func (dir *Directory) OnRelease(ctx context.Context) error {
 }
 
 func (dir *Directory) State(ctx context.Context) (llb.State, error) {
-	if dir.Result != nil {
-		return newDagOpLLB(context.TODO(),
-			&ImmutableRefDagOp{
-				Ref: dir.Result.ID(),
-			},
-			call.New().Append(
-				&ast.Type{
-					NamedType: "Directory",
-					NonNull:   true,
-				},
-				"__immutableRef",
-				"",
-				nil,
-				0,
-				"",
-				call.NewArgument("ref", call.NewLiteralString(dir.Result.ID()), false),
-			),
-			nil, // TODO: no inputs? or, use layer chain??
-		)
+	def, err := dir.LLB(ctx)
+	if err != nil {
+		return llb.State{}, fmt.Errorf("failed to get directory LLB: %w", err)
 	}
-
-	if dir.LLB == nil {
+	if def == nil {
 		return llb.Scratch(), nil
 	}
-
-	return defToState(dir.LLB)
+	return defToState(def)
 }
 
 func (dir *Directory) StateWithSourcePath(ctx context.Context) (llb.State, error) {
@@ -183,15 +205,18 @@ func (dir *Directory) SetState(ctx context.Context, st llb.State) error {
 		return err
 	}
 
-	dir.LLB = def.ToPB()
+	dir.RawLLB = def.ToPB()
 	return nil
 }
 
 func (dir *Directory) Evaluate(ctx context.Context) (*buildkit.Result, error) {
-	if dir.LLB == nil {
+	def, err := dir.LLB(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get directory LLB: %w", err)
+	}
+	if def == nil {
 		return nil, nil
 	}
-
 	query, err := CurrentQuery(ctx)
 	if err != nil {
 		return nil, err
@@ -200,10 +225,9 @@ func (dir *Directory) Evaluate(ctx context.Context) (*buildkit.Result, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to get buildkit client: %w", err)
 	}
-
 	return bk.Solve(ctx, bkgw.SolveRequest{
 		Evaluate:   true,
-		Definition: dir.LLB,
+		Definition: def,
 	})
 }
 
@@ -583,7 +607,7 @@ func (dir *Directory) File(ctx context.Context, file string) (*File, error) {
 	}
 
 	return &File{
-		LLB:      dir.LLB,
+		RawLLB:   dir.RawLLB,
 		Result:   dir.Result,
 		File:     path.Join(dir.Dir, file),
 		Platform: dir.Platform,
@@ -1044,7 +1068,10 @@ func (dir *Directory) Export(ctx context.Context, destPath string, merge bool) (
 		}
 		defPB = def.ToPB()
 	} else {
-		defPB = dir.LLB
+		defPB, err = dir.LLB(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to get directory LLB: %w", err)
+		}
 	}
 
 	ctx, span := Tracer(ctx).Start(ctx, fmt.Sprintf("export directory %s to host %s", dir.Dir, destPath))
@@ -1079,7 +1106,11 @@ func (dir *Directory) WithSymlink(ctx context.Context, srv *dagql.Server, target
 }
 
 func (dir *Directory) Mount(ctx context.Context, f func(string) error) error {
-	return mountLLB(ctx, dir.LLB, func(root string) error {
+	def, err := dir.LLB(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get directory LLB: %w", err)
+	}
+	return mountLLB(ctx, def, func(root string) error {
 		src, err := containerdfs.RootPath(root, dir.Dir)
 		if err != nil {
 			return err
