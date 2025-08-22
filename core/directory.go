@@ -223,6 +223,9 @@ func (dir *Directory) Stat(ctx context.Context, bk *buildkit.Client, src string)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get single ref: %w", err)
 	}
+	if ref == nil {
+		return nil, fmt.Errorf("cannot stat file in empty directory")
+	}
 	mountable, err := ref.Mount(ctx, true, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get single ref: %w", err)
