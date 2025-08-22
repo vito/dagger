@@ -632,6 +632,7 @@ func (container *Container) Build(
 func (container *Container) RootFS(ctx context.Context) (*Directory, error) {
 	return &Directory{
 		LLB:      container.FS,
+		Result:   container.FSResult, // TODO: test?
 		Dir:      "/",
 		Platform: container.Platform,
 		Services: container.Services,
@@ -644,7 +645,7 @@ func (container *Container) WithRootFS(ctx context.Context, dir *Directory) (*Co
 	if dir.Result != nil {
 		container.FSResult = dir.Result
 	} else {
-		dirSt, err := dir.StateWithSourcePath()
+		dirSt, err := dir.StateWithSourcePath(ctx)
 		if err != nil {
 			return nil, err
 		}
