@@ -521,9 +521,17 @@ func (container *Container) Build(
 		opts["build-arg:"+buildArg.Name] = buildArg.Value
 	}
 
+	contextDef, err := contextDir.LLB(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get LLB for context directory: %w", err)
+	}
+	dockerfileDef, err := dockerfileDir.LLB(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get LLB for dockerfile directory: %w", err)
+	}
 	inputs := map[string]*pb.Definition{
-		dockerui.DefaultLocalNameContext:    contextDir.LLB,
-		dockerui.DefaultLocalNameDockerfile: dockerfileDir.LLB,
+		dockerui.DefaultLocalNameContext:    contextDef,
+		dockerui.DefaultLocalNameDockerfile: dockerfileDef,
 	}
 
 	// FIXME: this is a terrible way to pass this around
@@ -631,7 +639,7 @@ func (container *Container) Build(
 
 func (container *Container) RootFS(ctx context.Context) (*Directory, error) {
 	return &Directory{
-		LLB:      container.FS,
+		RawLLB:   container.FS,
 		Result:   container.FSResult, // TODO: test?
 		Dir:      "/",
 		Platform: container.Platform,
@@ -743,14 +751,20 @@ func (container *Container) WithSymlink(ctx context.Context, srv *dagql.Server, 
 
 func (container *Container) WithMountedDirectory(ctx context.Context, target string, dir *Directory, owner string, readonly bool) (*Container, error) {
 	container = container.Clone()
-
-	return container.withMounted(ctx, target, dir.LLB, dir.Result, dir.Dir, owner, readonly)
+	def, err := dir.LLB(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get LLB for directory: %w", err)
+	}
+	return container.withMounted(ctx, target, def, dir.Result, dir.Dir, owner, readonly)
 }
 
 func (container *Container) WithMountedFile(ctx context.Context, target string, file *File, owner string, readonly bool) (*Container, error) {
 	container = container.Clone()
-
-	return container.withMounted(ctx, target, file.LLB, file.Result, file.File, owner, readonly)
+	def, err := file.LLB(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return container.withMounted(ctx, target, def, file.Result, file.File, owner, readonly)
 }
 
 var SeenCacheKeys = new(sync.Map)
@@ -771,7 +785,11 @@ func (container *Container) WithMountedCache(ctx context.Context, target string,
 	}
 
 	if source != nil {
-		mount.Source = source.LLB
+		def, err := source.LLB(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get LLB for source directory: %w", err)
+		}
+		mount.Source = def
 		mount.SourcePath = source.Dir
 	}
 
@@ -1244,7 +1262,11 @@ func (container *Container) writeToPath(ctx context.Context, subdir string, fn f
 		return container.WithRootFS(ctx, root)
 	}
 
-	return container.replaceMount(ctx, mount.Target, dir.LLB, dir.Result, mount.SourcePath, "", false)
+	def, err := dir.LLB(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get LLB for directory %s: %w", subdir, err)
+	}
+	return container.replaceMount(ctx, mount.Target, def, dir.Result, mount.SourcePath, "", false)
 }
 
 func (container *Container) runUnderPath(subdir string, fn func(dir *Directory) error) error {
