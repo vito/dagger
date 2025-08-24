@@ -105,7 +105,7 @@ func newFSDagOp[T dagql.Typed](
 		return llb.State{}, fmt.Errorf("expected %s to be selected, instead got %s", requiredType, dagop.ID.Type().NamedType())
 	}
 
-	return newDagOpLLB(ctx, dagop, dagop.ID, inputs)
+	return newDagOpLLB(ctx, dagop, dagop.ID.Name(), inputs)
 }
 
 type FSDagOp struct {
@@ -261,7 +261,7 @@ func NewRawDagOp[T dagql.Typed](
 		return t, fmt.Errorf("dagop filename is empty")
 	}
 
-	st, err := newDagOpLLB(ctx, dagop, dagop.ID, inputs)
+	st, err := newDagOpLLB(ctx, dagop, dagop.ID.Name(), inputs)
 	if err != nil {
 		return t, err
 	}
@@ -452,7 +452,7 @@ func newContainerDagOp(
 		return llb.State{}, fmt.Errorf("expected %s to be selected, instead got %s", requiredType, dagop.ID.Type().NamedType())
 	}
 
-	return newDagOpLLB(ctx, dagop, dagop.ID, inputs)
+	return newDagOpLLB(ctx, dagop, dagop.ID.Name(), inputs)
 }
 
 type ContainerDagOp struct {
@@ -863,9 +863,9 @@ func extractContainerBkOutputs(ctx context.Context, container *Container, bk *bu
 	return outputs, nil
 }
 
-func newDagOpLLB(ctx context.Context, dagOp buildkit.CustomOp, id *call.ID, inputs []llb.State) (llb.State, error) {
+func newDagOpLLB(ctx context.Context, dagOp buildkit.CustomOp, name string, inputs []llb.State) (llb.State, error) {
 	return buildkit.NewCustomLLB(ctx, dagOp, inputs,
-		llb.WithCustomNamef("%s %s", dagOp.Name(), id.Name()),
+		llb.WithCustomNamef("%s %s", dagOp.Name(), name),
 		buildkit.WithTracePropagation(ctx),
 		buildkit.WithPassthrough(),
 	)
