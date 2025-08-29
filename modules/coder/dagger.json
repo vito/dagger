@@ -1,0 +1,22 @@
+{
+  "name": "coder",
+  "engineVersion": "v0.18.17-250827095732-fb9647481e00",
+  "sdk": {
+    "source": "github.com/vito/dang/dagger-sdk"
+  },
+  "dependencies": [
+    {
+      "name": "dagger-engine",
+      "source": "../../cmd/engine"
+    },
+    {
+      "name": "doug",
+      "source": "../doug"
+    },
+    {
+      "name": "go",
+      "source": "github.com/sagikazarmark/daggerverse/go",
+      "pin": "ceffda4aebd349a24fc00e591b4ed9b801535b65"
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "name": "doug",
+  "engineVersion": "v0.18.17-250826171542-7fdd8f23c5c3",
+  "sdk": {
+    "source": "go"
+  },
+  "dependencies": [
+    {
+      "name": "wolfi",
+      "source": "../wolfi"
+    }
+  ]
+}

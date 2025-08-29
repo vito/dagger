@@ -1,0 +1,107 @@
+type Coder {
+  """
+  The source directory for the Dang project.
+  """
+  pub source: Directory! @defaultPath(
+    path: "/",
+    ignore: [
+      "bin",
+	    "**/node_modules",
+	    "**/.venv",
+	    "**/__pycache__",
+	    "docs/node_modules",
+	    "sdk/typescript/node_modules",
+	    "sdk/typescript/dist",
+	    "sdk/rust/examples/backend/target",
+	    "sdk/rust/target"
+    ]
+  )
+
+  """
+  Return a compiled Dagger CLI (frontend) binary.
+  """
+  pub daggerBinary: File! {
+    goBase.build(pkg: "./cmd/dagger")
+  }
+
+  """
+  Return a compiled Dagger engine (backend) binary.
+  """
+  pub engineBinary: File! {
+    goBase.build(pkg: "./cmd/engine")
+  }
+
+  """
+  Build the Dang binary to ./bin/dang.
+  """
+  pub build: Env! {
+    currentEnv.withHostfs(
+      source.
+        withFile("bin/dagger", daggerBinary).
+        withFile("bin/engine", engineBinary)
+    )
+  }
+
+  """
+  Run an integration test suite (e.g. Directory, Container).
+  """
+  pub test(suite: String!, filter: String! = ""): Void {
+    let engine = daggerEngine(source).
+      container(version: "test", tag: "test").
+      withExposedPort(1234).
+      withMountedCache("/var/lib/dagger", cacheVolume("coder-engine-state")).
+      withMountedCache("/run", cacheVolume("coder-engine-run")).
+      withEnvVariable("_DAGGER_ENGINE_SYSTEMENV_GODEBUG", "goindex=0").
+      asService(
+        args: [
+          "--addr", "unix:///run/dagger-engine.sock",
+  				"--addr", "tcp://0.0.0.0:1234",
+  				"--network-name", "dagger-dev",
+  				"--network-cidr", "10.88.0.0/16",
+  				"--debugaddr", "0.0.0.0:6060",
+        ]
+        useEntrypoint: true
+        insecureRootCapabilities: true
+      )
+
+    let cliBinPath = "/.dagger-cli"
+
+    goBase.container.
+      withMountedFile(cliBinPath, daggerBinary).
+      withEnvVariable("_EXPERIMENTAL_DAGGER_CLI_BIN", cliBinPath).
+      withServiceBinding("dagger-engine", engine).
+  		withEnvVariable("_EXPERIMENTAL_DAGGER_RUNNER_HOST", engine.endpoint(scheme: "tcp")).
+      withExec(
+        args: ["go", "test", "-run", suite + "/" + filter, "./core/integration"]
+      ).
+      sync
+
+    # explicitly stop the engine so we don't leave it running for subsequent
+    # test runs
+    engine.stop
+
+    null
+  }
+
+  pub coder: LLM! {
+    doug.agent(
+      llm.
+        withEnv(currentEnv.withModule(currentModule.meta).withHostfs(source)).
+        withMCPServer(
+          "lsp",
+          container.
+            from("golang").
+            withExec(["go", "install", "golang.org/x/tools/gopls@latest"]).
+            withExec(["go", "install", "github.com/isaacphi/mcp-language-server@latest"]).
+            withDirectory("/src", source).
+            withWorkdir("/src").
+            withDefaultArgs(["mcp-language-server", "--workspace", "/src", "--lsp", "gopls"]).
+            asService
+        )
+    )
+  }
+
+  let goBase: GoWithSource! {
+    go.withCgoDisabled().withSource(source)
+  }
+}
