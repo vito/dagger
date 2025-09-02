@@ -4529,11 +4529,6 @@ class EnumValueTypeDef(Type):
 
 @typecheck
 class Env(Type):
-    def hostfs(self) -> Directory:
-        _args: list[Arg] = []
-        _ctx = self._select("hostfs", _args)
-        return Directory(_ctx)
-
     async def id(self) -> EnvID:
         """A unique identifier for this Env.
 
@@ -4963,20 +4958,6 @@ class Env(Type):
             Arg("description", description),
         ]
         _ctx = self._select("withGitRepositoryOutput", _args)
-        return Env(_ctx)
-
-    def with_hostfs(self, hostfs: Directory) -> Self:
-        """Return a new environment with a new host filesystem
-
-        Parameters
-        ----------
-        hostfs:
-            The directory to set as the host filesystem
-        """
-        _args = [
-            Arg("hostfs", hostfs),
-        ]
-        _ctx = self._select("withHostfs", _args)
         return Env(_ctx)
 
     def with_json_value_input(
@@ -5412,11 +5393,30 @@ class Env(Type):
         _ctx = self._select("withStringOutput", _args)
         return Env(_ctx)
 
+    def with_workspace(self, workspace: Directory) -> Self:
+        """Return a new environment with a new host filesystem
+
+        Parameters
+        ----------
+        workspace:
+            The directory to set as the host filesystem
+        """
+        _args = [
+            Arg("workspace", workspace),
+        ]
+        _ctx = self._select("withWorkspace", _args)
+        return Env(_ctx)
+
     def without_outputs(self) -> Self:
         """Return a new environment without any outputs"""
         _args: list[Arg] = []
         _ctx = self._select("withoutOutputs", _args)
         return Env(_ctx)
+
+    def workspace(self) -> Directory:
+        _args: list[Arg] = []
+        _ctx = self._select("workspace", _args)
+        return Directory(_ctx)
 
     def with_(self, cb: Callable[["Env"], "Env"]) -> "Env":
         """Call the provided callable with current Env.
