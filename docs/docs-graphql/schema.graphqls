@@ -3269,9 +3269,7 @@ type LLM {
     """The name of the MCP server"""
     name: String!
 
-    """
-    The MCP service to run. If the service exposes a port, HTTP+SSE will be used to communicate.
-    """
+    """The MCP service to run and communicate with over stdio"""
     service: ServiceID!
   ): LLM!
 

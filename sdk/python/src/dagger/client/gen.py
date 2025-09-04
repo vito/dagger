@@ -7946,8 +7946,7 @@ class LLM(Type):
         name:
             The name of the MCP server
         service:
-            The MCP service to run. If the service exposes a port, HTTP+SSE
-            will be used to communicate.
+            The MCP service to run and communicate with over stdio
         """
         _args = [
             Arg("name", name),
