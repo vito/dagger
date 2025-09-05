@@ -718,7 +718,7 @@ func handleChangesetResponse(ctx context.Context, dag *dagger.Client, response a
 
 	changeset := dag.LoadChangesetFromID(dagger.ChangesetID(changesetID))
 
-	var summary strings.Builder
+	summary := new(strings.Builder)
 	if err := (func() (rerr error) {
 		ctx, span := Tracer().Start(ctx, "analyzing changes")
 		defer telemetry.End(span, func() error { return rerr })
@@ -728,7 +728,7 @@ func handleChangesetResponse(ctx context.Context, dag *dagger.Client, response a
 			return fmt.Errorf("get patch contents: %w", err)
 		}
 
-		return summarizePatch(idtui.NewOutput(&summary), patch, -1)
+		return summarizePatch(idtui.NewOutput(summary), patch, -1)
 	})(); err != nil {
 		return err
 	}
@@ -756,11 +756,15 @@ func handleChangesetResponse(ctx context.Context, dag *dagger.Client, response a
 		}
 	}
 
+	return applyChanges(ctx, exportDest, changeset)
+}
+
+func applyChanges(ctx context.Context, dest string, changeset *dagger.Changeset) (rerr error) {
 	ctx, span := Tracer().Start(ctx, "applying changes")
 	defer telemetry.End(span, func() error { return rerr })
 	slog := slog.SpanLogger(ctx, InstrumentationLibrary)
 
-	if _, err := changeset.Layer().Export(ctx, exportDest); err != nil {
+	if _, err := changeset.Layer().Export(ctx, dest); err != nil {
 		return err
 	}
 
@@ -770,7 +774,7 @@ func handleChangesetResponse(ctx context.Context, dag *dagger.Client, response a
 	}
 
 	for _, filePath := range removed {
-		filePath = filepath.Join(exportDest, filePath)
+		filePath = filepath.Join(dest, filePath)
 		slog.Info("removing file", "path", filePath)
 		if err := os.Remove(filePath); err != nil {
 			slog.Error("failed to remove file; ignoring", "path", filePath, "error", err)
@@ -788,8 +792,6 @@ func summarizePatch(out *termenv.Output, patch string, maxWidth int) error {
 
 	totalAdded := 0
 	totalRemoved := 0
-
-	fmt.Fprintln(out)
 
 	var longestFilenameLen int
 	for _, f := range diff.Files {
@@ -867,20 +869,19 @@ func summarizePatch(out *termenv.Output, patch string, maxWidth int) error {
 		if len(filename) < longestFilenameLen {
 			out.WriteString(strings.Repeat(" ", longestFilenameLen-len(filename)))
 		}
-		out.WriteString(" | ")
 
 		// Show change indicator
 		if maxWidth > 0 {
 			// Simplified text form for constrained width
-			var parts []string
 			if addedLines > 0 {
-				parts = append(parts, out.String(fmt.Sprintf("+%d", addedLines)).Foreground(termenv.ANSIGreen).String())
+				fmt.Fprintf(out, " %s", out.String(fmt.Sprintf("+%d", addedLines)).Foreground(termenv.ANSIGreen))
 			}
 			if removedLines > 0 {
-				parts = append(parts, out.String(fmt.Sprintf("-%d", removedLines)).Foreground(termenv.ANSIRed).String())
+				fmt.Fprintf(out, " %s", out.String(fmt.Sprintf("-%d", removedLines)).Foreground(termenv.ANSIRed))
 			}
-			out.WriteString(strings.Join(parts, ", "))
 		} else {
+			out.WriteString(" | ")
+
 			// Absolute bars representation
 			if addedLines > 0 {
 				out.WriteString(out.String(strings.Repeat("+", addedLines)).Foreground(termenv.ANSIGreen).String())
@@ -893,15 +894,21 @@ func summarizePatch(out *termenv.Output, patch string, maxWidth int) error {
 	}
 
 	// Add summary line
-	fmt.Fprintf(out, "%d files changed, ", len(diff.Files))
+	fmt.Fprintln(out)
+	fmt.Fprintf(out, "%d %s changed,", len(diff.Files),
+		func() string {
+			if len(diff.Files) == 1 {
+				return "file"
+			} else {
+				return "files"
+			}
+		}(),
+	)
 	if totalAdded > 0 {
-		out.WriteString(out.String(fmt.Sprintf("+%d", totalAdded)).Foreground(termenv.ANSIGreen).String())
-	}
-	if totalAdded > 0 && totalRemoved > 0 {
-		out.WriteString(" ")
+		out.WriteString(out.String(fmt.Sprintf(" +%d", totalAdded)).Foreground(termenv.ANSIGreen).String())
 	}
 	if totalRemoved > 0 {
-		out.WriteString(out.String(fmt.Sprintf("-%d", totalRemoved)).Foreground(termenv.ANSIRed).String())
+		out.WriteString(out.String(fmt.Sprintf(" -%d", totalRemoved)).Foreground(termenv.ANSIRed).String())
 	}
 	out.WriteString(" lines")
 
