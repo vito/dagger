@@ -36,6 +36,11 @@ var (
 
 	// outputPath is the parsed value of the `--output` flag.
 	outputPath string
+
+	// pipeline tells the command to evaluate all fields of an object, passing
+	// results returned from one field to other fields that require them as
+	// arguments
+	pipeline bool
 )
 
 const (
@@ -226,6 +231,8 @@ func (fc *FuncCommand) Command() *cobra.Command {
 		fc.cmd.PersistentFlags().StringVarP(&outputPath, "output", "o", "", "Save the result to a local file or directory")
 
 		fc.cmd.PersistentFlags().BoolVarP(&jsonOutput, "json", "j", false, "Present result as JSON")
+
+		fc.cmd.PersistentFlags().BoolVarP(&pipeline, "pipeline", "p", false, "Call all object fields as a pipeline")
 	}
 	return fc.cmd
 }
@@ -578,7 +585,6 @@ func (fc *FuncCommand) RunE(ctx context.Context, fn *modFunction) func(*cobra.Co
 		}
 
 		var response any
-
 		if err := makeRequest(ctx, q, &response); err != nil {
 			return err
 		}
@@ -678,6 +684,9 @@ func handleResponse(ctx context.Context, dag *dagger.Client, returnType *modType
 
 	// Command chain ended in an object, so add the _type field.
 	if returnType.AsFunctionProvider() != nil {
+		if pipeline {
+			return pipelineRun(ctx, dag, returnType, response)
+		}
 		return printID(o, response, returnType)
 	}
 
