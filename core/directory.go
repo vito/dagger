@@ -123,7 +123,7 @@ func (dir *Directory) Clone() *Directory {
 func (dir *Directory) WithoutInputs() *Directory {
 	dir = dir.Clone()
 
-	dir.LLB = nil
+	dir.Def = nil
 	dir.Result = nil
 
 	return dir
