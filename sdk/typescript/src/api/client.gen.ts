@@ -5148,10 +5148,6 @@ export class Env extends BaseClient {
 
     return response
   }
-  hostfs = (): Directory => {
-    const ctx = this._ctx.select("hostfs")
-    return new Directory(ctx)
-  }
 
   /**
    * retrieve an input value by name
@@ -5465,15 +5461,6 @@ export class Env extends BaseClient {
   }
 
   /**
-   * Return a new environment with a new host filesystem
-   * @param hostfs The directory to set as the host filesystem
-   */
-  withHostfs = (hostfs: Directory): Env => {
-    const ctx = this._ctx.select("withHostfs", { hostfs })
-    return new Env(ctx)
-  }
-
-  /**
    * Create or update a binding of type JSONValue in the environment
    * @param name The name of the binding
    * @param value The JSONValue value to assign to the binding
@@ -5774,11 +5761,24 @@ export class Env extends BaseClient {
   }
 
   /**
+   * Return a new environment with a new host filesystem
+   * @param workspace The directory to set as the host filesystem
+   */
+  withWorkspace = (workspace: Directory): Env => {
+    const ctx = this._ctx.select("withWorkspace", { workspace })
+    return new Env(ctx)
+  }
+
+  /**
    * Return a new environment without any outputs
    */
   withoutOutputs = (): Env => {
     const ctx = this._ctx.select("withoutOutputs")
     return new Env(ctx)
+  }
+  workspace = (): Directory => {
+    const ctx = this._ctx.select("workspace")
+    return new Directory(ctx)
   }
 
   /**
