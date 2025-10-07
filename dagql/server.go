@@ -275,19 +275,7 @@ var coreDirectives = []DirectiveSpec{
 			DirectiveLocationEnumValue,
 		},
 	},
-	{
-		Name:        "defaultPath",
-		Description: FormatDescription(`Indicates that the argument defaults to a contextual path.`),
-		Args: NewInputSpecs(
-			InputSpec{
-				Name: "path",
-				Type: String(""),
-			},
-		),
-		Locations: []DirectiveLocation{
-			DirectiveLocationArgumentDefinition,
-		},
-	},
+	DefaultPathDirective,
 	{
 		Name:        "ignorePatterns",
 		Description: FormatDescription(`Filter directory contents using .gitignore-style glob patterns.`),
@@ -308,6 +296,20 @@ var coreDirectives = []DirectiveSpec{
 		Locations: []DirectiveLocation{
 			DirectiveLocationFieldDefinition,
 		},
+	},
+}
+
+var DefaultPathDirective = DirectiveSpec{
+	Name:        "defaultPath",
+	Description: FormatDescription(`Indicates that the argument defaults to a contextual path.`),
+	Args: NewInputSpecs(
+		InputSpec{
+			Name: "path",
+			Type: String(""),
+		},
+	),
+	Locations: []DirectiveLocation{
+		DirectiveLocationArgumentDefinition,
 	},
 }
 
