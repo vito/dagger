@@ -355,12 +355,17 @@ func (s *hostSchema) directory(ctx context.Context, host dagql.ObjectResult[*cor
 	}
 	localPB := localDef.ToPB()
 
-	dir, err := core.NewDirectory(localPB, "/", query.Platform(), nil).Directory(ctx, relPath)
+	baseDir := core.NewDirectory(localPB, "/", query.Platform(), nil)
+	// Set the host path on the base directory before navigating
+	// This allows the Directory() method to automatically update HostPath when navigating
+	baseDir.HostPath = hostPath
+
+	dir, err := baseDir.Directory(ctx, relPath)
 	if err != nil {
 		return inst, err
 	}
-	// Set the original host path so changesets can be exported back to the right location
-	// If gitignore mode adjusted the path, we use the original requested path
+	
+	// If gitignore mode adjusted the path, we need to use the original requested path
 	if args.Gitignore {
 		originalPath := args.Path
 		originalPath, err = bk.AbsPath(ctx, originalPath)
@@ -368,12 +373,8 @@ func (s *hostSchema) directory(ctx context.Context, host dagql.ObjectResult[*cor
 			return inst, fmt.Errorf("failed to get absolute path: %w", err)
 		}
 		dir.HostPath = originalPath
-	} else {
-		dir.HostPath = hostPath
-		if relPath != "." {
-			dir.HostPath = filepath.Join(hostPath, relPath)
-		}
 	}
+	// Note: If not in gitignore mode, dir.HostPath is already correct due to propagation
 	dirRes, err := dagql.NewObjectResultForCurrentID(ctx, srv, dir)
 	if err != nil {
 		return inst, err
