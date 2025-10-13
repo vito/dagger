@@ -811,7 +811,13 @@ type changesetExportArgs struct {
 }
 
 func (s *directorySchema) changesetExport(ctx context.Context, parent *core.Changeset, args changesetExportArgs) (dagql.String, error) {
-	err := parent.Export(ctx, args.Path)
+	// Use the changeset's host path if available and no explicit path was provided
+	exportPath := args.Path
+	if exportPath == "." && parent.HostPath != "" {
+		exportPath = parent.HostPath
+	}
+
+	err := parent.Export(ctx, exportPath)
 	if err != nil {
 		return "", err
 	}
@@ -823,7 +829,7 @@ func (s *directorySchema) changesetExport(ctx context.Context, parent *core.Chan
 	if err != nil {
 		return "", fmt.Errorf("failed to get buildkit client: %w", err)
 	}
-	stat, err := bk.StatCallerHostPath(ctx, args.Path, true)
+	stat, err := bk.StatCallerHostPath(ctx, exportPath, true)
 	if err != nil {
 		return "", err
 	}

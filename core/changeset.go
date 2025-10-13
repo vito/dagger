@@ -30,6 +30,14 @@ func NewChangeset(ctx context.Context, before, after dagql.ObjectResult[*Directo
 		After:  after,
 	}
 
+	// Inherit the host path from the directories
+	// Prefer the "after" directory's host path, but fall back to "before" if needed
+	if after.Self().HostPath != "" {
+		changes.HostPath = after.Self().HostPath
+	} else if before.Self().HostPath != "" {
+		changes.HostPath = before.Self().HostPath
+	}
+
 	// Compute all the changes once
 	if err := changes.computeChanges(ctx); err != nil {
 		return nil, err
@@ -152,6 +160,11 @@ type Changeset struct {
 
 	// same as above, but includes all removed paths (children of removed dirs too)
 	allRemovedPaths []string
+
+	// HostPath is the original host path where this changeset originated from,
+	// inherited from the Before/After directories if they came from Host.directory().
+	// This is used to determine where to export the changeset back to.
+	HostPath string
 }
 
 func (*Changeset) Type() *ast.Type {

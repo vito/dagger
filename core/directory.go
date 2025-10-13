@@ -45,6 +45,11 @@ type Directory struct {
 
 	// Services necessary to provision the directory.
 	Services ServiceBindings
+
+	// HostPath is the original host path where this directory originated from,
+	// if it was loaded from a Host.directory() call. This is used to determine
+	// where to export changesets back to.
+	HostPath string
 }
 
 func (*Directory) Type() *ast.Type {
@@ -616,6 +621,11 @@ func (dir *Directory) Directory(ctx context.Context, subdir string) (*Directory,
 	}
 
 	dir.Dir = path.Join(dir.Dir, subdir)
+
+	// Update the host path if it was set
+	if dir.HostPath != "" {
+		dir.HostPath = filepath.Join(dir.HostPath, subdir)
+	}
 
 	// check that the directory actually exists so the user gets an error earlier
 	// rather than when the dir is used

@@ -359,6 +359,21 @@ func (s *hostSchema) directory(ctx context.Context, host dagql.ObjectResult[*cor
 	if err != nil {
 		return inst, err
 	}
+	// Set the original host path so changesets can be exported back to the right location
+	// If gitignore mode adjusted the path, we use the original requested path
+	if args.Gitignore {
+		originalPath := args.Path
+		originalPath, err = bk.AbsPath(ctx, originalPath)
+		if err != nil {
+			return inst, fmt.Errorf("failed to get absolute path: %w", err)
+		}
+		dir.HostPath = originalPath
+	} else {
+		dir.HostPath = hostPath
+		if relPath != "." {
+			dir.HostPath = filepath.Join(hostPath, relPath)
+		}
+	}
 	dirRes, err := dagql.NewObjectResultForCurrentID(ctx, srv, dir)
 	if err != nil {
 		return inst, err
