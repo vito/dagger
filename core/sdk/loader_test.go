@@ -27,6 +27,10 @@ func TestParseSDKName(t *testing.T) {
 			parsedSDKName: sdkGo,
 		},
 		{
+			sdkName:       "dang",
+			parsedSDKName: sdkDang,
+		},
+		{
 			sdkName:       "typescript",
 			parsedSDKName: sdkTypescript,
 		},
