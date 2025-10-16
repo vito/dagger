@@ -11,7 +11,6 @@ import (
 	"sync"
 
 	"dagger.io/dagger/telemetry"
-	bkgw "github.com/dagger/dagger/internal/buildkit/frontend/gateway/client"
 	"github.com/dagger/dagger/internal/buildkit/identity"
 	bksession "github.com/dagger/dagger/internal/buildkit/session"
 	bksolver "github.com/dagger/dagger/internal/buildkit/solver"
@@ -20,8 +19,6 @@ import (
 	bkworker "github.com/dagger/dagger/internal/buildkit/worker"
 	"github.com/dagger/dagger/util/gitutil"
 	"github.com/opencontainers/go-digest"
-	"go.opentelemetry.io/otel/propagation"
-	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/dagger/dagger/analytics"
@@ -36,7 +33,7 @@ import (
 type ModuleFunction struct {
 	mod     *Module
 	objDef  *ObjectTypeDef // may be nil for special functions like the module definition function call
-	runtime dagql.ObjectResult[*Container]
+	runtime ModuleRuntime
 
 	metadata   *Function
 	returnType ModType
@@ -54,7 +51,7 @@ func NewModFunction(
 	ctx context.Context,
 	mod *Module,
 	objDef *ObjectTypeDef,
-	runtime dagql.ObjectResult[*Container],
+	runtime ModuleRuntime,
 	metadata *Function,
 ) (*ModuleFunction, error) {
 	returnType, ok, err := mod.ModTypeFor(ctx, metadata.ReturnType, true)
@@ -666,6 +663,8 @@ func (fn *ModuleFunction) Call(ctx context.Context, opts *CallOpts) (t dagql.Any
 		Parent:    parentJSON,
 		ParentID:  callID.Receiver(),
 		InputArgs: callInputs,
+
+		Module: fn.mod,
 	}
 	if envID, ok := EnvIDFromContext(ctx); ok {
 		fnCall.EnvID = envID
@@ -678,123 +677,15 @@ func (fn *ModuleFunction) Call(ctx context.Context, opts *CallOpts) (t dagql.Any
 		return nil, fmt.Errorf("marshal function call: %w", err)
 	}
 
-	srv := dagql.CurrentDagqlServer(ctx)
-
-	var metaDir dagql.ObjectResult[*Directory]
-	err = srv.Select(ctx, srv.Root(), &metaDir,
-		dagql.Selector{
-			Field: "directory",
-		},
-	)
+	// Delegate the actual function execution to the runtime
+	outputBytes, clientID, err := fn.runtime.Call(ctx, &execMD, fnCall)
 	if err != nil {
-		return nil, fmt.Errorf("create mod metadata directory: %w", err)
-	}
-
-	var ctr dagql.ObjectResult[*Container]
-	err = srv.Select(ctx, fn.runtime, &ctr,
-		dagql.Selector{
-			Field: "withMountedDirectory",
-			Args: []dagql.NamedInput{
-				{Name: "path", Value: dagql.String(modMetaDirPath)},
-				{Name: "source", Value: dagql.NewID[*Directory](metaDir.ID())},
-			},
-		},
-	)
-	if err != nil {
-		return nil, fmt.Errorf("exec function: %w", err)
-	}
-
-	execCtx := ctx
-	execCtx = dagql.WithSkip(execCtx) // this span shouldn't be shown (it's entirely useless)
-	err = srv.Select(execCtx, ctr, &ctr,
-		dagql.Selector{
-			Field: "withExec",
-			Args: []dagql.NamedInput{
-				{Name: "args", Value: dagql.ArrayInput[dagql.String]{}},
-				{Name: "useEntrypoint", Value: dagql.NewBoolean(true)},
-				{Name: "experimentalPrivilegedNesting", Value: dagql.NewBoolean(true)},
-				{Name: "execMD", Value: dagql.NewSerializedString(&execMD)},
-			},
-		},
-	)
-	if err != nil {
-		return nil, fmt.Errorf("exec function: %w", err)
+		return nil, err
 	}
 
 	query, err := CurrentQuery(ctx)
 	if err != nil {
 		return nil, err
-	}
-	bk, err := query.Buildkit(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("get buildkit client: %w", err)
-	}
-
-	_, err = ctr.Self().Evaluate(ctx)
-	if err != nil {
-		id, ok, extractErr := extractError(ctx, bk, err)
-		if extractErr != nil {
-			// if the module hasn't provided us with a nice error, just return the
-			// original error
-			return nil, err
-		}
-		if ok {
-			errInst, err := id.Load(ctx, opts.Server)
-			if err != nil {
-				return nil, fmt.Errorf("load error instance: %w", err)
-			}
-			dagErr := errInst.Self().Clone()
-			originCtx := trace.SpanContextFromContext(
-				telemetry.Propagator.Extract(
-					context.Background(),
-					telemetry.AnyMapCarrier(dagErr.Extensions()),
-				),
-			)
-			if !originCtx.IsValid() {
-				// If the Error doesn't already have an origin, inject the current trace
-				// context as its origin.
-				tm := propagation.MapCarrier{}
-				telemetry.Propagator.Inject(ctx, tm)
-				for _, key := range tm.Keys() {
-					val := tm.Get(key)
-					valJSON, err := json.Marshal(val)
-					if err != nil {
-						return nil, fmt.Errorf("marshal value: %w", err)
-					}
-					dagErr.Values = append(dagErr.Values, &ErrorValue{
-						Name:  key,
-						Value: JSON(valJSON),
-					})
-				}
-			}
-			return nil, dagErr
-		}
-		if fn.metadata.OriginalName == "" {
-			return nil, fmt.Errorf("call constructor: %w", err)
-		} else {
-			return nil, fmt.Errorf("call function %q: %w", fn.metadata.OriginalName, err)
-		}
-	}
-
-	ctrOutputDir, err := ctr.Self().Directory(ctx, modMetaDirPath)
-	if err != nil {
-		return nil, fmt.Errorf("get function output directory: %w", err)
-	}
-
-	result, err := ctrOutputDir.Evaluate(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("evaluate function: %w", err)
-	}
-	if result == nil {
-		return nil, fmt.Errorf("function returned nil result")
-	}
-
-	// Read the output of the function
-	outputBytes, err := result.Ref.ReadFile(ctx, bkgw.ReadRequest{
-		Filename: modMetaOutputPath,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("read function output file: %w", err)
 	}
 
 	var returnValueAny any
@@ -810,14 +701,6 @@ func (fn *ModuleFunction) Call(ctx context.Context, opts *CallOpts) (t dagql.Any
 	}
 
 	if returnValue != nil {
-		// Get the client ID actually used during the function call - this might not
-		// be the same as execMD.ClientID if the function call was cached at the
-		// buildkit level
-		clientID, err := ctr.Self().usedClientID(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("could not get used client id")
-		}
-
 		// If the function returned anything that's isolated per-client, this caller client should
 		// have access to it now since it was returned to them (i.e. secrets/sockets/etc).
 		returnedIDs := map[digest.Digest]*resource.ID{}

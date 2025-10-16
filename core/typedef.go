@@ -1281,6 +1281,8 @@ type FunctionCall struct {
 
 	ParentID *call.ID
 	EnvID    *call.ID
+
+	Module *Module `json:"-"`
 }
 
 func (*FunctionCall) Type() *ast.Type {

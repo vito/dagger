@@ -72,6 +72,9 @@ func (s *moduleSchema) Install(dag *dagql.Server) {
 		Syncer[*core.Module]().
 			Doc(`Forces evaluation of the module, including any loading into the engine and associated validation.`),
 
+		dagql.Func("runtime", s.moduleRuntime).
+			Doc(`The container that runs the module's entrypoint. It will fail to execute if the module doesn't compile.`),
+
 		dagql.Func("dependencies", s.moduleDependencies).
 			Doc(`The dependencies of the module.`),
 
@@ -665,6 +668,14 @@ func (s *moduleSchema) moduleDependencies(
 		}
 	}
 	return depMods, nil
+}
+
+func (s *moduleSchema) moduleRuntime(
+	ctx context.Context,
+	mod *core.Module,
+	args struct{},
+) (dagql.Nullable[dagql.ObjectResult[*core.Container]], error) {
+	return mod.GetRuntimeContainer(), nil
 }
 
 func (s *moduleSchema) moduleWithDescription(ctx context.Context, mod *core.Module, args struct {

@@ -38,8 +38,11 @@ type Module struct {
 	// Deps contains the module's dependency DAG.
 	Deps *ModDeps
 
-	// Runtime is the container that runs the module's entrypoint. It will fail to execute if the module doesn't compile.
-	Runtime dagql.Nullable[dagql.ObjectResult[*Container]] `field:"true" name:"runtime" doc:"The container that runs the module's entrypoint. It will fail to execute if the module doesn't compile."`
+	// Runtime is the execution environment that runs the module's entrypoint. It will fail to execute if the module doesn't compile.
+	Runtime ModuleRuntime
+
+	// runtimeContainer is a cached container view of the runtime, for the GraphQL "runtime" field
+	runtimeContainer dagql.Nullable[dagql.ObjectResult[*Container]]
 
 	// The following are populated while initializing the module
 
@@ -107,6 +110,18 @@ func (mod *Module) UserDefaults(ctx context.Context) (*EnvFile, error) {
 		defaults = defaults.WithEnvFiles(bp.UserDefaults)
 	}
 	return defaults, nil
+}
+
+// GetRuntimeContainer returns the runtime as a Container for the GraphQL field.
+// Returns nil if the runtime doesn't use a container.
+func (mod *Module) GetRuntimeContainer() dagql.Nullable[dagql.ObjectResult[*Container]] {
+	if !mod.runtimeContainer.Valid && mod.Runtime != nil {
+		// Cache the container view
+		if ctr, ok := mod.Runtime.AsContainer(); ok {
+			mod.runtimeContainer = dagql.NonNull(ctr)
+		}
+	}
+	return mod.runtimeContainer
 }
 
 // Return local defaults for the specified object
@@ -772,12 +787,14 @@ func (mod *Module) PBDefinitions(ctx context.Context) ([]*pb.Definition, error) 
 		}
 		defs = append(defs, dirDefs...)
 	}
-	if mod.Runtime.Valid && mod.Runtime.Value.Self() != nil {
-		dirDefs, err := mod.Runtime.Value.Self().PBDefinitions(ctx)
-		if err != nil {
-			return nil, err
+	if mod.Runtime != nil {
+		if ctr, ok := mod.Runtime.AsContainer(); ok {
+			dirDefs, err := ctr.Self().PBDefinitions(ctx)
+			if err != nil {
+				return nil, err
+			}
+			defs = append(defs, dirDefs...)
 		}
-		defs = append(defs, dirDefs...)
 	}
 	return defs, nil
 }

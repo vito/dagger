@@ -2260,7 +2260,7 @@ func (s *moduleSourceSchema) runModuleDefInSDK(ctx context.Context, src, srcInst
 	if err != nil {
 		return nil, fmt.Errorf("failed to get module runtime: %w", err)
 	}
-	mod.Runtime = dagql.NonNull(runtime)
+	mod.Runtime = runtime
 
 	// construct a special function with no object or function name, which tells
 	// the SDK to return the module's definition (in terms of objects, fields and
@@ -2292,11 +2292,12 @@ func (s *moduleSourceSchema) runModuleDefInSDK(ctx context.Context, src, srcInst
 	err = (func() (rerr error) {
 		ctx, span := core.Tracer(ctx).Start(ctx, "asModule getModDef", telemetry.Internal())
 		defer telemetry.End(span, func() error { return rerr })
+		
 		getModDefFn, err := core.NewModFunction(
 			ctx,
 			mod,
 			nil,
-			mod.Runtime.Value,
+			mod.Runtime,
 			core.NewFunction("", &core.TypeDef{
 				Kind:     core.TypeDefKindObject,
 				AsObject: dagql.NonNull(core.NewObjectTypeDef("Module", "")),

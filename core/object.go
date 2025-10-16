@@ -210,7 +210,7 @@ func (t *ModuleObjectType) GetCallable(ctx context.Context, name string) (Callab
 			ctx,
 			mod,
 			t.typeDef,
-			mod.Runtime.Value,
+			mod.Runtime,
 			fun,
 		)
 	}
@@ -365,7 +365,7 @@ func (obj *ModuleObject) installConstructor(ctx context.Context, dag *dagql.Serv
 		return fmt.Errorf("constructor function for object %s must return that object", objDef.OriginalName)
 	}
 
-	fn, err := NewModFunction(ctx, mod, objDef, mod.Runtime.Value, fnTypeDef)
+	fn, err := NewModFunction(ctx, mod, objDef, mod.Runtime, fnTypeDef)
 	if err != nil {
 		return fmt.Errorf("failed to create function: %w", err)
 	}
@@ -482,7 +482,7 @@ func objFun(ctx context.Context, mod *Module, objDef *ObjectTypeDef, fun *Functi
 		ctx,
 		mod,
 		objDef,
-		mod.Runtime.Value,
+		mod.Runtime,
 		fun,
 	)
 	if err != nil {

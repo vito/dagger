@@ -220,15 +220,16 @@ func (sdk *goSDK) Runtime(
 	ctx context.Context,
 	deps *core.ModDeps,
 	source dagql.ObjectResult[*core.ModuleSource],
-) (inst dagql.ObjectResult[*core.Container], rerr error) {
+) (core.ModuleRuntime, error) {
 	dag, err := sdk.root.Server.Server(ctx)
 	if err != nil {
-		return inst, fmt.Errorf("failed to get dag for go module sdk runtime: %w", err)
+		return nil, fmt.Errorf("failed to get dag for go module sdk runtime: %w", err)
 	}
 
+	var inst dagql.ObjectResult[*core.Container]
 	ctr, err := sdk.baseWithCodegen(ctx, deps, source)
 	if err != nil {
-		return inst, err
+		return nil, err
 	}
 	if err := dag.Select(ctx, ctr, &ctr,
 		dagql.Selector{
@@ -286,10 +287,14 @@ func (sdk *goSDK) Runtime(
 			},
 		},
 	); err != nil {
-		return inst, fmt.Errorf("failed to build go runtime binary: %w", err)
+		return nil, fmt.Errorf("failed to build go runtime binary: %w", err)
 	}
 
-	return ctr, nil
+	if err := dag.Select(ctx, ctr, &inst); err != nil {
+		return nil, fmt.Errorf("failed to select container: %w", err)
+	}
+
+	return &core.ContainerRuntime{Container: inst}, nil
 }
 
 func (sdk *goSDK) baseWithCodegen(
