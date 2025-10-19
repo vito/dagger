@@ -71,29 +71,9 @@ func (sdk *dangSDK) Codegen(
 	deps *core.ModDeps,
 	source dagql.ObjectResult[*core.ModuleSource],
 ) (_ *core.GeneratedCode, rerr error) {
-	dag, err := sdk.root.Server.Server(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get dag for dang module sdk client generation: %w", err)
-	}
-
-	contextDir := source.Self().ContextDirectory
-	rootSourcePath := source.Self().SourceRootSubpath
-
-	var srcDir dagql.ObjectResult[*core.Directory]
-	if err := dag.Select(ctx, contextDir, &srcDir, dagql.Selector{
-		Field: "directory",
-		Args: []dagql.NamedInput{
-			{
-				Name:  "path",
-				Value: dagql.String(rootSourcePath),
-			},
-		},
-	}); err != nil {
-		return nil, fmt.Errorf("failed to get modified source directory for dang module sdk codegen: %w", err)
-	}
-
 	return &core.GeneratedCode{
-		Code: srcDir,
+		// no-op
+		Code: source.Self().ContextDirectory,
 	}, nil
 }
 
