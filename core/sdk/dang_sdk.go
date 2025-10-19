@@ -10,7 +10,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"os"
 	"path/filepath"
 	"sort"
 	"time"
@@ -163,8 +162,6 @@ func (r *DangRuntime) Call(
 		ReadHeaderTimeout: 10 * time.Second,
 		Handler: h2c.NewHandler(http.HandlerFunc(func(resp http.ResponseWriter, req *http.Request) {
 			telemetry.Propagator.Inject(ctx, propagation.HeaderCarrier(req.Header))
-			// TODO: needed? no?
-			clientMetadata.AppendToHTTPHeaders(req.Header)
 			q.ServeHTTPToNestedClient(resp, req, execMD)
 		}), http2Srv),
 	}
@@ -200,8 +197,10 @@ func (r *DangRuntime) Call(
 		return nil, "", fmt.Errorf("failed to decode schema JSON: %w", err)
 	}
 
-	execCtx := ioctx.StdoutToContext(ctx, os.Stdout)
-	execCtx = ioctx.StderrToContext(ctx, os.Stderr)
+	stdio := telemetry.SpanStdio(ctx, core.InstrumentationLibrary)
+	ctx = ioctx.StdoutToContext(ctx, stdio.Stdout)
+	ctx = ioctx.StderrToContext(ctx, stdio.Stderr)
+
 	parentName := fnCall.ParentName
 	fnName := fnCall.Name
 	parentJSON := fnCall.Parent
@@ -219,7 +218,7 @@ func (r *DangRuntime) Call(
 	var env dang.EvalEnv
 	err = modCtx.Self().Mount(ctx, func(path string) error {
 		modSrcDir := filepath.Join(path, r.modSource.Self().SourceSubpath)
-		env, err = dang.RunDir(execCtx, gql, intro.Schema, modSrcDir, false /* debug */)
+		env, err = dang.RunDir(ctx, gql, intro.Schema, modSrcDir, false /* debug */)
 		if err != nil {
 			return fmt.Errorf("failed to run dir: %w", err)
 		}

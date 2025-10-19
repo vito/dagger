@@ -152,10 +152,13 @@ func GlobalLogsSpanContext(ctx context.Context) context.Context {
 			slog.Warn("invalid span ID hex for global logs", "spanIDHex", spanIDHex, "error", err)
 		} else {
 			spanCtx = spanCtx.WithSpanID(spanID)
-			ctx = trace.ContextWithSpanContext(ctx, spanCtx)
 		}
+	} else {
+		// Send the logs nowhere, so they don't pollute whatever arbitrary span
+		// we're called from.
+		spanCtx = trace.SpanContext{}
 	}
-	return ctx
+	return trace.ContextWithSpanContext(ctx, spanCtx)
 }
 
 // GlobalWriter returns a Writer that writes to the global logging span.
