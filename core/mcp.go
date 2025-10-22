@@ -824,7 +824,10 @@ func (m *MCP) call(ctx context.Context,
 				if !updated {
 					return nil, nil
 				}
-				return id.With(call.WithArgs(updatedArgs...)), nil
+				return id.With(
+					call.WithArgs(updatedArgs...),
+					call.WithReload(true),
+				), nil
 			})
 			if err != nil {
 				return "", err
