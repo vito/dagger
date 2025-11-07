@@ -304,14 +304,6 @@ class CacheSharingMode(Enum):
     """Shares the cache volume amongst many build pipelines"""
 
 
-class CheckStatus(Enum):
-    """The result of a check."""
-
-    COMPLETED = "COMPLETED"
-
-    SKIPPED = "SKIPPED"
-
-
 class ExistsType(Enum):
     """File type."""
 
@@ -12842,7 +12834,6 @@ __all__ = [
     "CheckGroup",
     "CheckGroupID",
     "CheckID",
-    "CheckStatus",
     "Client",
     "Cloud",
     "CloudID",
