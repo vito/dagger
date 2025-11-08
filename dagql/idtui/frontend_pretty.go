@@ -2408,12 +2408,18 @@ func (l *prettyLogs) Export(ctx context.Context, logs []sdklog.Record) error {
 		// Check for Markdown content type
 		contentType := ""
 		eof := false
+		verbose := false
+		global := false
 		for attr := range log.WalkAttributes {
-			if attr.Key == telemetry.ContentTypeAttr {
+			switch attr.Key {
+			case telemetry.ContentTypeAttr:
 				contentType = attr.Value.AsString()
-			}
-			if attr.Key == telemetry.StdioEOFAttr {
+			case telemetry.StdioEOFAttr:
 				eof = attr.Value.AsBool()
+			case telemetry.LogsGlobalAttr:
+				global = attr.Value.AsBool()
+			case telemetry.LogsVerboseAttr:
+				verbose = attr.Value.AsBool()
 			}
 		}
 
@@ -2426,7 +2432,7 @@ func (l *prettyLogs) Export(ctx context.Context, logs []sdklog.Record) error {
 
 		spanID := dagui.SpanID{SpanID: targetID}
 		pw, rolledUp := l.findRollUpSpan(spanID)
-		if rolledUp {
+		if rolledUp && !verbose && !global {
 			var context string
 			span, ok := l.DB.Spans.Map[spanID]
 			if ok {
