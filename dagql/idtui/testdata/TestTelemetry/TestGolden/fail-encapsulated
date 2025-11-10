@@ -30,8 +30,12 @@ Expected stderr:
       ┃ this should NOT be hoisted - ancestor succeeded
       ! inner failure
 
-Error logs:
 
+ERRORS ─────────────────────────────────────────────────────────────────────────
+
+✘ .failEncapsulated: Void X.Xs ERROR
+✘ failing outer span X.Xs ERROR
+✔ unset middle span X.Xs
 ▼ failing inner span X.Xs ERROR
 this should be hoisted - ancestor failed
 ! inner failure

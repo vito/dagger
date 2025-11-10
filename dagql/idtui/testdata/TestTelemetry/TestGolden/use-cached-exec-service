@@ -18,14 +18,14 @@ Expected stderr:
 ▼ .useCachedExecService: Void X.Xs
 ├╴✔ container: Container! X.Xs
 ├╴$ .from(address: "busybox"): Container! X.Xs CACHED
-├╴$ .withExec(args: ["echo", "exec-service cached for good"]): Container! X.Xs CACHED
-├╴$ .withExec(args: ["echo", "im also cached for good"]): Container! X.Xs CACHED
-├╴▼ .withExec(args: ["echo", "im a buster", "20XX-XX-XX XX:XX:XX.XXXX +XXXX UTC m=+X.X"]): Container! X.Xs
+├╴$ exec echo 'exec-service cached for good' X.Xs CACHED
+├╴$ exec echo 'im also cached for good' X.Xs CACHED
+├╴▼ exec echo 'im a buster' '20XX-XX-XX XX:XX:XX.XXXX +XXXX UTC m=+X.X' X.Xs
 │ ┃ im a buster 20XX-XX-XX XX:XX:XX.XXXX +XXXX UTC m=+X.X
-├╴✔ .withExec(args: ["sleep", "1"]): Container! X.Xs
-├╴▼ .withExec(args: ["echo", "im busted by that buster"]): Container! X.Xs
+├╴✔ exec sleep 1 X.Xs
+├╴▼ exec echo 'im busted by that buster' X.Xs
 │ ┃ im busted by that buster
-├╴$ .withNewFile(path: "/srv/index.html", contents: "<h1>hello, world!</h1>"): Container! X.Xs CACHED
+├╴✔ .withNewFile(path: "/srv/index.html", contents: "<h1>hello, world!</h1>"): Container! X.Xs
 ├╴✔ .withExposedPort(port: 80): Container! X.Xs
 ├╴▼ .asService(args: ["httpd", "-v", "-h", "/srv", "-f"]): Service! X.Xs ✔ 1
 │ ┃ [::ffff:10.XX.XX.XX]:XXXXX: response:200
@@ -36,7 +36,7 @@ Expected stderr:
 │   ┆ service: Container.asService(args: ["httpd", "-v", "-h", "/srv", "-f"]): Service!
 │   ): Container! X.Xs
 ├╴✔ .withEnvVariable(name: "NOW", value: "20XX-XX-XX XX:XX:XX.XXXX +XXXX UTC m=+X.X"): Container! X.Xs
-╰╴▼ .withExec(args: ["wget", "-q", "-O-", "http://exec-service"]): Container! X.Xs
+╰╴▼ exec wget -q -O- http://exec-service X.Xs
   ┃ <h1>hello, world!</h1>
 
 Setup tracing at https://dagger.cloud/traces/setup. To hide set DAGGER_NO_NAG=1

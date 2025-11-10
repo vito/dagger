@@ -20,7 +20,8 @@ Expected stderr:
 ┃ and then failing
 ! i failed
 
-Error logs:
+
+ERRORS ─────────────────────────────────────────────────────────────────────────
 
 ▼ .failLogNative: Void X.Xs ERROR
 im doing a lot of work
