@@ -88,6 +88,11 @@ func (dev *Dev) Test(
 	}
 }
 
+// Regenerate all generated code.
+func (dev *Dev) Generate() *dagger.Changeset {
+	return dag.DaggerDev().Generate()
+}
+
 // Run a git command and return its output.
 func (dev *Dev) Git(ctx context.Context, args []string) (string, error) {
 	return dev.sandbox().
