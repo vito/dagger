@@ -65,7 +65,7 @@ var SkipLoggedOutTraceMsgEnvs = []string{
 // NOTE: keep this to one line, and 80 characters max
 var loggedOutTraceMsg = fmt.Sprintf("Setup tracing at %%s. To hide set %s=1", SkipLoggedOutTraceMsgEnvs[0])
 
-//go:generate go run github.com/matryer/moq -out frontend_mock.go . Frontend
+//go:generate go run github.com/matryer/moq -rm -out frontend_mock.go . Frontend
 
 type Frontend interface {
 	// Run starts a frontend, and runs the target function.
