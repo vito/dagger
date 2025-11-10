@@ -1022,6 +1022,7 @@ func (m *MCP) Call(ctx context.Context, tools []LLMTool, toolCall LLMToolCall) (
 	}
 	attrs := []attribute.KeyValue{
 		attribute.String(telemetry.LLMToolAttr, toolName),
+		attribute.Bool(telemetry.UIRollupSpansAttr, true),
 		attribute.StringSlice(telemetry.LLMToolArgNamesAttr, toolArgNames),
 		attribute.StringSlice(telemetry.LLMToolArgValuesAttr, toolArgValues),
 	}
