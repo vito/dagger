@@ -191,6 +191,12 @@ func (fe *frontendPretty) SetSidebarContent(section SidebarSection) {
 	fe.renderSidebar()
 }
 
+func (fe *frontendPretty) GetLLMTokenMetrics() *dagui.LLMTokenMetrics {
+	fe.mu.Lock()
+	defer fe.mu.Unlock()
+	return fe.db.LLMTokenMetrics
+}
+
 func (fe *frontendPretty) viewSidebar() string {
 	fe.renderSidebar()
 	return fe.sidebarBuf.String()

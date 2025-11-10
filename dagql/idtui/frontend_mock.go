@@ -29,6 +29,9 @@ var _ Frontend = &FrontendMock{}
 //			BackgroundFunc: func(cmd tea.ExecCommand, raw bool) error {
 //				panic("mock out the Background method")
 //			},
+//			GetLLMTokenMetricsFunc: func() *dagui.LLMTokenMetrics {
+//				panic("mock out the GetLLMTokenMetrics method")
+//			},
 //			HandleFormFunc: func(ctx context.Context, form *huh.Form) error {
 //				panic("mock out the HandleForm method")
 //			},
@@ -81,6 +84,9 @@ type FrontendMock struct {
 	// BackgroundFunc mocks the Background method.
 	BackgroundFunc func(cmd tea.ExecCommand, raw bool) error
 
+	// GetLLMTokenMetricsFunc mocks the GetLLMTokenMetrics method.
+	GetLLMTokenMetricsFunc func() *dagui.LLMTokenMetrics
+
 	// HandleFormFunc mocks the HandleForm method.
 	HandleFormFunc func(ctx context.Context, form *huh.Form) error
 
@@ -131,6 +137,9 @@ type FrontendMock struct {
 			Cmd tea.ExecCommand
 			// Raw is the raw argument value.
 			Raw bool
+		}
+		// GetLLMTokenMetrics holds details about calls to the GetLLMTokenMetrics method.
+		GetLLMTokenMetrics []struct {
 		}
 		// HandleForm holds details about calls to the HandleForm method.
 		HandleForm []struct {
@@ -213,21 +222,22 @@ type FrontendMock struct {
 		SpanExporter []struct {
 		}
 	}
-	lockBackground        sync.RWMutex
-	lockHandleForm        sync.RWMutex
-	lockHandlePrompt      sync.RWMutex
-	lockLogExporter       sync.RWMutex
-	lockMetricExporter    sync.RWMutex
-	lockOpts              sync.RWMutex
-	lockRevealAllSpans    sync.RWMutex
-	lockRun               sync.RWMutex
-	lockSetClient         sync.RWMutex
-	lockSetCloudURL       sync.RWMutex
-	lockSetPrimary        sync.RWMutex
-	lockSetSidebarContent sync.RWMutex
-	lockSetVerbosity      sync.RWMutex
-	lockShell             sync.RWMutex
-	lockSpanExporter      sync.RWMutex
+	lockBackground         sync.RWMutex
+	lockGetLLMTokenMetrics sync.RWMutex
+	lockHandleForm         sync.RWMutex
+	lockHandlePrompt       sync.RWMutex
+	lockLogExporter        sync.RWMutex
+	lockMetricExporter     sync.RWMutex
+	lockOpts               sync.RWMutex
+	lockRevealAllSpans     sync.RWMutex
+	lockRun                sync.RWMutex
+	lockSetClient          sync.RWMutex
+	lockSetCloudURL        sync.RWMutex
+	lockSetPrimary         sync.RWMutex
+	lockSetSidebarContent  sync.RWMutex
+	lockSetVerbosity       sync.RWMutex
+	lockShell              sync.RWMutex
+	lockSpanExporter       sync.RWMutex
 }
 
 // Background calls BackgroundFunc.
@@ -263,6 +273,33 @@ func (mock *FrontendMock) BackgroundCalls() []struct {
 	mock.lockBackground.RLock()
 	calls = mock.calls.Background
 	mock.lockBackground.RUnlock()
+	return calls
+}
+
+// GetLLMTokenMetrics calls GetLLMTokenMetricsFunc.
+func (mock *FrontendMock) GetLLMTokenMetrics() *dagui.LLMTokenMetrics {
+	if mock.GetLLMTokenMetricsFunc == nil {
+		panic("FrontendMock.GetLLMTokenMetricsFunc: method is nil but Frontend.GetLLMTokenMetrics was just called")
+	}
+	callInfo := struct {
+	}{}
+	mock.lockGetLLMTokenMetrics.Lock()
+	mock.calls.GetLLMTokenMetrics = append(mock.calls.GetLLMTokenMetrics, callInfo)
+	mock.lockGetLLMTokenMetrics.Unlock()
+	return mock.GetLLMTokenMetricsFunc()
+}
+
+// GetLLMTokenMetricsCalls gets all the calls that were made to GetLLMTokenMetrics.
+// Check the length with:
+//
+//	len(mockedFrontend.GetLLMTokenMetricsCalls())
+func (mock *FrontendMock) GetLLMTokenMetricsCalls() []struct {
+} {
+	var calls []struct {
+	}
+	mock.lockGetLLMTokenMetrics.RLock()
+	calls = mock.calls.GetLLMTokenMetrics
+	mock.lockGetLLMTokenMetrics.RUnlock()
 	return calls
 }
 

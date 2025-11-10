@@ -102,6 +102,9 @@ type Frontend interface {
 	// Populate the sidebar with content.
 	SetSidebarContent(SidebarSection)
 
+	// GetLLMTokenMetrics returns aggregated LLM token metrics across all spans.
+	GetLLMTokenMetrics() *dagui.LLMTokenMetrics
+
 	prompt.PromptHandler
 }
 
