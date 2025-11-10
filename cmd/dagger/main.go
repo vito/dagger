@@ -154,6 +154,7 @@ func init() {
 		shellCmd,
 		clientCmd,
 		mcpCmd,
+		llmCmd, // LLM configuration and authentication
 	)
 
 	rootCmd.AddGroup(moduleGroup)

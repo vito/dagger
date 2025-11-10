@@ -13,6 +13,7 @@ import (
 	"dagger.io/dagger/telemetry"
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/dagger/dagger/core/llmconfig"
 	"github.com/dagger/dagger/dagql/dagui"
 	"github.com/dagger/dagger/dagql/idtui"
 	"github.com/dagger/dagger/engine/client"
@@ -46,6 +47,14 @@ var shellCmd = &cobra.Command{
 	Short: "Run an interactive dagger shell",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SetContext(idtui.WithPrintTraceLink(cmd.Context(), true))
+		
+		// If LLM model is specified, check if config exists and prompt for setup if needed
+		if llmModel != "" {
+			if err := ensureLLMConfig(cmd.Context()); err != nil {
+				return err
+			}
+		}
+		
 		return withEngine(cmd.Context(), initModuleParams(args), func(ctx context.Context, engineClient *client.Client) error {
 			dag := engineClient.Dagger()
 			handler := newShellCallHandler(dag, Frontend)
@@ -709,4 +718,42 @@ func (o *terminalWriter) Write(p []byte) (n int, err error) {
 // separated with a '&'.
 func (o *terminalWriter) SetProcessFunc(fn func([]byte) ([]byte, error)) {
 	o.processFn = fn
+}
+
+// ensureLLMConfig checks if LLM configuration exists and prompts for setup if needed
+func ensureLLMConfig(ctx context.Context) error {
+	// Import the llmconfig package at the top of the file
+	// Check if config exists, and if not, offer to set it up
+	if !llmconfig.ConfigExists() {
+		// Check if we have env vars as fallback
+		hasEnvVars := os.Getenv("ANTHROPIC_API_KEY") != "" ||
+			os.Getenv("OPENAI_API_KEY") != "" ||
+			os.Getenv("GEMINI_API_KEY") != ""
+
+		if !hasEnvVars {
+			// No config file and no env vars - prompt for setup
+			configured, err := llmconfig.AutoSetupIfNeeded(ctx, Frontend, interactive)
+			if err != nil {
+				return err
+			}
+
+			if !configured {
+				// User declined setup - show error
+				return fmt.Errorf(`No LLM configuration found.
+
+To get started, run:
+    dagger llm setup
+
+Or set environment variables:
+    export ANTHROPIC_API_KEY=sk-ant-...
+    export OPENAI_API_KEY=sk-...
+    export GEMINI_API_KEY=AIza...
+
+For unified access to all models with a single key:
+    https://openrouter.ai/keys
+`)
+			}
+		}
+	}
+	return nil
 }

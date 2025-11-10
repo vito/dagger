@@ -1,15 +1,49 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
-	"os"
+	"io"
 	"strings"
 
+	"github.com/charmbracelet/huh"
 	"github.com/spf13/cobra"
+	"github.com/vito/go-interact/interact"
 
 	"github.com/dagger/dagger/core/llmconfig"
 )
+
+// llmCmd is the parent command for all LLM-related subcommands
+var llmCmd = &cobra.Command{
+	Use:   "llm",
+	Short: "Manage LLM configuration and authentication",
+	Long: `Manage LLM (Large Language Model) configuration and authentication.
+
+The llm command provides subcommands to configure API keys for various LLM providers
+(OpenRouter, Anthropic, OpenAI, Google), view current configuration, and manage defaults.
+
+Configuration is stored in ~/.config/dagger/llm/config.json with 0600 permissions.
+
+For interactive setup, run:
+    dagger llm setup
+
+To view current configuration:
+    dagger llm config`,
+}
+
+func init() {
+	// Register all llm subcommands
+	llmCmd.AddCommand(
+		llmSetupCmd,
+		llmConfigCmd,
+		llmAddKeyCmd,
+		llmRemoveKeyCmd,
+		llmSetDefaultCmd,
+		llmResetCmd,
+		llmShowConfigCmd,
+	)
+}
 
 var llmConfigCmd = &cobra.Command{
 	Use:   "config",
@@ -52,7 +86,10 @@ var llmSetupCmd = &cobra.Command{
 	Use:   "setup",
 	Short: "Configure LLM authentication interactively",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		configured, err := llmconfig.InteractiveSetup(cmd.Context(), Frontend)
+		// Use a standalone prompt handler for form-based input
+		// (Frontend may be Pretty which requires a running TUI)
+		handler := newStandalonePromptHandler(cmd.OutOrStderr())
+		configured, err := llmconfig.InteractiveSetup(cmd.Context(), handler)
 		if err != nil {
 			return err
 		}
@@ -299,4 +336,22 @@ func contains(slice []string, item string) bool {
 		}
 	}
 	return false
+}
+
+// standalonePromptHandler is a simple prompt handler that doesn't require
+// a running TUI session (unlike frontendPretty which needs bubbletea running)
+type standalonePromptHandler struct {
+	output io.Writer
+}
+
+func newStandalonePromptHandler(w io.Writer) *standalonePromptHandler {
+	return &standalonePromptHandler{output: w}
+}
+
+func (h *standalonePromptHandler) HandlePrompt(ctx context.Context, _, prompt string, dest any) error {
+	return interact.NewInteraction(prompt).Resolve(dest)
+}
+
+func (h *standalonePromptHandler) HandleForm(ctx context.Context, form *huh.Form) error {
+	return form.RunWithContext(ctx)
 }
