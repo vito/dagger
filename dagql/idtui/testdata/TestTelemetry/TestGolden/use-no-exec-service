@@ -39,7 +39,7 @@ Expected stderr:
 │   ┆ service: Container.asService: Service!
 │   ): Container! X.Xs
 ├╴✔ .withEnvVariable(name: "NOW", value: "20XX-XX-XX XX:XX:XX.XXXX +XXXX UTC m=+X.X"): Container! X.Xs
-├╴▼ .withExec(args: ["redis-cli", "-h", "redis", "ping"]): Container! X.Xs
+├╴▼ exec redis-cli -h redis ping X.Xs
 │ ┃ PONG
 ╰╴▼ .stdout: String! X.Xs
   ┃ PONG

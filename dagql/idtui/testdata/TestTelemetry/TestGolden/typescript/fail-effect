@@ -18,13 +18,15 @@ Expected stderr:
 ▼ .failEffect: Container! X.Xs ERROR
 ! process "sh -c echo this is a failing effect; exit 1" did not complete successfully: exit code: 1
 ├╴$ Container.from(address: "alpine"): Container! X.Xs CACHED
-╰╴▼ .withExec(args: ["sh", "-c", "echo this is a failing effect; exit 1"]): Container! X.Xs ERROR
+╰╴▼ exec sh -c 'echo this is a failing effect; exit 1' X.Xs ERROR
   ┃ this is a failing effect
   ! process "sh -c echo this is a failing effect; exit 1" did not complete successfully: exit code: 1
 
-Error logs:
 
-▼ .withExec(args: ["sh", "-c", "echo this is a failing effect; exit 1"]): Container! X.Xs ERROR
+ERRORS ─────────────────────────────────────────────────────────────────────────
+
+✘ .failEffect: Container! X.Xs ERROR
+▼ exec sh -c 'echo this is a failing effect; exit 1' X.Xs ERROR
 this is a failing effect
 ! process "sh -c echo this is a failing effect; exit 1" did not complete successfully: exit code: 1
 

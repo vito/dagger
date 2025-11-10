@@ -16,14 +16,16 @@ Expected stderr:
 
 ✔ broken: Broken! X.Xs
 ▼ .broken: Void X.Xs ERROR
-  ▼ Container.withExec(args: ["go", "build", "-ldflags", "-s -w", "-o", "/runtime", "."]): Container! X.Xs ERROR
+  ▼ exec go build -ldflags '-s -w' -o /runtime . X.Xs ERROR
   ┃ # dagger/broken
   ┃ ./main.go:6:6: undefined: ctx
   ! process "go build -ldflags -s -w -o /runtime ." did not complete successfully: exit code: 1
 
-Error logs:
 
-▼ Container.withExec(args: ["go", "build", "-ldflags", "-s -w", "-o", "/runtime", "."]): Container! X.Xs ERROR
+ERRORS ─────────────────────────────────────────────────────────────────────────
+
+✘ .broken: Void X.Xs ERROR
+▼ exec go build -ldflags '-s -w' -o /runtime . X.Xs ERROR
 # dagger/broken
 ./main.go:6:6: undefined: ctx
 ! process "go build -ldflags -s -w -o /runtime ." did not complete successfully: exit code: 1

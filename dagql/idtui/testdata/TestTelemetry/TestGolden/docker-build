@@ -32,7 +32,7 @@ Expected stderr:
   │ ┃ what is up?
   ╰╴▼ [5/5] RUN echo im another layer X.Xs
     ┃ im another layer
-▼ .withExec(args: ["echo", "hey"]): Container! X.Xs
+▼ exec echo hey X.Xs
 ┃ hey
 ▼ .stdout: String! X.Xs
 ┃ hey

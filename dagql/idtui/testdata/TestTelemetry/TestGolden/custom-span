@@ -25,7 +25,7 @@ Expected stderr:
 ╰╴▼ custom span X.Xs
   ├╴✔ container: Container! X.Xs
   ├╴$ .from(address: "alpine"): Container! X.Xs CACHED
-  ├╴▼ .withExec(args: ["echo", "hello from Go! it is currently 20XX-XX-XX XX:XX:XX.XXXX +XXXX UTC m=+X.X"]): Container! X.Xs
+  ├╴▼ exec echo 'hello from Go! it is currently 20XX-XX-XX XX:XX:XX.XXXX +XXXX UTC m=+X.X' X.Xs
   │ ┃ hello from Go! it is currently 20XX-XX-XX XX:XX:XX.XXXX +XXXX UTC m=+X.X
   ╰╴▼ .stdout: String! X.Xs
     ┃ hello from Go! it is currently 20XX-XX-XX XX:XX:XX.XXXX +XXXX UTC m=+X.X
