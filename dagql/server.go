@@ -771,6 +771,10 @@ func (s *Server) Select(ctx context.Context, self AnyObjectResult, dest any, sel
 				}
 			}
 			return nil
+		} else if sel, isObj := res.(AnyObjectResult); isObj {
+			// We always support returning something that's already Selectable, e.g. an
+			// object loaded from its ID.
+			res = sel
 		} else if s.isObjectType(res.Type().Name()) {
 			// if the result is an Object, set it as the next selection target, and
 			// assign res to the "hydrated" Object

@@ -125,22 +125,12 @@ func (r *CheckGroup) Run(ctx context.Context) (*CheckGroup, error) {
 			// Reset output fields, in case we're re-running
 			check.Completed = false
 			check.Passed = false
-			var checkParent dagql.AnyObjectResult
-			if err := (func() (rerr error) {
-				ctx, span := Tracer(ctx).Start(ctx, "load check context", telemetry.Encapsulate())
-				defer telemetry.End(span, func() error { return rerr })
-				selectPath := []dagql.Selector{{Field: gqlFieldName(r.Module.Name())}}
-				// Select the whole path except the last part, *outside* the check span
-				// This keeps log noise at a minimum (eg. logs from loading the check don't show up in check logs)
-				for _, field := range check.Path[:len(check.Path)-1] {
-					selectPath = append(selectPath, dagql.Selector{Field: field})
-				}
-				return dag.Select(ctx, dag.Root(), &checkParent, selectPath...)
-			})(); err != nil {
-				return err
+			selectPath := []dagql.Selector{{Field: gqlFieldName(r.Module.Name())}}
+			for _, field := range check.Path {
+				selectPath = append(selectPath, dagql.Selector{Field: field})
 			}
-			var status any
-			checkErr := dag.Select(dagql.WithRepeatedTelemetry(ctx), checkParent, &status, dagql.Selector{Field: check.Path[len(check.Path)-1]})
+			var status any // TODO: if syncable object is returned, sync it?
+			checkErr := dag.Select(dagql.WithRepeatedTelemetry(ctx), dag.Root(), &status, selectPath...)
 			check.Completed = true
 			check.Passed = checkErr == nil
 			// Set the passed attribute on the span for telemetry
