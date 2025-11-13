@@ -197,37 +197,10 @@ func (db *DB) WalkSpans(opts FrontendOpts, spans iter.Seq[*Span], f func(*TraceT
 			lastCall = tree
 		}
 
-		children, revealed := span.ChildOrRevealedSpans(opts)
+		tree.RevealedChildren = len(span.RevealedSpans.Order) > 0
 
-		tree.RevealedChildren = revealed
-
-		for _, child := range children.Order {
+		for _, child := range span.ChildSpans.Order {
 			walk(child, tree)
-		}
-
-		if span.ErrorOrigin != nil {
-			// Walk the error origin, but first ensure its parent chain is properly established
-			errorOrigin := span.ErrorOrigin
-			var errorParents []*Span
-
-			// Collect all parents of the error origin that haven't been seen yet
-			current := errorOrigin.ParentSpan
-			for current != nil && !seen[current.ID] {
-				errorParents = append([]*Span{current}, errorParents...) // prepend to maintain order
-				current = current.ParentSpan
-			}
-
-			// Walk the parent chain first
-			currentParent := tree
-			for _, parentSpan := range errorParents {
-				walk(parentSpan, currentParent)
-				// Update currentParent to point to the tree we just created
-				// We need to find the tree that was just created for this parent
-				currentParent = lastTree
-			}
-
-			// Now walk the error origin with its proper parent
-			walk(errorOrigin, currentParent)
 		}
 
 		if lastTree != nil {
@@ -256,6 +229,7 @@ func (lv *RowsView) Rows(opts FrontendOpts) *Rows {
 	rows := &Rows{
 		BySpan: make(map[SpanID]*TraceRow, len(lv.Body)),
 	}
+
 	var walk func(*TraceTree, *TraceRow, int) *TraceRow
 	walk = func(tree *TraceTree, parent *TraceRow, depth int) *TraceRow {
 		row := &TraceRow{
@@ -269,7 +243,7 @@ func (lv *RowsView) Rows(opts FrontendOpts) *Rows {
 			Depth:                   depth,
 			IsRunningOrChildRunning: tree.IsRunningOrChildRunning,
 
-			HasChildren: len(tree.Children) > 0,
+			HasChildren: tree.hasVisibleChildren(opts),
 			Expanded:    tree.IsExpanded(opts),
 		}
 		if len(rows.Order) > 0 {
@@ -281,13 +255,29 @@ func (lv *RowsView) Rows(opts FrontendOpts) *Rows {
 		rows.BySpan[tree.Span.ID] = row
 		if row.Expanded {
 			var lastChild *TraceRow
-			for _, child := range tree.Children {
-				childRow := walk(child, row, depth+1)
-				if lastChild != nil {
-					childRow.Previous = lastChild
-					lastChild.Next = childRow
+
+			if tree.shouldShowRevealedSpans(opts) {
+				// Show revealed spans directly, finding their TraceTrees
+				for _, revealedSpan := range tree.Span.RevealedSpans.Order {
+					if revealedTree, ok := lv.BySpan[revealedSpan.ID]; ok {
+						childRow := walk(revealedTree, row, depth+1)
+						if lastChild != nil {
+							childRow.Previous = lastChild
+							lastChild.Next = childRow
+						}
+						lastChild = childRow
+					}
 				}
-				lastChild = childRow
+			} else {
+				// Show direct children
+				for _, child := range tree.Children {
+					childRow := walk(child, row, depth+1)
+					if lastChild != nil {
+						childRow.Previous = lastChild
+						lastChild.Next = childRow
+					}
+					lastChild = childRow
+				}
 			}
 			row.ShowingChildren = row.HasChildren
 		}
@@ -303,6 +293,22 @@ func (lv *RowsView) Rows(opts FrontendOpts) *Rows {
 		lastChild = childRow
 	}
 	return rows
+}
+
+func (row *TraceTree) shouldShowRevealedSpans(opts FrontendOpts) bool {
+	verbosity := opts.Verbosity
+	if v, ok := opts.SpanVerbosity[row.Span.ID]; ok {
+		verbosity = v
+	}
+	return row.RevealedChildren && !opts.RevealNoisySpans && verbosity < ShowSpammyVerbosity
+}
+
+func (row *TraceTree) hasVisibleChildren(opts FrontendOpts) bool {
+	if row.shouldShowRevealedSpans(opts) {
+		return len(row.Span.RevealedSpans.Order) > 0
+	} else {
+		return len(row.Children) > 0
+	}
 }
 
 func (row *TraceTree) IsExpanded(opts FrontendOpts) bool {

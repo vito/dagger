@@ -465,62 +465,6 @@ func (fe *frontendPretty) runWithTUI(ctx context.Context, run func(context.Conte
 	return fe.err
 }
 
-// func (fe *frontendPretty) renderErrorLogs(out TermOutput, r *renderer) bool {
-// 	if fe.rowsView == nil {
-// 		return false
-// 	}
-// 	rowsView := fe.db.RowsView(dagui.FrontendOpts{
-// 		ZoomedSpan: fe.db.PrimarySpan,
-// 		Verbosity:  dagui.ShowCompletedVerbosity,
-// 	})
-// 	errTree := fe.db.CollectErrors(rowsView)
-
-// 	var renderLogs []*dagui.TraceTree
-// 	dagui.WalkTree(errTree, func(tree *dagui.TraceTree, _ int) dagui.WalkDecision {
-// 		logs := fe.logs.Logs[tree.Span.ID]
-// 		if logs != nil && logs.UsedHeight() > 0 && !tree.Span.RollUpLogs {
-// 			renderLogs = append(renderLogs, tree)
-// 		}
-// 		return dagui.WalkContinue
-// 	})
-// 	if len(renderLogs) > 0 {
-// 		fmt.Fprintln(out)
-// 		fmt.Fprintln(out)
-// 		fmt.Fprint(out, out.String("ERRORS").Bold(), out.String(strings.Repeat(HorizBar, 80-len("ERRORS "))).Faint())
-// 		fmt.Fprintln(out)
-// 	}
-// 	for _, tree := range renderLogs {
-// 		logs := fe.logs.Logs[tree.Span.ID]
-// 		row := &dagui.TraceRow{
-// 			Span:     tree.Span,
-// 			Chained:  tree.Chained,
-// 			Expanded: true,
-// 		}
-// 		fmt.Fprintln(out)
-// 		var parents []*dagui.TraceRow
-// 		for p := tree.Parent; p != nil; p = p.Parent {
-// 			parents = append(parents, &dagui.TraceRow{
-// 				Span:     p.Span,
-// 				Chained:  p.Chained,
-// 				Expanded: true,
-// 			})
-// 		}
-// 		slices.Reverse(parents)
-// 		context := new(strings.Builder)
-// 		noColorOut := termenv.NewOutput(context, termenv.WithProfile(termenv.Ascii))
-// 		for _, p := range parents {
-// 			fe.renderStep(noColorOut, r, p, "")
-// 		}
-// 		fmt.Fprint(out, out.String(context.String()).Faint())
-// 		fe.renderStep(out, r, row, "")
-// 		logs.SetHeight(logs.UsedHeight())
-// 		logs.SetPrefix("")
-// 		fmt.Fprint(out, logs.View())
-// 		fe.renderStepError(out, r, row, "")
-// 	}
-// 	return len(errTree) > 0
-// }
-
 // FinalRender is called after the program has finished running and prints the
 // final output after the TUI has exited.
 func (fe *frontendPretty) FinalRender(w io.Writer) error {
@@ -552,16 +496,6 @@ func (fe *frontendPretty) FinalRender(w io.Writer) error {
 				fmt.Fprintln(os.Stderr, fe.msgPreFinalRender.String())
 			}()
 		}
-	}
-
-	// If there are errors, show log output.
-	if fe.err != nil && fe.shell == nil {
-		// Counter-intuitively, we don't want to render the primary output
-		// when there's an error, because the error is better represented by
-		// the progress output and error summary.
-		// if fe.renderErrorLogs(out, r) {
-		// 	return nil
-		// }
 	}
 
 	// Replay the primary output log to stdout/stderr.
@@ -2120,9 +2054,7 @@ func (fe *frontendPretty) renderErrorCause(out TermOutput, r *renderer, row *dag
 		Depth:    row.Depth,
 	}
 
-	// Create + render context rows
 	var parents []*dagui.TraceRow
-	var lastRow *dagui.TraceRow = rootCauseRow
 	for p := rootCauseTree.Parent; p != nil; p = p.Parent {
 		if p.Span.ID == row.Span.ID {
 			break
@@ -2133,23 +2065,36 @@ func (fe *frontendPretty) renderErrorCause(out TermOutput, r *renderer, row *dag
 			Depth:    row.Depth,
 			Expanded: true,
 		}
-		lastRow.Parent = parentRow
-		lastRow = parentRow
 		parents = append(parents, parentRow)
 	}
 
+	fmt.Fprint(out, prefix)
+	r.fancyIndent(out, row, false, true)
+
+	renderStepWithoutToggle := func(out TermOutput, row *dagui.TraceRow) {
+		fmt.Fprint(out, prefix)
+		r.fancyIndent(out, row, false, true)
+		fmt.Fprint(out, "  ")
+		fe.renderStepTitle(out, r, row, prefix)
+		fmt.Fprintln(out)
+	}
+	slices.Reverse(parents)
 	context := new(strings.Builder)
 	noColorOut := termenv.NewOutput(context, termenv.WithProfile(termenv.Ascii))
-	slices.Reverse(parents)
 	for _, p := range parents {
-		fe.renderStep(noColorOut, r, p, prefix)
+		renderStepWithoutToggle(noColorOut, p)
 	}
 	fmt.Fprint(out, out.String(context.String()).Faint())
-
-	fe.renderStep(out, r, rootCauseRow, prefix)
+	renderStepWithoutToggle(out, rootCauseRow)
 	if logs := fe.logs.Logs[rootCauseRow.Span.ID]; logs != nil {
 		logs.SetHeight(logs.UsedHeight())
-		logs.SetPrefix("")
+		prefix := strings.Repeat("  ", row.Depth)
+		if !fe.finalRender {
+			prefix += "  "
+			prefix += out.String(VertBoldBar).Foreground(restrainedStatusColor(rootCauseRow.Span)).String()
+			prefix += " "
+		}
+		logs.SetPrefix(prefix)
 		fmt.Fprint(out, logs.View())
 	}
 	fe.renderStepError(out, r, rootCauseRow, prefix)
@@ -2221,16 +2166,13 @@ func (fe *frontendPretty) renderStepError(out TermOutput, r *renderer, row *dagu
 	}
 }
 
-func (fe *frontendPretty) renderStep(out TermOutput, r *renderer, row *dagui.TraceRow, prefix string) error {
+func (fe *frontendPretty) renderStepTitle(out TermOutput, r *renderer, row *dagui.TraceRow, prefix string) error {
 	span := row.Span
 	chained := row.Chained
 	depth := row.Depth
 	isFocused := span.ID == fe.FocusedSpan && !fe.editlineFocused && fe.form == nil
 
-	fmt.Fprint(out, prefix)
-	r.fancyIndent(out, row, false, true)
-
-	fe.renderToggler(out, row, isFocused)
+	fe.renderStatusIcon(out, row)
 	fmt.Fprint(out, " ")
 
 	if r.Debug {
@@ -2273,8 +2215,6 @@ func (fe *frontendPretty) renderStep(out TermOutput, r *renderer, row *dagui.Tra
 		}
 	}
 
-	summary := map[string]int{}
-
 	if span != nil {
 		// TODO: when a span has child spans that have progress, do 2-d progress
 		// fe.renderVertexTasks(out, span, depth)
@@ -2292,6 +2232,7 @@ func (fe *frontendPretty) renderStep(out TermOutput, r *renderer, row *dagui.Tra
 		fe.renderStatus(out, span)
 		r.renderMetrics(out, span)
 
+		summary := map[string]int{}
 		for effect := range span.EffectSpans {
 			if effect.Passthrough {
 				// Don't show spans which are aggressively hidden.
@@ -2316,6 +2257,23 @@ func (fe *frontendPretty) renderStep(out TermOutput, r *renderer, row *dagui.Tra
 					out.String(strconv.Itoa(count)).Faint())
 			}
 		}
+	}
+
+	return nil
+}
+
+func (fe *frontendPretty) renderStep(out TermOutput, r *renderer, row *dagui.TraceRow, prefix string) error {
+	span := row.Span
+	isFocused := span.ID == fe.FocusedSpan && !fe.editlineFocused && fe.form == nil
+
+	fmt.Fprint(out, prefix)
+	r.fancyIndent(out, row, false, true)
+
+	fe.renderToggler(out, row, isFocused)
+	fmt.Fprint(out, " ")
+
+	if err := fe.renderStepTitle(out, r, row, prefix); err != nil {
+		return err
 	}
 
 	fmt.Fprintln(out)
@@ -2482,10 +2440,9 @@ func (fe *frontendPretty) renderToggler(out TermOutput, row *dagui.TraceRow, isF
 		chevron = hl(chevron.Foreground(statusColor(row.Span)))
 	}
 	fmt.Fprint(out, chevron.String())
+}
 
-	// Space between chevron and status icon
-	fmt.Fprint(out, " ")
-
+func (fe *frontendPretty) renderStatusIcon(out TermOutput, row *dagui.TraceRow) {
 	// Then render the status icon (without focus highlighting)
 	var statusIcon termenv.Style
 	icon, _ := fe.statusIcon(row.Span)
