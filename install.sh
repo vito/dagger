@@ -209,7 +209,7 @@ hash_sha256() {
     log_crit "hash_sha256 unable to find command to compute sha-256 hash"
     return 1
   fi
-}
+
 hash_sha256_verify() {
   TARGET=$1
   checksums=$2

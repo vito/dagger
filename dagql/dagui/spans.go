@@ -363,7 +363,7 @@ func (span *Span) PropagateStatusToParentsAndLinks() {
 		} else {
 			changed = parent.RunningSpans.Remove(span)
 		}
-		if span.Reveal || parent.ErrorOrigin == span {
+		if span.Reveal {
 			changed = parent.RevealedSpans.Add(span) || changed
 		}
 		if causal && span.IsFailed() {

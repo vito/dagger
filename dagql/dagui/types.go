@@ -205,6 +205,31 @@ func (db *DB) WalkSpans(opts FrontendOpts, spans iter.Seq[*Span], f func(*TraceT
 			walk(child, tree)
 		}
 
+		if span.ErrorOrigin != nil {
+			// Walk the error origin, but first ensure its parent chain is properly established
+			errorOrigin := span.ErrorOrigin
+			var errorParents []*Span
+
+			// Collect all parents of the error origin that haven't been seen yet
+			current := errorOrigin.ParentSpan
+			for current != nil && !seen[current.ID] {
+				errorParents = append([]*Span{current}, errorParents...) // prepend to maintain order
+				current = current.ParentSpan
+			}
+
+			// Walk the parent chain first
+			currentParent := tree
+			for _, parentSpan := range errorParents {
+				walk(parentSpan, currentParent)
+				// Update currentParent to point to the tree we just created
+				// We need to find the tree that was just created for this parent
+				currentParent = lastTree
+			}
+
+			// Now walk the error origin with its proper parent
+			walk(errorOrigin, currentParent)
+		}
+
 		if lastTree != nil {
 			lastTree.Final = true
 		}

@@ -15,6 +15,19 @@ func Encapsulate() trace.SpanStartOption {
 	return trace.WithAttributes(attribute.Bool(UIEncapsulateAttr, true))
 }
 
+// RollUpSpans allows a span to 'roll up' child span states in its header.
+// Useful for spans that may do a lot of crunching that's not worth surfacing
+// but we still want to give the user an idea of progress.
+func RollUpSpans() trace.SpanStartOption {
+	return trace.WithAttributes(attribute.Bool(UIRollupSpansAttr, true))
+}
+
+// RollUpLogs allows a span to 'roll up' logs in all descendant spans to its own
+// logs in the UI. This is purely handled client-side.
+func RollUpLogs() trace.SpanStartOption {
+	return trace.WithAttributes(attribute.Bool(UIRollupLogsAttr, true))
+}
+
 // Reveal can be applied to a span to indicate that this span should
 // collapse its children by default.
 func Reveal() trace.SpanStartOption {

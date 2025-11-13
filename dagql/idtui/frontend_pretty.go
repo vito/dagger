@@ -465,60 +465,61 @@ func (fe *frontendPretty) runWithTUI(ctx context.Context, run func(context.Conte
 	return fe.err
 }
 
-func (fe *frontendPretty) renderErrorLogs(out TermOutput, r *renderer) bool {
-	if fe.rowsView == nil {
-		return false
-	}
-	rowsView := fe.db.RowsView(dagui.FrontendOpts{
-		ZoomedSpan: fe.db.PrimarySpan,
-		Verbosity:  dagui.ShowCompletedVerbosity,
-	})
-	errTree := fe.db.CollectErrors(rowsView)
-	var renderLogs []*dagui.TraceTree
-	dagui.WalkTree(errTree, func(tree *dagui.TraceTree, _ int) dagui.WalkDecision {
-		logs := fe.logs.Logs[tree.Span.ID]
-		if logs != nil && logs.UsedHeight() > 0 && !tree.Span.RollUpLogs {
-			renderLogs = append(renderLogs, tree)
-		}
-		return dagui.WalkContinue
-	})
-	if len(renderLogs) > 0 {
-		fmt.Fprintln(out)
-		fmt.Fprintln(out)
-		fmt.Fprint(out, out.String("ERRORS").Bold(), out.String(strings.Repeat(HorizBar, 80-len("ERRORS "))).Faint())
-		fmt.Fprintln(out)
-	}
-	for _, tree := range renderLogs {
-		logs := fe.logs.Logs[tree.Span.ID]
-		row := &dagui.TraceRow{
-			Span:     tree.Span,
-			Chained:  tree.Chained,
-			Expanded: true,
-		}
-		fmt.Fprintln(out)
-		var parents []*dagui.TraceRow
-		for p := tree.Parent; p != nil; p = p.Parent {
-			parents = append(parents, &dagui.TraceRow{
-				Span:     p.Span,
-				Chained:  p.Chained,
-				Expanded: true,
-			})
-		}
-		slices.Reverse(parents)
-		context := new(strings.Builder)
-		noColorOut := termenv.NewOutput(context, termenv.WithProfile(termenv.Ascii))
-		for _, p := range parents {
-			fe.renderStep(noColorOut, r, p, "")
-		}
-		fmt.Fprint(out, out.String(context.String()).Faint())
-		fe.renderStep(out, r, row, "")
-		logs.SetHeight(logs.UsedHeight())
-		logs.SetPrefix("")
-		fmt.Fprint(out, logs.View())
-		fe.renderStepError(out, r, row, "")
-	}
-	return len(errTree) > 0
-}
+// func (fe *frontendPretty) renderErrorLogs(out TermOutput, r *renderer) bool {
+// 	if fe.rowsView == nil {
+// 		return false
+// 	}
+// 	rowsView := fe.db.RowsView(dagui.FrontendOpts{
+// 		ZoomedSpan: fe.db.PrimarySpan,
+// 		Verbosity:  dagui.ShowCompletedVerbosity,
+// 	})
+// 	errTree := fe.db.CollectErrors(rowsView)
+
+// 	var renderLogs []*dagui.TraceTree
+// 	dagui.WalkTree(errTree, func(tree *dagui.TraceTree, _ int) dagui.WalkDecision {
+// 		logs := fe.logs.Logs[tree.Span.ID]
+// 		if logs != nil && logs.UsedHeight() > 0 && !tree.Span.RollUpLogs {
+// 			renderLogs = append(renderLogs, tree)
+// 		}
+// 		return dagui.WalkContinue
+// 	})
+// 	if len(renderLogs) > 0 {
+// 		fmt.Fprintln(out)
+// 		fmt.Fprintln(out)
+// 		fmt.Fprint(out, out.String("ERRORS").Bold(), out.String(strings.Repeat(HorizBar, 80-len("ERRORS "))).Faint())
+// 		fmt.Fprintln(out)
+// 	}
+// 	for _, tree := range renderLogs {
+// 		logs := fe.logs.Logs[tree.Span.ID]
+// 		row := &dagui.TraceRow{
+// 			Span:     tree.Span,
+// 			Chained:  tree.Chained,
+// 			Expanded: true,
+// 		}
+// 		fmt.Fprintln(out)
+// 		var parents []*dagui.TraceRow
+// 		for p := tree.Parent; p != nil; p = p.Parent {
+// 			parents = append(parents, &dagui.TraceRow{
+// 				Span:     p.Span,
+// 				Chained:  p.Chained,
+// 				Expanded: true,
+// 			})
+// 		}
+// 		slices.Reverse(parents)
+// 		context := new(strings.Builder)
+// 		noColorOut := termenv.NewOutput(context, termenv.WithProfile(termenv.Ascii))
+// 		for _, p := range parents {
+// 			fe.renderStep(noColorOut, r, p, "")
+// 		}
+// 		fmt.Fprint(out, out.String(context.String()).Faint())
+// 		fe.renderStep(out, r, row, "")
+// 		logs.SetHeight(logs.UsedHeight())
+// 		logs.SetPrefix("")
+// 		fmt.Fprint(out, logs.View())
+// 		fe.renderStepError(out, r, row, "")
+// 	}
+// 	return len(errTree) > 0
+// }
 
 // FinalRender is called after the program has finished running and prints the
 // final output after the TUI has exited.
@@ -558,9 +559,9 @@ func (fe *frontendPretty) FinalRender(w io.Writer) error {
 		// Counter-intuitively, we don't want to render the primary output
 		// when there's an error, because the error is better represented by
 		// the progress output and error summary.
-		if fe.renderErrorLogs(out, r) {
-			return nil
-		}
+		// if fe.renderErrorLogs(out, r) {
+		// 	return nil
+		// }
 	}
 
 	// Replay the primary output log to stdout/stderr.
@@ -2029,7 +2030,11 @@ func (fe *frontendPretty) renderRow(out TermOutput, r *renderer, row *dagui.Trac
 			}
 		}
 	}
-	fe.renderStepError(out, r, row, prefix)
+	if row.Span.ErrorOrigin != nil && !row.Expanded {
+		fe.renderErrorCause(out, r, row, prefix)
+	} else {
+		fe.renderStepError(out, r, row, prefix)
+	}
 	fe.renderDebug(out, row.Span, prefix+Block25+" ", false)
 	return true
 }
@@ -2059,8 +2064,12 @@ func (fe *frontendPretty) renderDebug(out TermOutput, span *dagui.Span, prefix s
 	}
 	if len(span.RevealedSpans.Order) > 0 {
 		vt.WriteMarkdown([]byte("\n\n## Revealed spans\n\n"))
-		for _, revealed := range span.RevealedSpans.Order {
+		for i, revealed := range span.RevealedSpans.Order {
 			vt.WriteMarkdown([]byte("- " + revealed.Name + "\n"))
+			if i > 10 {
+				vt.WriteMarkdown([]byte("- ...\n"))
+				break
+			}
 		}
 	}
 	fmt.Fprint(out, prefix+vt.View())
@@ -2093,6 +2102,57 @@ func spanIsVisible(span *dagui.Span, row *dagui.TraceRow) bool {
 		}
 	}
 	return false
+}
+
+func (fe *frontendPretty) renderErrorCause(out TermOutput, r *renderer, row *dagui.TraceRow, prefix string) {
+	rootCause := row.Span.ErrorOrigin
+
+	rootCauseTree := fe.rowsView.BySpan[rootCause.ID]
+	if rootCauseTree == nil {
+		slog.Warn("error origin has no tree", "causeID", rootCause.ID)
+		return
+	}
+
+	rootCauseRow := &dagui.TraceRow{
+		Span:     rootCause,
+		Chained:  false,
+		Expanded: true,
+		Depth:    row.Depth,
+	}
+
+	// Create + render context rows
+	var parents []*dagui.TraceRow
+	var lastRow *dagui.TraceRow = rootCauseRow
+	for p := rootCauseTree.Parent; p != nil; p = p.Parent {
+		if p.Span.ID == row.Span.ID {
+			break
+		}
+		parentRow := &dagui.TraceRow{
+			Span:     p.Span,
+			Chained:  p.Chained,
+			Depth:    row.Depth,
+			Expanded: true,
+		}
+		lastRow.Parent = parentRow
+		lastRow = parentRow
+		parents = append(parents, parentRow)
+	}
+
+	context := new(strings.Builder)
+	noColorOut := termenv.NewOutput(context, termenv.WithProfile(termenv.Ascii))
+	slices.Reverse(parents)
+	for _, p := range parents {
+		fe.renderStep(noColorOut, r, p, prefix)
+	}
+	fmt.Fprint(out, out.String(context.String()).Faint())
+
+	fe.renderStep(out, r, rootCauseRow, prefix)
+	if logs := fe.logs.Logs[rootCauseRow.Span.ID]; logs != nil {
+		logs.SetHeight(logs.UsedHeight())
+		logs.SetPrefix("")
+		fmt.Fprint(out, logs.View())
+	}
+	fe.renderStepError(out, r, rootCauseRow, prefix)
 }
 
 func (fe *frontendPretty) renderStepError(out TermOutput, r *renderer, row *dagui.TraceRow, prefix string) {
