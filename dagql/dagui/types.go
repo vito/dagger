@@ -78,7 +78,7 @@ func (db *DB) RowsView(opts FrontendOpts) *RowsView {
 	}
 	var spans iter.Seq[*Span]
 	if view.Zoomed != nil {
-		if len(view.Zoomed.RevealedSpans.Order) > 0 &&
+		if len(view.Zoomed.RevealedSpans().Order) > 0 &&
 			// Revealed spans bubble up all the way to the root span. By default, we
 			// want to preserve the top-level context (i.e. spans immediately beneath
 			// root). So, we only prioritize revealed spans if the zoomed span is also
@@ -90,9 +90,9 @@ func (db *DB) RowsView(opts FrontendOpts) *RowsView {
 			// Maybe it's slick to see only the intentionally revealed stuff? But you
 			// probably wouldn't that for Errored spans which are auto-revealed.
 			view.Zoomed.Passthrough {
-			spans = view.Zoomed.RevealedSpans.Iter()
+			spans = view.Zoomed.RevealedSpans().Iter()
 		} else {
-			spans = view.Zoomed.ChildSpans.Iter()
+			spans = view.Zoomed.ChildSpans().Iter()
 		}
 	} else {
 		spans = db.AllSpans()
@@ -132,7 +132,7 @@ func (db *DB) WalkSpans(opts FrontendOpts, spans iter.Seq[*Span], f func(*TraceT
 			// can happen if we're within a larger trace - we'll allocate our parent,
 			// but not actually see it, so just move along to its children.
 			!span.Received {
-			for _, child := range span.ChildSpans.Order {
+			for _, child := range span.ChildSpans().Order {
 				walk(child, parent)
 			}
 			return false
@@ -151,7 +151,7 @@ func (db *DB) WalkSpans(opts FrontendOpts, spans iter.Seq[*Span], f func(*TraceT
 				if lastTree != nil {
 					lastTree.Final = true
 				}
-				for _, child := range span.ChildSpans.Order {
+				for _, child := range span.ChildSpans().Order {
 					walk(child, parent)
 				}
 				return false
@@ -199,9 +199,9 @@ func (db *DB) WalkSpans(opts FrontendOpts, spans iter.Seq[*Span], f func(*TraceT
 			lastCall = tree
 		}
 
-		tree.RevealedChildren = len(span.RevealedSpans.Order) > 0
+		tree.RevealedChildren = len(span.RevealedSpans().Order) > 0
 
-		for _, child := range span.ChildSpans.Order {
+		for _, child := range span.ChildSpans().Order {
 			walk(child, tree)
 		}
 
@@ -259,7 +259,7 @@ func (lv *RowsView) Rows(opts FrontendOpts) *Rows {
 
 			if tree.shouldShowRevealedSpans(opts) {
 				// Show revealed spans directly, finding their TraceTrees
-				for _, revealedSpan := range tree.Span.RevealedSpans.Order {
+				for _, revealedSpan := range tree.Span.RevealedSpans().Order {
 					if revealedTree, ok := lv.BySpan[revealedSpan.ID]; ok {
 						childRow := walk(revealedTree, row, depth+1)
 						if lastChild != nil {
@@ -306,7 +306,7 @@ func (row *TraceTree) shouldShowRevealedSpans(opts FrontendOpts) bool {
 
 func (row *TraceTree) hasVisibleChildren(opts FrontendOpts) bool {
 	if row.shouldShowRevealedSpans(opts) {
-		return len(row.Span.RevealedSpans.Order) > 0
+		return len(row.Span.RevealedSpans().Order) > 0
 	} else {
 		return len(row.Children) > 0
 	}

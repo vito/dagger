@@ -88,20 +88,21 @@ func (st *RollUpState) decrementCategory(cat spanStateCategory) {
 type Span struct {
 	SpanSnapshot
 
-	ParentSpan    *Span   `json:"-"`
-	ChildSpans    SpanSet `json:"-"`
-	RunningSpans  SpanSet `json:"-"`
-	FailedLinks   SpanSet `json:"-"`
-	CanceledLinks SpanSet `json:"-"`
-	RevealedSpans SpanSet `json:"-"`
-	ErrorOrigins  SpanSet `json:"-"`
+	ParentSpan *Span `json:"-"`
+
+	// Lazy-initialized SpanSets to reduce memory overhead
+	childSpans      SpanSet `json:"-"`
+	runningSpans    SpanSet `json:"-"`
+	failedLinks     SpanSet `json:"-"`
+	canceledLinks   SpanSet `json:"-"`
+	revealedSpans   SpanSet `json:"-"`
+	errorOrigins    SpanSet `json:"-"`
+	causesViaLinks  SpanSet
+	effectsViaLinks SpanSet
 
 	callCache *callpbv1.Call
 	baseCache *callpbv1.Call
 
-	// v0.15+
-	causesViaLinks  SpanSet
-	effectsViaLinks SpanSet
 	// v0.14 and below
 	causesViaAttrs  SpanSet
 	effectsViaAttrs map[string]SpanSet
@@ -120,9 +121,73 @@ type Span struct {
 	db *DB
 }
 
+// Lazy accessors for SpanSets to reduce memory allocation
+func (span *Span) ChildSpans() SpanSet {
+	if span.childSpans == nil {
+		span.childSpans = NewSpanSet()
+	}
+	return span.childSpans
+}
+
+func (span *Span) RunningSpans() SpanSet {
+	if span.runningSpans == nil {
+		span.runningSpans = NewSpanSet()
+	}
+	return span.runningSpans
+}
+
+func (span *Span) FailedLinks() SpanSet {
+	if span.failedLinks == nil {
+		span.failedLinks = NewSpanSet()
+	}
+	return span.failedLinks
+}
+
+func (span *Span) CanceledLinks() SpanSet {
+	if span.canceledLinks == nil {
+		span.canceledLinks = NewSpanSet()
+	}
+	return span.canceledLinks
+}
+
+func (span *Span) RevealedSpans() SpanSet {
+	if span.revealedSpans == nil {
+		span.revealedSpans = NewSpanSet()
+	}
+	return span.revealedSpans
+}
+
+func (span *Span) ErrorOrigins() SpanSet {
+	if span.errorOrigins == nil {
+		span.errorOrigins = NewSpanSet()
+	}
+	return span.errorOrigins
+}
+
+func (span *Span) CausesViaLinks() SpanSet {
+	if span.causesViaLinks == nil {
+		span.causesViaLinks = NewSpanSet()
+	}
+	return span.causesViaLinks
+}
+
+func (span *Span) EffectsViaLinks() SpanSet {
+	if span.effectsViaLinks == nil {
+		span.effectsViaLinks = NewSpanSet()
+	}
+	return span.effectsViaLinks
+}
+
+func (span *Span) CausesViaAttrs() SpanSet {
+	if span.causesViaAttrs == nil {
+		span.causesViaAttrs = NewSpanSet()
+	}
+	return span.causesViaAttrs
+}
+
 // Snapshot returns a snapshot of the span's current state.
 func (span *Span) Snapshot() SpanSnapshot {
-	span.ChildCount = countChildren(span.ChildSpans, FrontendOpts{})
+	span.ChildCount = countChildren(span.ChildSpans(), FrontendOpts{})
 	span.Failed_, span.FailedReason_ = span.FailedReason()
 	span.Cached_, span.CachedReason_ = span.CachedReason()
 	span.Pending_, span.PendingReason_ = span.PendingReason()
@@ -190,7 +255,7 @@ func countChildren(set SpanSet, opts FrontendOpts) int {
 	count := 0
 	for _, child := range set.Order {
 		if child.Passthrough && !opts.Debug {
-			count += countChildren(child.ChildSpans, opts)
+			count += countChildren(child.ChildSpans(), opts)
 		} else {
 			count += 1
 		}
@@ -423,15 +488,15 @@ func (span *Span) PropagateStatusToParentsAndLinks() {
 	propagate := func(parent *Span, causal, activity bool) bool {
 		var changed bool
 		if span.IsRunningOrEffectsRunning() {
-			changed = parent.RunningSpans.Add(span)
+			changed = parent.RunningSpans().Add(span)
 		} else {
-			changed = parent.RunningSpans.Remove(span)
+			changed = parent.RunningSpans().Remove(span)
 		}
 		if causal && span.IsFailed() {
-			changed = parent.FailedLinks.Add(span) || changed
+			changed = parent.FailedLinks().Add(span) || changed
 		}
 		if causal && span.IsCanceled() {
-			changed = parent.CanceledLinks.Add(span) || changed
+			changed = parent.CanceledLinks().Add(span) || changed
 		}
 		if activity && parent.Activity.Add(span) {
 			changed = true
@@ -465,7 +530,7 @@ func (span *Span) PropagateStatusToParentsAndLinks() {
 	// Handle revealed spans propagation separately to stop at revealed parents
 	if span.Reveal {
 		for parent := range span.Parents {
-			if parent.RevealedSpans.Add(span) {
+			if parent.RevealedSpans().Add(span) {
 				span.db.update(parent)
 			}
 
@@ -589,14 +654,16 @@ func (span *Span) initializeRollUpState() {
 func (span *Span) Descendants(f func(*Span) bool) {
 	var collect func(*Span) bool
 	collect = func(s *Span) bool {
-		// Use ChildSpans directly since we don't have opts here
-		for _, child := range s.ChildSpans.Order {
-			if !f(child) {
-				return false
-			}
-			// Recursively collect grandchildren
-			if !collect(child) {
-				return false
+		// Use ChildSpans accessor
+		if s.childSpans != nil {
+			for _, child := range s.childSpans.Order {
+				if !f(child) {
+					return false
+				}
+				// Recursively collect grandchildren
+				if !collect(child) {
+					return false
+				}
 			}
 		}
 		return true
@@ -615,10 +682,10 @@ func (span *Span) ChildOrRevealedSpans(opts FrontendOpts) (SpanSet, bool) {
 	if v, ok := opts.SpanVerbosity[span.ID]; ok {
 		verbosity = v
 	}
-	if len(span.RevealedSpans.Order) > 0 && !opts.RevealNoisySpans && verbosity < ShowSpammyVerbosity {
-		return span.RevealedSpans, true
+	if span.revealedSpans != nil && len(span.revealedSpans.Order) > 0 && !opts.RevealNoisySpans && verbosity < ShowSpammyVerbosity {
+		return span.revealedSpans, true
 	} else {
-		return span.ChildSpans, false
+		return span.ChildSpans(), false
 	}
 }
 
@@ -644,8 +711,10 @@ func (span *Span) Errors() SpanSet {
 	if len(errs.Order) > 0 {
 		return errs
 	}
-	for _, failed := range span.FailedLinks.Order {
-		errs.Add(failed)
+	if span.failedLinks != nil {
+		for _, failed := range span.failedLinks.Order {
+			errs.Add(failed)
+		}
 	}
 	if len(errs.Order) > 0 {
 		return errs
@@ -668,7 +737,7 @@ func (span *Span) IsFailedOrCausedFailure() bool {
 	if span.Final {
 		return span.Failed_
 	}
-	if span.IsFailed() || len(span.FailedLinks.Order) > 0 {
+	if span.IsFailed() || (span.failedLinks != nil && len(span.failedLinks.Order) > 0) {
 		return true
 	}
 	for _, effect := range span.EffectIDs {
@@ -687,8 +756,10 @@ func (span *Span) FailedReason() (bool, []string) {
 	if span.IsFailed() {
 		reasons = append(reasons, "span itself errored")
 	}
-	for _, failed := range span.FailedLinks.Order {
-		reasons = append(reasons, "span has failed link: "+failed.Name)
+	if span.failedLinks != nil {
+		for _, failed := range span.failedLinks.Order {
+			reasons = append(reasons, "span has failed link: "+failed.Name)
+		}
 	}
 	for _, effect := range span.EffectIDs {
 		if span.db.FailedEffects[effect] {
@@ -699,7 +770,7 @@ func (span *Span) FailedReason() (bool, []string) {
 }
 
 func (span *Span) IsCanceled() bool {
-	return span.Canceled || len(span.CanceledLinks.Order) > 0
+	return span.Canceled || (span.canceledLinks != nil && len(span.canceledLinks.Order) > 0)
 }
 
 func (span *Span) CanceledReason() (bool, []string) {
@@ -712,8 +783,10 @@ func (span *Span) CanceledReason() (bool, []string) {
 	} else if span.Canceled {
 		reasons = append(reasons, "span says it is canceled")
 	}
-	for _, canceled := range span.CanceledLinks.Order {
-		reasons = append(reasons, "span has canceled link: "+canceled.Name)
+	if span.canceledLinks != nil {
+		for _, canceled := range span.canceledLinks.Order {
+			reasons = append(reasons, "span has canceled link: "+canceled.Name)
+		}
 	}
 	return len(reasons) > 0, reasons
 }
@@ -769,9 +842,11 @@ func (span *Span) CausalSpans(f func(*Span) bool) {
 		}
 		return true
 	}
-	for _, cause := range span.causesViaLinks.Order {
-		if !visit(cause) {
-			return
+	if span.causesViaLinks != nil {
+		for _, cause := range span.causesViaLinks.Order {
+			if !visit(cause) {
+				return
+			}
 		}
 	}
 	if span.causesViaAttrs != nil {
@@ -788,7 +863,7 @@ func (span *Span) CausalSpans(f func(*Span) bool) {
 }
 
 func (span *Span) EffectSpans(f func(*Span) bool) {
-	if len(span.effectsViaLinks.Order) > 0 {
+	if span.effectsViaLinks != nil && len(span.effectsViaLinks.Order) > 0 {
 		for _, span := range span.effectsViaLinks.Order {
 			if !f(span) {
 				return
@@ -847,8 +922,10 @@ func (span *Span) PendingReason() (bool, []string) {
 		if span.IsRunning() {
 			reasons = append(reasons, "span is running")
 		}
-		for _, running := range span.RunningSpans.Order {
-			reasons = append(reasons, "span has running link: "+running.Name)
+		if span.runningSpans != nil {
+			for _, running := range span.runningSpans.Order {
+				reasons = append(reasons, "span has running link: "+running.Name)
+			}
 		}
 		return false, reasons
 	}

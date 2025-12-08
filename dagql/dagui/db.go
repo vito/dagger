@@ -32,7 +32,7 @@ type DB struct {
 
 	Resources map[attribute.Distinct]*resource.Resource
 
-	CallPayloads map[string]string
+	CallPayloads KV
 	Calls        map[string]*callpbv1.Call
 
 	Outputs   map[string]map[string]struct{}
@@ -63,29 +63,61 @@ type DB struct {
 	seenSpans map[SpanID]struct{}
 }
 
+type KV interface {
+	Set(key, value string) error
+	SetBatch(kvs []KeyValue) error
+	Get(key string) (string, bool, error)
+}
+
+type KeyValue struct {
+	Key   string
+	Value string
+}
+
+type MapKV map[string]string
+
+func (m MapKV) Set(key, value string) error {
+	m[key] = value
+	return nil
+}
+
+func (m MapKV) SetBatch(kvs []KeyValue) error {
+	for _, kv := range kvs {
+		m[kv.Key] = kv.Value
+	}
+	return nil
+}
+
+func (m MapKV) Get(key string) (string, bool, error) {
+	v, found := m[key]
+	return v, found, nil
+}
+
 func NewDB() *DB {
+	// Pre-size maps for large traces to reduce allocations
+	const initialCapacity = 1024
 	return &DB{
-		PrimaryLogs: make(map[SpanID][]sdklog.Record),
+		PrimaryLogs: make(map[SpanID][]sdklog.Record, initialCapacity),
 
 		Spans:     NewSpanSet(),
-		Resources: make(map[attribute.Distinct]*resource.Resource),
+		Resources: make(map[attribute.Distinct]*resource.Resource, 16),
 
-		CallPayloads: make(map[string]string),
-		Calls:        make(map[string]*callpbv1.Call),
+		CallPayloads: MapKV{},
+		Calls:        make(map[string]*callpbv1.Call, initialCapacity),
 
-		OutputOf:  make(map[string]map[string]struct{}),
-		Outputs:   make(map[string]map[string]struct{}),
-		Intervals: make(map[string]map[time.Time]*Span),
+		OutputOf:  make(map[string]map[string]struct{}, initialCapacity),
+		Outputs:   make(map[string]map[string]struct{}, initialCapacity),
+		Intervals: make(map[string]map[time.Time]*Span, initialCapacity),
 
-		CauseSpans:   make(map[string]SpanSet),
-		EffectSpans:  make(map[string]SpanSet),
-		CreatorSpans: make(map[string]SpanSet),
+		CauseSpans:   make(map[string]SpanSet, initialCapacity),
+		EffectSpans:  make(map[string]SpanSet, initialCapacity),
+		CreatorSpans: make(map[string]SpanSet, initialCapacity),
 
-		CompletedEffects: make(map[string]bool),
-		FailedEffects:    make(map[string]bool),
+		CompletedEffects: make(map[string]bool, initialCapacity),
+		FailedEffects:    make(map[string]bool, initialCapacity),
 
 		updatedSpans: NewSpanSet(),
-		seenSpans:    make(map[SpanID]struct{}),
+		seenSpans:    make(map[SpanID]struct{}, initialCapacity),
 	}
 }
 
@@ -113,16 +145,18 @@ func (db *DB) UpdatedSnapshots(filter map[SpanID]bool) []SpanSnapshot {
 			// deep-dive.
 			return true
 		}
-		if span.Reveal || len(span.RevealedSpans.Order) > 0 {
+		if span.Reveal || (span.revealedSpans != nil && len(span.revealedSpans.Order) > 0) {
 			// always include revealed spans and their parents
 			return true
 		}
 		if span.Passthrough {
 			// include any passthrough spans to ensure failures are collected.
 			// the POST /query span for example never fails on its own.
-			for _, child := range span.ChildSpans.Order {
-				if child.IsFailedOrCausedFailure() {
-					return true
+			if span.childSpans != nil {
+				for _, child := range span.childSpans.Order {
+					if child.IsFailedOrCausedFailure() {
+						return true
+					}
 				}
 			}
 		}
@@ -365,15 +399,8 @@ func (db *DB) newSpan(spanID SpanID) *Span {
 		SpanSnapshot: SpanSnapshot{
 			ID: spanID,
 		},
-		ChildSpans:      NewSpanSet(),
-		RunningSpans:    NewSpanSet(),
-		RevealedSpans:   NewSpanSet(),
-		FailedLinks:     NewSpanSet(),
-		CanceledLinks:   NewSpanSet(),
-		ErrorOrigins:    NewSpanSet(),
-		causesViaLinks:  NewSpanSet(),
-		effectsViaLinks: NewSpanSet(),
-		db:              db,
+		db: db,
+		// SpanSets are now lazily initialized via accessor methods
 	}
 }
 
@@ -618,7 +645,7 @@ func (db *DB) integrateSpan(span *Span) { //nolint: gocyclo
 	// associate the span to its parent
 	if span.ParentID.IsValid() {
 		span.ParentSpan = db.initSpan(span.ParentID)
-		if span.ParentSpan.ChildSpans.Add(span) {
+		if span.ParentSpan.ChildSpans().Add(span) {
 			// if we're a new child, take a new snapshot for ChildCount
 			db.update(span.ParentSpan)
 		}
@@ -638,9 +665,9 @@ func (db *DB) integrateSpan(span *Span) { //nolint: gocyclo
 			// (Otherwise the linking span could just be a child span.)
 			"":
 			linked := db.initSpan(linkedCtx.SpanID)
-			linked.ChildSpans.Add(span)
-			linked.effectsViaLinks.Add(span)
-			span.causesViaLinks.Add(linked)
+			linked.ChildSpans().Add(span)
+			linked.EffectsViaLinks().Add(span)
+			span.CausesViaLinks().Add(linked)
 		case telemetry.LinkPurposeErrorOrigin:
 			if linkedCtx.SpanID == span.ID {
 				// defense in depth; it's technically possible to link to yourself, and
@@ -649,7 +676,7 @@ func (db *DB) integrateSpan(span *Span) { //nolint: gocyclo
 				continue
 			}
 			linked := db.initSpan(linkedCtx.SpanID)
-			span.ErrorOrigins.Add(linked)
+			span.ErrorOrigins().Add(linked)
 		}
 	}
 
@@ -657,7 +684,7 @@ func (db *DB) integrateSpan(span *Span) { //nolint: gocyclo
 	if span.Status.Code == codes.Error {
 		for _, origin := range telemetry.ParseErrorOrigins(span.Status.Description) {
 			linked := db.initSpan(SpanID{SpanID: origin.SpanID()})
-			span.ErrorOrigins.Add(linked)
+			span.ErrorOrigins().Add(linked)
 		}
 	}
 
@@ -670,7 +697,7 @@ func (db *DB) integrateSpan(span *Span) { //nolint: gocyclo
 	}
 
 	if span.CallDigest != "" && span.CallPayload != "" {
-		db.CallPayloads[span.CallDigest] = span.CallPayload
+		_ = db.CallPayloads.Set(span.CallDigest, span.CallPayload)
 	}
 
 	if !span.ParentID.IsValid() && span.Received {
@@ -843,21 +870,27 @@ func (db *DB) Call(dig string) *callpbv1.Call {
 	}
 
 	// Next, try to decode from the call payload
-	if callPayload, ok := db.CallPayloads[dig]; ok {
+	if callPayload, ok, err := db.CallPayloads.Get(dig); ok {
 		var call callpbv1.Call
 		if err := call.Decode(callPayload); err != nil {
-			slog.Warn("failed to decode call", "err", err)
+			slog.Warn("failed to decode call", "err", err, "payload", callPayload)
 		} else {
 			// Cache the decoded call for future use
 			db.Calls[dig] = &call
 			return &call
 		}
+	} else if err != nil {
+		slog.Warn("failed to get call payload", "err", err)
 	}
 
 	// Finally, try to find the call through creator spans
 	if creators, ok := db.CreatorSpans[dig]; ok {
 		// Try each creator in order
 		for _, creator := range creators.Order {
+			if creator.CallDigest == dig {
+				// prevent infinite recursion
+				continue
+			}
 			if creatorCall := db.Call(creator.CallDigest); creatorCall != nil {
 				return creatorCall
 			}
