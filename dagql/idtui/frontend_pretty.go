@@ -723,7 +723,7 @@ func (fe *frontendPretty) keys(out *termenv.Output) []key.Binding {
 			KeyEnabled(fe.ZoomedSpan.IsValid() && fe.ZoomedSpan != fe.db.PrimarySpan)),
 		key.NewBinding(key.WithKeys("r"),
 			key.WithHelp("r", "go to error"),
-			KeyEnabled(focused != nil && len(focused.ErrorOrigins.Order) > 0)),
+			KeyEnabled(focused != nil && len(focused.ErrorOrigins().Order) > 0)),
 		key.NewBinding(key.WithKeys("t"),
 			key.WithHelp("t", "start terminal"),
 			KeyEnabled(focused != nil && fe.terminalCallback(focused) != nil),
@@ -1879,10 +1879,10 @@ func (fe *frontendPretty) goErrorOrigin() {
 	if focused == nil {
 		return
 	}
-	if len(focused.ErrorOrigins.Order) == 0 {
+	if len(focused.ErrorOrigins().Order) == 0 {
 		return
 	}
-	fe.FocusedSpan = focused.ErrorOrigins.Order[0].ID // TODO which?
+	fe.FocusedSpan = focused.ErrorOrigins().Order[0].ID // TODO which?
 	focusedRow := fe.rowsView.BySpan[fe.FocusedSpan]
 	if focusedRow == nil {
 		return
@@ -1983,9 +1983,9 @@ func (fe *frontendPretty) renderRow(out TermOutput, r *renderer, row *dagui.Trac
 			}
 		}
 	}
-	if len(row.Span.ErrorOrigins.Order) > 0 && (!row.Expanded || !row.HasChildren) {
-		multi := len(row.Span.ErrorOrigins.Order) > 1
-		for _, cause := range row.Span.ErrorOrigins.Order {
+	if len(row.Span.ErrorOrigins().Order) > 0 && (!row.Expanded || !row.HasChildren) {
+		multi := len(row.Span.ErrorOrigins().Order) > 1
+		for _, cause := range row.Span.ErrorOrigins().Order {
 			if multi {
 				r.fancyIndent(out, row, false, false)
 				fmt.Fprintln(out, prefix)
@@ -2022,15 +2022,15 @@ func (fe *frontendPretty) renderDebug(out TermOutput, span *dagui.Span, prefix s
 			}
 		}
 	}
-	if len(span.RevealedSpans.Order) > 0 {
+	if len(span.RevealedSpans().Order) > 0 {
 		vt.WriteMarkdown([]byte("\n\n## Revealed spans\n\n"))
-		for _, revealed := range span.RevealedSpans.Order {
+		for _, revealed := range span.RevealedSpans().Order {
 			vt.WriteMarkdown([]byte("- " + revealed.Name + "\n"))
 		}
 	}
-	if len(span.ErrorOrigins.Order) > 0 {
+	if len(span.ErrorOrigins().Order) > 0 {
 		vt.WriteMarkdown([]byte("\n\n## Error origins\n\n"))
-		for _, span := range span.ErrorOrigins.Order {
+		for _, span := range span.ErrorOrigins().Order {
 			vt.WriteMarkdown([]byte("- " + span.Name + "\n"))
 		}
 	}
@@ -2178,7 +2178,7 @@ func (fe *frontendPretty) hasShownRootError() bool {
 }
 
 func (fe *frontendPretty) renderStepError(out TermOutput, r *renderer, row *dagui.TraceRow, prefix string) {
-	if len(row.Span.ErrorOrigins.Order) > 0 {
+	if len(row.Span.ErrorOrigins().Order) > 0 {
 		// span's error originated elsewhere; don't repeat the message, the ERROR status
 		// links to its origin instead
 		return
@@ -2541,9 +2541,9 @@ func (fe *frontendPretty) renderStatus(out TermOutput, span *dagui.Span) {
 	} else if span.IsFailedOrCausedFailure() && !span.IsCanceled() {
 		fmt.Fprint(out, out.String(" "))
 		fmt.Fprint(out, out.String("ERROR").Foreground(termenv.ANSIRed))
-		if len(span.ErrorOrigins.Order) > 0 && !fe.reportOnly && !fe.finalRender {
+		if len(span.ErrorOrigins().Order) > 0 && !fe.reportOnly && !fe.finalRender {
 			color := termenv.ANSIBrightBlack
-			_, focusedAnyOrigin := span.ErrorOrigins.Map[fe.FocusedSpan]
+			_, focusedAnyOrigin := span.ErrorOrigins().Map[fe.FocusedSpan]
 			if time.Since(fe.pressedKeyAt) < keypressDuration && focusedAnyOrigin {
 				color = termenv.ANSIWhite
 			}
