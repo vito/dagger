@@ -64,9 +64,9 @@ type DB struct {
 }
 
 type KV interface {
-	Set(key, value string) error
-	SetBatch(kvs []KeyValue) error
-	Get(key string) (string, bool, error)
+	Set(ctx context.Context, key, value string) error
+	SetBatch(ctx context.Context, kvs []KeyValue) error
+	Get(ctx context.Context, key string) (string, bool, error)
 }
 
 type KeyValue struct {
@@ -76,19 +76,21 @@ type KeyValue struct {
 
 type MapKV map[string]string
 
-func (m MapKV) Set(key, value string) error {
+var _ KV = MapKV{}
+
+func (m MapKV) Set(ctx context.Context, key, value string) error {
 	m[key] = value
 	return nil
 }
 
-func (m MapKV) SetBatch(kvs []KeyValue) error {
+func (m MapKV) SetBatch(ctx context.Context, kvs []KeyValue) error {
 	for _, kv := range kvs {
 		m[kv.Key] = kv.Value
 	}
 	return nil
 }
 
-func (m MapKV) Get(key string) (string, bool, error) {
+func (m MapKV) Get(ctx context.Context, key string) (string, bool, error) {
 	v, found := m[key]
 	return v, found, nil
 }
@@ -183,14 +185,14 @@ func (db *DB) UpdatedSnapshots(filter map[SpanID]bool) []SpanSnapshot {
 	return snapshots
 }
 
-func (db *DB) ImportSnapshots(snapshots []SpanSnapshot) {
+func (db *DB) ImportSnapshots(ctx context.Context, snapshots []SpanSnapshot) {
 	spans := make([]*Span, len(snapshots))
 	for i, snapshot := range snapshots {
 		span := db.findOrAllocSpan(snapshot.ID)
 		span.Received = true
 		snapshot.Version += span.Version // don't reset the version
 		span.SpanSnapshot = snapshot
-		db.integrateSpan(span)
+		db.integrateSpan(ctx, span)
 		spans[i] = span
 	}
 	for _, span := range spans {
@@ -259,7 +261,7 @@ var _ sdktrace.SpanExporter = (*DB)(nil)
 func (db *DB) ExportSpans(ctx context.Context, otelSpans []sdktrace.ReadOnlySpan) error {
 	spans := make([]*Span, len(otelSpans))
 	for i, otelSpan := range otelSpans {
-		spans[i] = db.recordOTelSpan(otelSpan)
+		spans[i] = db.recordOTelSpan(ctx, otelSpan)
 	}
 	for _, span := range spans {
 		span.PropagateStatusToParentsAndLinks()
@@ -404,7 +406,7 @@ func (db *DB) newSpan(spanID SpanID) *Span {
 	}
 }
 
-func (db *DB) recordOTelSpan(span sdktrace.ReadOnlySpan) *Span {
+func (db *DB) recordOTelSpan(ctx context.Context, span sdktrace.ReadOnlySpan) *Span {
 	spanID := SpanID{span.SpanContext().SpanID()}
 
 	// mark the span as updated so we sync it to the frontend,
@@ -453,7 +455,7 @@ func (db *DB) recordOTelSpan(span sdktrace.ReadOnlySpan) *Span {
 	}
 
 	// integrate the span's data into the DB's live objects
-	db.integrateSpan(spanData)
+	db.integrateSpan(ctx, spanData)
 	return spanData
 }
 
@@ -627,7 +629,7 @@ func (activity *Activity) mergeIntervals() {
 
 // integrateSpan takes a possibly newly created span and updates
 // database relationships and state
-func (db *DB) integrateSpan(span *Span) { //nolint: gocyclo
+func (db *DB) integrateSpan(ctx context.Context, span *Span) { //nolint: gocyclo
 	// track the span's own interval
 	span.Activity.Add(span)
 	db.update(span)
@@ -697,7 +699,7 @@ func (db *DB) integrateSpan(span *Span) { //nolint: gocyclo
 	}
 
 	if span.CallDigest != "" && span.CallPayload != "" {
-		_ = db.CallPayloads.Set(span.CallDigest, span.CallPayload)
+		_ = db.CallPayloads.Set(ctx, span.CallDigest, span.CallPayload)
 	}
 
 	if !span.ParentID.IsValid() && span.Received {
@@ -870,7 +872,7 @@ func (db *DB) Call(dig string) *callpbv1.Call {
 	}
 
 	// Next, try to decode from the call payload
-	if callPayload, ok, err := db.CallPayloads.Get(dig); ok {
+	if callPayload, ok, err := db.CallPayloads.Get(context.TODO(), dig); ok {
 		var call callpbv1.Call
 		if err := call.Decode(callPayload); err != nil {
 			slog.Warn("failed to decode call", "err", err, "payload", callPayload)
