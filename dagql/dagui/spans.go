@@ -122,7 +122,12 @@ type Span struct {
 
 // Snapshot returns a snapshot of the span's current state.
 func (span *Span) Snapshot() SpanSnapshot {
-	span.ChildCount = countChildren(span.ChildSpans, FrontendOpts{})
+	if count := countChildren(span.ChildSpans, FrontendOpts{}); count > span.ChildCount {
+		// This should always increase. If it appears to decrease it's more likely
+		// because an external hint (i.e. API or DB) provided us with an initial
+		// span count, but the children were not loaded into the local DB.
+		span.ChildCount = count
+	}
 	span.Failed_, span.FailedReason_ = span.FailedReason()
 	span.Cached_, span.CachedReason_ = span.CachedReason()
 	span.Pending_, span.PendingReason_ = span.PendingReason()
