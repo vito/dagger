@@ -1,26 +1,16 @@
 type TestSplit {
-		pub source: Directory! @defaultPath(path: "/") @ignorePatterns(patterns: [
-				"*",
-				"!.git",
-				"!**/go.*",
-				"!version",
-				"!core",
-				"!engine",
-				"!util",
-				"!network",
-				"!dagql",
-				"!analytics",
-				"!auth",
-				"!cmd",
-				"!internal",
-				"!sdk",
-				"sdk/**/examples",
-				"!cmd",
-				"!modules/wolfi",
-				"!modules/alpine"
-		])
+		pub commit: String
 
-		let testSpecific(run: [String!]! = [], ebpfProgs: [String!], pkg: String! = "./core/integration", race: Boolean): Void {
+		let testSpecific(
+			run: [String!]! = []
+			ebpfProgs: [String!]
+			pkg: String! = "./core/integration"
+			race: Boolean,
+		): Void {
+				let source: Directory
+				if (commit != null) {
+						source = git("https://github.com/dagger/dagger").commit(commit).tree
+				}
 				engineDev(source: source).test(race: race, run: run.join("|"), ebpfProgs: ebpfProgs, pkg: pkg)
 		}
 
@@ -39,12 +29,8 @@ type TestSplit {
 		}
 
 		"""Test Telemetry"""
-		pub testTelemetry(run: [String!]! = []): Void @check {
-				testSpecific(
-					["TestTelemetry"]
-					pkg: "./dagql/idtui"
-					run: run.map { name => "TestTelemetry/TestGolden/"+name }
-				)
+		pub testTelemetry(run: [String!]! = ["TestTelemetry"]): Void @check {
+				testSpecific(run, pkg: "./dagql/idtui")
 		}
 
 		"""Test Call and Shell"""
