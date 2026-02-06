@@ -1,5 +1,5 @@
 type TestSplit {
-		let testSpecific(run: [String!]!, ebpfProgs: [String!], pkg: String! = "./core/integration", race: Boolean): Void {
+		let testSpecific(run: [String!]! = [], ebpfProgs: [String!], pkg: String! = "./core/integration", race: Boolean): Void {
 				engineDev().test(race: race, run: run.join("|"), ebpfProgs: ebpfProgs, pkg: pkg)
 		}
 
@@ -18,8 +18,12 @@ type TestSplit {
 		}
 
 		"""Test Telemetry"""
-		pub testTelemetry(): Void @check {
-				testSpecific(["TestTelemetry"], pkg: "./dagql/idtui")
+		pub testTelemetry(run: [String!]! = []): Void @check {
+				testSpecific(
+					["TestTelemetry"]
+					pkg: "./dagql/idtui"
+					run: run.map { name => "TestTelemetry/TestGolden/"+name }
+				)
 		}
 
 		"""Test Call and Shell"""
