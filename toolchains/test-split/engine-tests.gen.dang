@@ -1,6 +1,27 @@
 type TestSplit {
+		pub source: Directory! @defaultPath(path: "/") @ignorePatterns(patterns: [
+				"*",
+				"!.git",
+				"!**/go.*",
+				"!version",
+				"!core",
+				"!engine",
+				"!util",
+				"!network",
+				"!dagql",
+				"!analytics",
+				"!auth",
+				"!cmd",
+				"!internal",
+				"!sdk",
+				"sdk/**/examples",
+				"!cmd",
+				"!modules/wolfi",
+				"!modules/alpine"
+		])
+
 		let testSpecific(run: [String!]! = [], ebpfProgs: [String!], pkg: String! = "./core/integration", race: Boolean): Void {
-				engineDev().test(race: race, run: run.join("|"), ebpfProgs: ebpfProgs, pkg: pkg)
+				engineDev(source: source).test(race: race, run: run.join("|"), ebpfProgs: ebpfProgs, pkg: pkg)
 		}
 
 		let testSkip(skip: [String!]!, ebpfProgs: [String!], pkg: String! = "./core/integration", race: Boolean): Void {
