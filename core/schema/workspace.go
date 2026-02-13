@@ -589,7 +589,7 @@ func (s *workspaceSchema) moduleInit(
 	selectors = append(selectors, dagql.Selector{
 		Field: "export",
 		Args: []dagql.NamedInput{
-			{Name: "path", Value: dagql.String(contextDirPath)},
+			{Name: "path", Value: contextDirPath},
 		},
 	})
 
@@ -812,7 +812,7 @@ func buildHintFromArg(arg *core.FunctionArg) workspace.ConstructorArgHint {
 	}
 
 	if !configurable {
-		typeLabel = typeLabel + " (not configurable via config)"
+		typeLabel += " (not configurable via config)"
 	}
 
 	return workspace.ConstructorArgHint{
