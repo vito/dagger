@@ -948,7 +948,7 @@ type Toggler {
   }
 
   pub check: String! {
-    if enabled { "on" } else { "off" }
+    if (enabled) { "on" } else { "off" }
   }
 }
 `)).
