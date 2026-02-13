@@ -1524,6 +1524,21 @@ func (srv *Server) ensureWorkspaceLoaded(ctx context.Context, client *daggerClie
 				}
 			}
 		}
+
+		// Auto-load legacy module from dagger.json for backwards compat.
+		// This handles the case where no workspace config exists but a
+		// dagger.json was found (pre-workspace project).
+		if (clientMD == nil || !clientMD.SkipWorkspaceModules) && ws.LegacyModule != "" {
+			extra := engine.ExtraModule{
+				Ref:   ws.LegacyModule,
+				Alias: true,
+			}
+			if err := srv.loadExtraModule(ctx, client, client.dag, extra); err != nil {
+				client.workspaceErr = fmt.Errorf("loading legacy module from %s: %w", ws.LegacyModule, err)
+				client.workspaceLoaded = true
+				return client.workspaceErr
+			}
+		}
 	}
 
 	client.workspaceLoaded = true
