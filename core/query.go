@@ -70,6 +70,9 @@ type Server interface {
 	// current client.
 	SpecificClientMetadata(context.Context, string) (*engine.ClientMetadata, error)
 
+	// The cached workspace result from ensureWorkspaceLoaded.
+	CurrentWorkspace(context.Context) (*Workspace, error)
+
 	// The default deps of every user module (currently just core)
 	DefaultDeps(context.Context) (*ModDeps, error)
 
