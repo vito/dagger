@@ -813,6 +813,12 @@ func (s *workspaceSchema) checks(
 		if err != nil {
 			return nil, fmt.Errorf("checks from module %q: %w", mod.Name(), err)
 		}
+		// Reparent the tree root so that check paths include the module
+		// name as a prefix (e.g. "eslint:lint" instead of just "lint").
+		if checkGroup.Node != nil {
+			checkGroup.Node.Parent = &core.ModTreeNode{}
+			checkGroup.Node.Name = mod.Name()
+		}
 		allChecks = append(allChecks, checkGroup.Checks...)
 	}
 
@@ -856,6 +862,12 @@ func (s *workspaceSchema) generators(
 		generatorGroup, err := userMod.Generators(ctx, include)
 		if err != nil {
 			return nil, fmt.Errorf("generators from module %q: %w", mod.Name(), err)
+		}
+		// Reparent the tree root so that generator paths include the module
+		// name as a prefix (e.g. "codegen:generate" instead of just "generate").
+		if generatorGroup.Node != nil {
+			generatorGroup.Node.Parent = &core.ModTreeNode{}
+			generatorGroup.Node.Name = mod.Name()
 		}
 		allGenerators = append(allGenerators, generatorGroup.Generators...)
 	}
