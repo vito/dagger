@@ -1890,11 +1890,11 @@ func (srv *Server) loadModule(
 	if err := srv.serveModule(client, resolved.Self()); err != nil {
 		return err
 	}
-	for _, depMod := range resolved.Self().Deps.Mods {
-		if err := srv.serveModule(client, depMod); err != nil {
-			return fmt.Errorf("error serving dependency %s: %w", depMod.Name(), err)
-		}
-	}
+	// for _, depMod := range resolved.Self().Deps.Mods {
+	// 	if err := srv.serveModule(client, depMod); err != nil {
+	// 		return fmt.Errorf("error serving dependency %s: %w", depMod.Name(), err)
+	// 	}
+	// }
 	return nil
 }
 
