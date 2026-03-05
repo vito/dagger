@@ -2,11 +2,15 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"time"
+
+	"go.opentelemetry.io/otel/attribute"
 
 	"dagger.io/dagger"
 	"github.com/dagger/dagger/engine/slog"
 	"github.com/dagger/dagger/util/hashutil"
+	telemetry "github.com/dagger/otel-go"
 	"github.com/opencontainers/go-digest"
 )
 
@@ -49,6 +53,14 @@ func (v LLMVar) Digest() digest.Digest {
 	return hashutil.HashStrings(v.TypeName, v.Value)
 }
 
+// truncateValue truncates a string for display in span names.
+func truncateValue(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "…"
+}
+
 // syncVarsToLLM syncs handler variables to the LLM environment.
 func (s *LLMSession) syncVarsToLLM() error {
 	if s.varSyncer == nil {
@@ -56,6 +68,9 @@ func (s *LLMSession) syncVarsToLLM() error {
 	}
 
 	ctx := s.plumbingCtx
+
+	_, outerSpan := Tracer().Start(ctx, "sync vars → LLM", telemetry.Reveal())
+	defer outerSpan.End()
 
 	// Check for agent var first
 	if agentLLM := s.varSyncer.GetAgentLLM(ctx, s.dag); agentLLM != nil {
@@ -89,10 +104,19 @@ func (s *LLMSession) syncVarsToLLM() error {
 			continue
 		}
 
-		dbg.Printf("syncing var %q => llm env\n", v.Name)
 		changed = true
 
 		if v.IsObject() {
+			_, varSpan := Tracer().Start(ctx,
+				fmt.Sprintf("var → LLM: %s (%s)", v.Name, v.TypeName),
+				telemetry.Reveal(),
+			)
+			varSpan.SetAttributes(
+				attribute.String("var.name", v.Name),
+				attribute.String("var.type", v.TypeName),
+				attribute.String("var.id", truncateValue(v.Value, 80)),
+			)
+
 			syncedEnvQ = syncedEnvQ.
 				Select("with"+v.TypeName+"Input").
 				Arg("name", v.Name).
@@ -100,20 +124,33 @@ func (s *LLMSession) syncVarsToLLM() error {
 				Arg("value", v.Value)
 			d, err := idDigest(v.Value)
 			if err != nil {
+				varSpan.End()
 				return err
 			}
 			s.syncedVars[v.Name] = d
+			varSpan.End()
 		} else {
+			_, varSpan := Tracer().Start(ctx,
+				fmt.Sprintf("var → LLM: %s = %s", v.Name, truncateValue(v.Value, 40)),
+				telemetry.Reveal(),
+			)
+			varSpan.SetAttributes(
+				attribute.String("var.name", v.Name),
+				attribute.String("var.value", truncateValue(v.Value, 200)),
+			)
+
 			s.syncedVars[v.Name] = v.Digest()
 			syncedEnvQ = syncedEnvQ.
 				Select("withStringInput").
 				Arg("name", v.Name).
 				Arg("description", "").
 				Arg("value", v.Value)
+			varSpan.End()
 		}
 	}
 
 	if !changed {
+		outerSpan.SetAttributes(attribute.Bool("noop", true))
 		return nil
 	}
 
@@ -133,10 +170,15 @@ func (s *LLMSession) syncVarsFromLLM() error {
 
 	ctx := s.plumbingCtx
 
+	_, outerSpan := Tracer().Start(ctx, "sync vars ← LLM", telemetry.Reveal())
+	defer outerSpan.End()
+
 	outputs, err := s.llm.Env().Outputs(ctx)
 	if err != nil {
 		return err
 	}
+
+	outerSpan.SetAttributes(attribute.Int("output.count", len(outputs)))
 
 	assign := func(bnd *dagger.Binding) error {
 		name, err := bnd.Name(ctx)
@@ -162,10 +204,22 @@ func (s *LLMSession) syncVarsFromLLM() error {
 			if err != nil {
 				return err
 			}
-			return s.varSyncer.SetLLMVar(ctx, name, LLMVar{
+
+			_, varSpan := Tracer().Start(ctx,
+				fmt.Sprintf("var ← LLM: %s = %s", name, truncateValue(str, 40)),
+				telemetry.Reveal(),
+			)
+			varSpan.SetAttributes(
+				attribute.String("var.name", name),
+				attribute.String("var.type", "String"),
+				attribute.String("var.value", truncateValue(str, 200)),
+			)
+			err = s.varSyncer.SetLLMVar(ctx, name, LLMVar{
 				Name:  name,
 				Value: str,
 			})
+			varSpan.End()
+			return err
 		default:
 			var objID string
 			if err :=
@@ -178,11 +232,23 @@ func (s *LLMSession) syncVarsFromLLM() error {
 					Execute(ctx); err != nil {
 				return err
 			}
-			return s.varSyncer.SetLLMVar(ctx, name, LLMVar{
+
+			_, varSpan := Tracer().Start(ctx,
+				fmt.Sprintf("var ← LLM: %s (%s)", name, typeName),
+				telemetry.Reveal(),
+			)
+			varSpan.SetAttributes(
+				attribute.String("var.name", name),
+				attribute.String("var.type", typeName),
+				attribute.String("var.id", truncateValue(objID, 80)),
+			)
+			err := s.varSyncer.SetLLMVar(ctx, name, LLMVar{
 				Name:     name,
 				TypeName: typeName,
 				Value:    objID,
 			})
+			varSpan.End()
+			return err
 		}
 	}
 
