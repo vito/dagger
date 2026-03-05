@@ -2046,7 +2046,18 @@ func (fe *frontendPretty) syncPrompt() {
 		fe.textInput.Prompt = prompt
 		fe.textInput.Update()
 		if init != nil {
-			fe.runShellAsync(init)
+			// Run the init work in a goroutine and refresh the prompt
+			// when done. We intentionally don't call runShellAsync here
+			// to avoid infinite recursion: runShellAsync calls syncPrompt,
+			// which could return another init func if the async work
+			// hasn't completed yet.
+			go func() {
+				init()
+				fe.tui.Dispatch(func() {
+					fe.syncPrompt()
+					fe.Update()
+				})
+			}()
 		}
 	}
 }
