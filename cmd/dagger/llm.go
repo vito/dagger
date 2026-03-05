@@ -126,20 +126,26 @@ func NewLLMSession(
 	s.models = models
 
 	// don't sync the initial env vars
-	for k := range shellHandler.runner.Env.Each {
-		s.skipEnv[k] = true
+	if shellHandler != nil {
+		for k := range shellHandler.runner.Env.Each {
+			s.skipEnv[k] = true
+		}
 	}
 
 	// if $agent is set, respect it
-	if value, ok := s.shell.runner.Vars[agentVar]; ok {
-		if key := GetStateKey(value.String()); key != "" {
-			st, err := s.shell.state.Load(key)
-			if err != nil {
-				return nil, err
+	if s.shell != nil {
+		if value, ok := s.shell.runner.Vars[agentVar]; ok {
+			if key := GetStateKey(value.String()); key != "" {
+				st, err := s.shell.state.Load(key)
+				if err != nil {
+					return nil, err
+				}
+				// NB: don't need to use updateLLMAndAgentVar here, since this is coming
+				// from the agent var
+				s.llm = s.dag.LLM().WithGraphQLQuery(st.QueryBuilder(s.dag))
 			}
-			// NB: don't need to use updateLLMAndAgentVar here, since this is coming
-			// from the agent var
-			s.llm = s.dag.LLM().WithGraphQLQuery(st.QueryBuilder(s.dag))
+		} else {
+			s.reset()
 		}
 	} else {
 		s.reset()
@@ -420,6 +426,10 @@ func (s *LLMSession) maybeAutoCompact(ctx context.Context) (_ *dagger.LLM, rerr 
 }
 
 func (s *LLMSession) syncVarsToLLM() error {
+	if s.shell == nil {
+		return nil
+	}
+
 	ctx := s.plumbingCtx
 
 	// TODO: overlay? bad scaling characteristics. maybe overkill anyway
@@ -607,6 +617,9 @@ func (s *LLMSession) assignShell(ctx context.Context, name string, idable dagqlO
 }
 
 func (s *LLMSession) assignShellString(ctx context.Context, name string, val string) {
+	if s.shell == nil {
+		return
+	}
 	if len(val) > 100 {
 		slog.Debug("value is too long", "name", name, "value", val)
 		return
@@ -622,6 +635,9 @@ func (s *LLMSession) assignShellString(ctx context.Context, name string, val str
 }
 
 func (s *LLMSession) toShell(ctx context.Context, idable dagqlObject) (string, error) {
+	if s.shell == nil {
+		return "", fmt.Errorf("shell state not available in this mode")
+	}
 	typeName := idable.XXX_GraphQLType()
 	objID, err := idable.XXX_GraphQLID(ctx)
 	if err != nil {
