@@ -18,8 +18,12 @@ import (
 var _ LLMVarSyncer = (*dangShellHandler)(nil)
 
 func (h *dangShellHandler) LLMVars(ctx context.Context) ([]LLMVar, error) {
+	h.mu.RLock()
+	bindings := h.evalEnv.Bindings(dang.PublicVisibility)
+	h.mu.RUnlock()
+
 	var vars []LLMVar
-	for _, binding := range h.evalEnv.Bindings(dang.PublicVisibility) {
+	for _, binding := range bindings {
 		name := binding.Key
 		val := binding.Value
 
@@ -94,17 +98,23 @@ func (h *dangShellHandler) SetLLMVar(ctx context.Context, name string, v LLMVar)
 			gqlVal.ValType = hm.NewSimpleFresher().Fresh()
 		}
 
+		h.mu.Lock()
 		h.evalEnv.Set(name, gqlVal)
+		h.mu.Unlock()
 		return nil
 	}
 
 	// String value
+	h.mu.Lock()
 	h.evalEnv.Set(name, dang.StringValue{Val: v.Value})
+	h.mu.Unlock()
 	return nil
 }
 
 func (h *dangShellHandler) GetAgentLLM(ctx context.Context, dag *dagger.Client) *dagger.LLM {
+	h.mu.RLock()
 	val, ok := h.evalEnv.Get(agentVar)
+	h.mu.RUnlock()
 	if !ok {
 		return nil
 	}
@@ -152,7 +162,9 @@ func (h *dangShellHandler) SetAgentLLM(ctx context.Context, llm *dagger.LLM) err
 		ValType:    hm.NewSimpleFresher().Fresh(),
 	}
 
+	h.mu.Lock()
 	h.evalEnv.Set(agentVar, gqlVal)
+	h.mu.Unlock()
 	return nil
 }
 
