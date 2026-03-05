@@ -33,11 +33,15 @@ var (
 	shellCode string
 
 	llmModel string
+
+	// shellLanguage selects which language the shell uses: "dang" (default) or "shell"
+	shellLanguage string
 )
 
 func shellAddFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVarP(&shellCode, "command", "c", "", "Execute a dagger shell command")
 	cmd.Flags().StringVar(&llmModel, "model", "", "LLM model to use (e.g., 'claude-sonnet-4-5', 'gpt-4.1')")
+	cmd.Flags().StringVar(&shellLanguage, "language", "dang", "Shell language to use (dang, shell)")
 }
 
 var shellCmd = &cobra.Command{
@@ -47,18 +51,22 @@ var shellCmd = &cobra.Command{
 		cmd.SetContext(idtui.WithPrintTraceLink(cmd.Context(), true))
 		return withEngine(cmd.Context(), initModuleParams(args), func(ctx context.Context, engineClient *client.Client) error {
 			dag := engineClient.Dagger()
-			handler := newShellCallHandler(dag, Frontend)
 
-			err := handler.RunAll(ctx, args)
-
-			// Wrap exit status in ExitError so the TUI preserves the exit code
-			// and doesn't print a redundant error message.
-			var es interp.ExitStatus
-			if handler.tty && errors.As(err, &es) {
-				return idtui.ExitError{Code: int(es), Original: err}
+			switch shellLanguage {
+			case "dang":
+				handler := newDangShellHandler(dag, Frontend)
+				return handler.RunAll(ctx, args)
+			case "shell":
+				handler := newShellCallHandler(dag, Frontend)
+				err := handler.RunAll(ctx, args)
+				var es interp.ExitStatus
+				if handler.tty && errors.As(err, &es) {
+					return idtui.ExitError{Code: int(es), Original: err}
+				}
+				return err
+			default:
+				return fmt.Errorf("unknown language %q: must be 'dang' or 'shell'", shellLanguage)
 			}
-
-			return err
 		})
 	},
 	Hidden: true,
