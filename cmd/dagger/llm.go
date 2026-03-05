@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,14 +16,12 @@ import (
 	"github.com/muesli/termenv"
 	"github.com/opencontainers/go-digest"
 	"go.opentelemetry.io/otel/trace"
-	"mvdan.cc/sh/v3/syntax"
 
 	"dagger.io/dagger"
 	"github.com/dagger/dagger/core/openrouter"
 	"github.com/dagger/dagger/dagql/dagui"
 	"github.com/dagger/dagger/dagql/idtui"
 	"github.com/dagger/dagger/engine/slog"
-	"github.com/dagger/dagger/util/hashutil"
 	telemetry "github.com/dagger/otel-go"
 )
 
@@ -70,7 +67,7 @@ type LLMSession struct {
 	model      string
 	skipEnv    map[string]bool
 	syncedVars map[string]digest.Digest
-	shell      *shellCallHandler
+	varSyncer  LLMVarSyncer
 
 	beforeFS     *dagger.Directory
 	beforeFSTime time.Time
@@ -87,24 +84,15 @@ func NewLLMSession(
 	ctx context.Context,
 	dag *dagger.Client,
 	llmModel string,
-	shellHandler *shellCallHandler,
+	varSyncer LLMVarSyncer,
 	frontend idtui.Frontend,
 ) (*LLMSession, error) {
 	s := &LLMSession{
-		dag:        dag,
-		model:      llmModel,
-		syncedVars: map[string]digest.Digest{},
-		skipEnv: map[string]bool{
-			// these vars are set by the sh package
-			"GID":    true,
-			"UID":    true,
-			"EUID":   true,
-			"OPTIND": true,
-			"IFS":    true,
-			// the rest should be filtered out already by skipping the first batch
-			// (sourced from os.Environ)
-		},
-		shell:        shellHandler,
+		dag:          dag,
+		model:        llmModel,
+		syncedVars:   map[string]digest.Digest{},
+		skipEnv:      map[string]bool{},
+		varSyncer:    varSyncer,
 		frontend:     frontend,
 		autoCompact:  true,
 		autoCompactL: new(sync.Mutex),
@@ -125,25 +113,10 @@ func NewLLMSession(
 	}
 	s.models = models
 
-	// don't sync the initial env vars
-	if shellHandler != nil {
-		for k := range shellHandler.runner.Env.Each {
-			s.skipEnv[k] = true
-		}
-	}
-
-	// if $agent is set, respect it
-	if s.shell != nil {
-		if value, ok := s.shell.runner.Vars[agentVar]; ok {
-			if key := GetStateKey(value.String()); key != "" {
-				st, err := s.shell.state.Load(key)
-				if err != nil {
-					return nil, err
-				}
-				// NB: don't need to use updateLLMAndAgentVar here, since this is coming
-				// from the agent var
-				s.llm = s.dag.LLM().WithGraphQLQuery(st.QueryBuilder(s.dag))
-			}
+	// if the handler has an agent LLM, resume from it
+	if varSyncer != nil {
+		if agentLLM := varSyncer.GetAgentLLM(ctx, dag); agentLLM != nil {
+			s.llm = agentLLM
 		} else {
 			s.reset()
 		}
@@ -265,24 +238,6 @@ const (
 	agentVar     = "agent"
 	lastValueVar = "_"
 )
-
-func (s *LLMSession) updateLLMAndAgentVar(llm *dagger.LLM) error {
-	s.llm = llm
-
-	ctx := s.plumbingCtx
-
-	// figure out what the model resolved to
-	model, err := s.llm.Model(ctx)
-	if err != nil {
-		return err
-	}
-	s.model = model
-
-	if err := s.assignShell(ctx, agentVar, s.llm); err != nil {
-		return err
-	}
-	return nil
-}
 
 func (s *LLMSession) updateSidebar(llm *dagger.LLM) error {
 	inputTokens, err := llm.TokenUsage().InputTokens(s.plumbingCtx)
@@ -423,240 +378,6 @@ func (s *LLMSession) maybeAutoCompact(ctx context.Context) (_ *dagger.LLM, rerr 
 	}
 
 	return s.llm, nil
-}
-
-func (s *LLMSession) syncVarsToLLM() error {
-	if s.shell == nil {
-		return nil
-	}
-
-	ctx := s.plumbingCtx
-
-	// TODO: overlay? bad scaling characteristics. maybe overkill anyway
-	oldVars := s.syncedVars
-	s.syncedVars = make(map[string]digest.Digest)
-	maps.Copy(s.syncedVars, oldVars)
-
-	if value, ok := s.shell.runner.Vars[agentVar]; ok {
-		if key := GetStateKey(value.String()); key != "" {
-			st, err := s.shell.state.Load(key)
-			if err != nil {
-				return err
-			}
-			// NB: don't need to use updateLLMAndAgentVar here, since this is coming
-			// from the agent var
-			s.llm = s.dag.LLM().WithGraphQLQuery(st.QueryBuilder(s.dag))
-		}
-	}
-
-	if s.beforeFS == nil {
-		s.beforeFS = s.llm.Env().Workspace()
-		s.beforeFSTime = time.Now()
-	}
-
-	syncedEnvQ := s.dag.QueryBuilder().
-		Select("loadEnvFromID").
-		Arg("id", s.llm.Env())
-
-	var changed bool
-	for name, value := range s.shell.runner.Vars {
-		if name == agentVar {
-			// handled separately
-			continue
-		}
-		if name == lastValueVar {
-			// don't sync the auto-last-value var back to the LLM
-			continue
-		}
-		if s.skipEnv[name] {
-			continue
-		}
-
-		if s.syncedVars[name] == hashutil.HashStrings(value.String()) {
-			continue
-		}
-
-		dbg.Printf("syncing var %q => llm env\n", name)
-
-		changed = true
-
-		if key := GetStateKey(value.String()); key != "" {
-			st, err := s.shell.state.Load(key)
-			if err != nil {
-				return err
-			}
-			q := st.QueryBuilder(s.dag)
-			modDef := s.shell.GetDef(st)
-			typeDef, err := st.GetTypeDef(modDef)
-			if err != nil {
-				return err
-			}
-			if typeDef.AsFunctionProvider() != nil {
-				var id string
-				if err := q.Select("id").Bind(&id).Execute(ctx); err != nil {
-					return err
-				}
-				digest, err := idDigest(id)
-				if err != nil {
-					return err
-				}
-				typeName := typeDef.Name()
-				syncedEnvQ = syncedEnvQ.
-					Select(fmt.Sprintf("with%sInput", typeName)).
-					Arg("name", name).
-					Arg("description", ""). // TODO
-					Arg("value", id)
-				s.syncedVars[name] = digest
-			}
-		} else {
-			s.syncedVars[name] = hashutil.HashStrings(value.String())
-			syncedEnvQ = syncedEnvQ.
-				Select("withStringInput").
-				Arg("name", name).
-				Arg("description", ""). // TODO
-				Arg("value", value.String())
-		}
-	}
-	if !changed {
-		return nil
-	}
-	var envID dagger.EnvID
-	if err := syncedEnvQ.Select("id").Bind(&envID).Execute(ctx); err != nil {
-		return err
-	}
-	s.updateLLMAndAgentVar(s.llm.WithEnv(s.dag.LoadEnvFromID(envID)))
-	return nil
-}
-
-func (s *LLMSession) syncVarsFromLLM() error {
-	ctx := s.plumbingCtx
-
-	outputs, err := s.llm.Env().Outputs(ctx)
-	if err != nil {
-		return err
-	}
-
-	assign := func(bnd *dagger.Binding) error {
-		name, err := bnd.Name(ctx)
-		if err != nil {
-			return err
-		}
-		typeName, err := bnd.TypeName(ctx)
-		if err != nil {
-			return err
-		}
-		isNull, err := bnd.IsNull(ctx)
-		if err != nil {
-			return err
-		}
-		if isNull {
-			return nil
-		}
-		switch typeName {
-		case "", "Query", "Void":
-			return nil
-		case "String":
-			str, err := bnd.AsString(ctx)
-			if err != nil {
-				return err
-			}
-			s.assignShellString(ctx, name, str)
-			return nil
-		default:
-			var objID string
-			if err :=
-				s.dag.QueryBuilder().
-					Select("loadBindingFromID").
-					Arg("id", bnd).
-					Select("as" + typeName).
-					Select("id").
-					Bind(&objID).
-					Execute(ctx); err != nil {
-				return err
-			}
-			return s.assignShell(ctx, name, &dynamicObject{objID, typeName})
-		}
-	}
-
-	// assign all outputs
-	for _, output := range outputs {
-		if err := assign(&output); err != nil {
-			return err
-		}
-	}
-
-	// assign last value
-	return assign(s.llm.BindResult(lastValueVar))
-}
-
-type dagqlObject interface {
-	XXX_GraphQLType() string
-	XXX_GraphQLID(context.Context) (string, error)
-}
-
-type dynamicObject struct {
-	id       string
-	typeName string
-}
-
-func (do *dynamicObject) XXX_GraphQLType() string { //nolint:staticcheck
-	return do.typeName
-}
-
-func (do *dynamicObject) XXX_GraphQLID(ctx context.Context) (string, error) { //nolint:staticcheck
-	return do.id, nil
-}
-
-func (s *LLMSession) assignShell(ctx context.Context, name string, idable dagqlObject) error {
-	val, err := s.toShell(ctx, idable)
-	if err != nil {
-		return err
-	}
-	s.assignShellString(ctx, name, val)
-	return nil
-}
-
-func (s *LLMSession) assignShellString(ctx context.Context, name string, val string) {
-	if s.shell == nil {
-		return
-	}
-	if len(val) > 100 {
-		slog.Debug("value is too long", "name", name, "value", val)
-		return
-	}
-	quot, err := syntax.Quote(val, syntax.LangBash)
-	if err != nil {
-		slog.Error("failed to quote value", "name", name, "value", val, "error", err.Error())
-		return
-	}
-	if err := s.shell.Eval(ctx, fmt.Sprintf("%s=%s", name, quot)); err != nil {
-		slog.Error("failed to assign value", "name", name, "quoted", quot, "error", err.Error())
-	}
-}
-
-func (s *LLMSession) toShell(ctx context.Context, idable dagqlObject) (string, error) {
-	if s.shell == nil {
-		return "", fmt.Errorf("shell state not available in this mode")
-	}
-	typeName := idable.XXX_GraphQLType()
-	objID, err := idable.XXX_GraphQLID(ctx)
-	if err != nil {
-		return "", err
-	}
-	st := ShellState{
-		Calls: []FunctionCall{
-			{
-				Object: "Query",
-				Name:   "load" + typeName + "FromID",
-				Arguments: map[string]any{
-					"id": objID,
-				},
-				ReturnObject: typeName,
-			},
-		},
-	}
-	key := s.shell.state.Store(st)
-	return newStateToken(key), nil
 }
 
 func (s *LLMSession) Clear() *LLMSession {

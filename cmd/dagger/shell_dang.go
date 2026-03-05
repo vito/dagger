@@ -708,9 +708,7 @@ func (h *dangShellHandler) llm(ctx context.Context) (*LLMSession, error) {
 		return s, e
 	}
 
-	// Initialize LLM without a shell handler — the LLM session will
-	// skip shell-specific features (env sync, agent var, etc.)
-	s, err := NewLLMSession(ctx, h.dag, h.llmModel, nil, h.frontend)
+	s, err := NewLLMSession(ctx, h.dag, h.llmModel, h, h.frontend)
 
 	h.llmL.Lock()
 	defer h.llmL.Unlock()
