@@ -172,7 +172,7 @@ func (h *dangShellHandler) Initialize(ctx context.Context) error {
 	}
 
 	h.importConfigs = importConfigs
-	h.typeEnv, h.evalEnv = dangBuildEnvFromImports(importConfigs)
+	h.typeEnv, h.evalEnv = dang.BuildEnvFromImports("Dagger", importConfigs)
 
 	if len(importConfigs) > 0 {
 		ctx = dang.ContextWithImportConfigs(ctx, importConfigs...)
@@ -656,64 +656,6 @@ func (h *dangShellHandler) RestoreAfterHistory() {
 	h.savedMode = modeUnset
 }
 
-// dangBuildEnvFromImports creates type and eval environments from import configs.
-func dangBuildEnvFromImports(configs []dang.ImportConfig) (dang.Env, dang.EvalEnv) {
-	typeEnv := dang.NewPreludeEnv()
-
-	for _, config := range configs {
-		if config.Schema == nil {
-			continue
-		}
-
-		schemaModule := dang.NewEnv(config.Schema)
-		typeEnv.AddClass(config.Name, schemaModule)
-		typeEnv.Add(config.Name, hm.NewScheme(nil, dang.NonNull(schemaModule)))
-		typeEnv.SetVisibility(config.Name, dang.PublicVisibility)
-
-		for name, scheme := range schemaModule.Bindings(dang.PublicVisibility) {
-			if name == config.Name {
-				continue
-			}
-			if _, exists := typeEnv.LocalSchemeOf(name); exists {
-				continue
-			}
-			typeEnv.Add(name, scheme)
-			typeEnv.SetVisibility(name, dang.PublicVisibility)
-		}
-
-		for name, namedEnv := range schemaModule.NamedTypes() {
-			if name == config.Name {
-				continue
-			}
-			if _, exists := typeEnv.NamedType(name); exists {
-				continue
-			}
-			typeEnv.AddClass(name, namedEnv)
-		}
-	}
-
-	evalEnv := dang.NewEvalEnv(typeEnv)
-
-	for _, config := range configs {
-		if config.Schema == nil {
-			continue
-		}
-		schemaModule := dang.NewEnv(config.Schema)
-		moduleEnv := dang.NewEvalEnvWithSchema(schemaModule, config.Client, config.Schema)
-		evalEnv.Set(config.Name, moduleEnv)
-		for _, binding := range moduleEnv.Bindings(dang.PublicVisibility) {
-			if binding.Key == config.Name {
-				continue
-			}
-			if _, exists := evalEnv.GetLocal(binding.Key); exists {
-				continue
-			}
-			evalEnv.Set(binding.Key, binding.Value)
-		}
-	}
-
-	return typeEnv, evalEnv
-}
 
 // LLM support methods (shared pattern with shellCallHandler)
 

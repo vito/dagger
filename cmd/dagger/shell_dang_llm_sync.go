@@ -89,7 +89,7 @@ func (h *dangShellHandler) SetLLMVar(ctx context.Context, name string, v LLMVar)
 
 		// Try to resolve the type from the schema
 		if schema != nil {
-			typeEnv := dang.NewEnv(schema)
+			typeEnv := dang.NewEnv(v.TypeName, schema)
 			if namedEnv, exists := typeEnv.NamedType(v.TypeName); exists {
 				gqlVal.ValType = dang.NonNull(namedEnv)
 			}
