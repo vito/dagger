@@ -55,9 +55,15 @@ type dangShellHandler struct {
 	mode      interpreterMode
 	savedMode interpreterMode
 
+	// TUI for showing overlays (doc browser, etc.)
+	tui *tuist.TUI
+
 	// Completion infrastructure (from pkg/repl)
 	completionProvider tuist.CompletionProvider
 	staticCompletions  []string
+
+	// REPL commands
+	commands []dangCommandDef
 
 	// cancel interrupts the entire shell session
 	cancel func()
@@ -70,12 +76,18 @@ type dangShellHandler struct {
 }
 
 func newDangShellHandler(dag *dagger.Client, fe idtui.Frontend) *dangShellHandler {
-	return &dangShellHandler{
+	h := &dangShellHandler{
 		dag:      dag,
 		frontend: fe,
 		llmModel: llmModel,
 		mode:     modeShell, // reuse modeShell for "dang" mode
 	}
+	h.commands = h.buildCommandDefs()
+	return h
+}
+
+func (h *dangShellHandler) SetTUI(tui *tuist.TUI) {
+	h.tui = tui
 }
 
 // printDangValue prints a Dang value, formatting Dagger IDs (ScalarValue
@@ -287,6 +299,19 @@ func (h *dangShellHandler) Handle(ctx context.Context, line string) (rerr error)
 		return nil
 	}
 
+	// Handle colon-prefixed commands (before LLM or dang eval)
+	if strings.HasPrefix(line, ":") && h.mode != modePrompt {
+		// Commands write to span stdio so output appears inline in the TUI
+		ctx, span := Tracer().Start(ctx, line, telemetry.Reveal())
+		stdio := telemetry.SpanStdio(ctx, InstrumentationLibrary)
+		handled := h.handleCommand(stdio.Stdout, line)
+		stdio.Close()
+		span.End()
+		if handled {
+			return nil
+		}
+	}
+
 	// Handle LLM prompt mode
 	if h.mode == modePrompt {
 		llm, err := h.llm(ctx)
@@ -409,6 +434,9 @@ func (h *dangShellHandler) Prompt(ctx context.Context, out idtui.TermOutput, fg 
 func (h *dangShellHandler) AutoComplete(input string, cursorPos int) tuist.CompletionResult {
 	if h.mode == modePrompt {
 		return tuist.CompletionResult{}
+	}
+	if strings.HasPrefix(input, ":") {
+		return h.commandCompletions(input)
 	}
 	if h.completionProvider == nil {
 		return tuist.CompletionResult{}

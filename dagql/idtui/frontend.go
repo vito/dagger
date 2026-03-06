@@ -138,6 +138,10 @@ func (sec SidebarSection) Body(width int) string {
 // ShellHandler defines the interface for handling shell interactions.
 // All methods are called on the UI goroutine unless noted otherwise.
 type ShellHandler interface {
+	// SetTUI gives the handler access to the TUI for showing overlays, etc.
+	// Called once during shell initialization before any other methods.
+	SetTUI(tui *tuist.TUI)
+
 	// Handle processes submitted shell input.
 	Handle(ctx context.Context, input string) error
 

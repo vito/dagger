@@ -518,6 +518,7 @@ func (fe *frontendPretty) startShell(ctx context.Context, handler ShellHandler) 
 	fe.shell = handler
 	fe.shellCtx = ctx
 	fe.promptFg = termenv.ANSIGreen
+	handler.SetTUI(fe.tui)
 
 	fe.initTextInput()
 
