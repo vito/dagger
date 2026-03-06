@@ -14,6 +14,7 @@ import (
 	"dagger.io/dagger"
 	"github.com/charmbracelet/bubbles/key"
 	uv "github.com/charmbracelet/ultraviolet"
+	"github.com/dagger/dagger/dagql/call"
 	"github.com/dagger/dagger/dagql/dagui"
 	"github.com/dagger/dagger/dagql/idtui"
 	"github.com/dagger/dagger/engine/slog"
@@ -70,6 +71,25 @@ func newDangShellHandler(dag *dagger.Client, fe idtui.Frontend) *dangShellHandle
 		llmModel: llmModel,
 		mode:     modeShell, // reuse modeShell for "dang" mode
 	}
+}
+
+// printDangValue prints a Dang value, formatting Dagger IDs (ScalarValue
+// whose type name ends in "ID") using the human-readable dump format instead
+// of the raw base64 encoding.
+func printDangValue(w io.Writer, val dang.Value) {
+	if sv, ok := val.(dang.ScalarValue); ok {
+		typeName := sv.ScalarType.String()
+		if strings.HasSuffix(typeName, "ID") {
+			var idp call.ID
+			if err := idp.Decode(sv.Val); err == nil {
+				out := idtui.NewOutput(w)
+				if err := new(idtui.Dump).DumpID(out, &idp); err == nil {
+					return
+				}
+			}
+		}
+	}
+	fmt.Fprintln(w, val.String())
 }
 
 // RunAll is the entry point for the dang shell command.
@@ -235,7 +255,7 @@ func (h *dangShellHandler) evalCode(ctx context.Context, code string) error {
 
 		// Print the result
 		stdio := telemetry.SpanStdio(ctx, InstrumentationLibrary)
-		fmt.Fprintln(stdio.Stdout, val.String())
+		printDangValue(stdio.Stdout, val)
 	}
 
 	return nil
@@ -336,7 +356,7 @@ func (h *dangShellHandler) Handle(ctx context.Context, line string) (rerr error)
 			return fmt.Errorf("evaluation error: %w", err)
 		}
 
-		fmt.Fprintln(stdio.Stdout, val.String())
+		printDangValue(stdio.Stdout, val)
 	}
 
 	return nil
