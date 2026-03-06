@@ -431,6 +431,13 @@ func (h *dangShellHandler) Prompt(ctx context.Context, out idtui.TermOutput, fg 
 	return sb.String(), init
 }
 
+func (h *dangShellHandler) CompletionDetailRenderer() tuist.DetailRenderer {
+	return replpkg.NewDetailRenderer(h.ctx, h.typeEnv, func() string {
+		// TODO: wire up actual text input value for receiver type resolution
+		return ""
+	})
+}
+
 func (h *dangShellHandler) AutoComplete(input string, cursorPos int) tuist.CompletionResult {
 	if h.mode == modePrompt {
 		return tuist.CompletionResult{}

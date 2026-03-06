@@ -149,6 +149,10 @@ type ShellHandler interface {
 	// Uses tuist's completion types directly.
 	AutoComplete(input string, cursorPos int) tuist.CompletionResult
 
+	// CompletionDetailRenderer returns an optional renderer for the
+	// completion detail panel. If nil, the default renderer is used.
+	CompletionDetailRenderer() tuist.DetailRenderer
+
 	// IsComplete determines if the current input is a complete command.
 	// Used to decide whether Enter submits or inserts a newline.
 	IsComplete(input string) bool

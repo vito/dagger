@@ -532,6 +532,7 @@ func (fe *frontendPretty) startShell(ctx context.Context, handler ShellHandler) 
 	fe.completionMenu = tuist.NewCompletionMenu(fe.textInput, func(input string, cursorPos int) tuist.CompletionResult {
 		return handler.AutoComplete(input, cursorPos)
 	})
+	fe.completionMenu.DetailRenderer = handler.CompletionDetailRenderer()
 
 	// Intercept special keys before TextInput processes them.
 	fe.textInput.KeyInterceptor = fe.interceptEditlineKey

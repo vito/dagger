@@ -160,6 +160,10 @@ func (h *shellCallHandler) SetTUI(_ *tuist.TUI) {
 	// no-op: the shell call handler doesn't need TUI access
 }
 
+func (h *shellCallHandler) CompletionDetailRenderer() tuist.DetailRenderer {
+	return nil // use default
+}
+
 // Debug prints to stderr internal command handler state and workflow that
 // can be helpful while developing the shell or even troubhleshooting, and
 // is toggled with the hidden builtin .debug
