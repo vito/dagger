@@ -771,6 +771,10 @@ github.com/vito/bubbline v0.0.0-20250312195236-5f4f49d6ebcb h1:Ho4c8V5nikU9zaeXc
 github.com/vito/bubbline v0.0.0-20250312195236-5f4f49d6ebcb/go.mod h1:/641L6H9ILAQTmBZrVkUCCNpp1H1vOoQIQzBvQ6Fm7o=
 github.com/vito/dang v0.0.0-20260306005442-6820d7d23321 h1:PXVxfl3XrCyrvpOzTRMXC68SR3+I5M7XpR5uHgt3hHw=
 github.com/vito/dang v0.0.0-20260306005442-6820d7d23321/go.mod h1:YHWFYGWsuX2g3lEPJbb9NHsZtuoNCSOxTw66Wl4xMwc=
+github.com/vito/dang v0.0.0-20260306010941-a073036d4d77 h1:7wHx2wMLV3wXGeDTIm23NY4Eos6IorBQKRNEmR+eQ98=
+github.com/vito/dang v0.0.0-20260306010941-a073036d4d77/go.mod h1:YHWFYGWsuX2g3lEPJbb9NHsZtuoNCSOxTw66Wl4xMwc=
+github.com/vito/dang v0.0.0-20260306011635-343abd303fff h1:U/BpvzysG4F8hOQWkRKthwOx+Y9XK2P+R0zMOIC8tQ4=
+github.com/vito/dang v0.0.0-20260306011635-343abd303fff/go.mod h1:YHWFYGWsuX2g3lEPJbb9NHsZtuoNCSOxTw66Wl4xMwc=
 github.com/vito/go-interact v1.0.2 h1:viJuANio3WH9utUG4rKbJC9V3JR5JgYNS+i0efeA+GU=
 github.com/vito/go-interact v1.0.2/go.mod h1:s+y0jK9Z2etBYt5ZM6+DhpOsE5C7NNGC3jrJvW0BBpc=
 github.com/vito/go-sse v1.1.3 h1:tZOiC+xKmuRPoySTupO6liK7ciSX0B2NKXha5hEtUAE=

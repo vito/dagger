@@ -24,6 +24,7 @@ import (
 	"github.com/vito/dang/pkg/dang"
 	"github.com/vito/dang/pkg/hm"
 	"github.com/vito/dang/pkg/ioctx"
+	replpkg "github.com/vito/dang/pkg/repl"
 	"github.com/vito/tuist"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/baggage"
@@ -53,6 +54,10 @@ type dangShellHandler struct {
 	// interpreter mode (dang or prompt)
 	mode      interpreterMode
 	savedMode interpreterMode
+
+	// Completion infrastructure (from pkg/repl)
+	completionProvider tuist.CompletionProvider
+	staticCompletions  []string
 
 	// cancel interrupts the entire shell session
 	cancel func()
@@ -179,6 +184,9 @@ func (h *dangShellHandler) Initialize(ctx context.Context) error {
 	}
 	h.ctx = ctx
 
+	// Build completion infrastructure
+	h.staticCompletions = replpkg.BuildStaticCompletions(h.typeEnv)
+	h.completionProvider = replpkg.NewCompletionProvider(ctx, h.typeEnv, h.staticCompletions)
 	return nil
 }
 
@@ -402,121 +410,10 @@ func (h *dangShellHandler) AutoComplete(input string, cursorPos int) tuist.Compl
 	if h.mode == modePrompt {
 		return tuist.CompletionResult{}
 	}
-
-	if input == "" {
+	if h.completionProvider == nil {
 		return tuist.CompletionResult{}
 	}
-
-	// Convert byte offset to line/col for the tree-sitter based completion engine
-	line, col := byteOffsetToLineCol(input, cursorPos)
-
-	// Type-aware completions via Dang's tree-sitter engine
-	result := dang.Complete(h.ctx, h.typeEnv, input, line, col)
-	if len(result.Items) > 0 {
-		return dangCompletionResult(result)
-	}
-
-	// Fallback: static completions from the environment
-	return h.staticCompletions(input)
-}
-
-// byteOffsetToLineCol converts a byte offset in text to 0-based line/col.
-func byteOffsetToLineCol(text string, offset int) (line, col int) {
-	if offset > len(text) {
-		offset = len(text)
-	}
-	for i := 0; i < offset; i++ {
-		if text[i] == '\n' {
-			line++
-			col = 0
-		} else {
-			col++
-		}
-	}
-	return line, col
-}
-
-// dangCompletionResult converts a dang.CompletionResult into a tuist.CompletionResult.
-func dangCompletionResult(result dang.CompletionResult) tuist.CompletionResult {
-	var items []tuist.Completion
-	for _, c := range result.Items {
-		item := tuist.Completion{
-			Label:         c.Label,
-			Detail:        c.Detail,
-			Documentation: c.Documentation,
-		}
-		if c.IsFunction {
-			item.Kind = "function"
-		} else if c.IsArg {
-			item.Kind = "arg"
-			item.InsertText = c.Label + ": "
-			item.DisplayLabel = c.Label + ": " + c.Detail
-		}
-		items = append(items, item)
-	}
-
-	return tuist.CompletionResult{
-		Items:       items,
-		ReplaceFrom: result.ReplaceFrom,
-	}
-}
-
-func (h *dangShellHandler) staticCompletions(input string) tuist.CompletionResult {
-	word := lastIdentDang(input)
-	if word == "" {
-		return tuist.CompletionResult{}
-	}
-
-	replaceFrom := len(input) - len(word)
-	wordLower := strings.ToLower(word)
-
-	var items []tuist.Completion
-
-	// Keywords
-	keywords := []string{
-		"let", "if", "else", "for", "in", "true", "false", "null",
-		"self", "type", "pub", "new", "import", "assert", "try",
-		"catch", "raise", "print",
-	}
-	for _, kw := range keywords {
-		if strings.HasPrefix(strings.ToLower(kw), wordLower) && kw != word {
-			items = append(items, tuist.Completion{Label: kw, Detail: "keyword"})
-		}
-	}
-
-	// Environment bindings
-	for name, scheme := range h.typeEnv.Bindings(dang.PublicVisibility) {
-		if dang.IsTypeDefBinding(scheme) || dang.IsIDTypeName(name) {
-			continue
-		}
-		nameLower := strings.ToLower(name)
-		if strings.HasPrefix(nameLower, wordLower) && name != word {
-			t, _ := scheme.Type()
-			detail := ""
-			if t != nil {
-				detail = t.String()
-			}
-			items = append(items, tuist.Completion{Label: name, Detail: detail})
-		}
-	}
-
-	return tuist.CompletionResult{
-		Items:       items,
-		ReplaceFrom: replaceFrom,
-	}
-}
-
-// lastIdentDang extracts the last identifier fragment from text.
-func lastIdentDang(s string) string {
-	i := len(s) - 1
-	for i >= 0 && isIdentByteDang(s[i]) {
-		i--
-	}
-	return s[i+1:]
-}
-
-func isIdentByteDang(c byte) bool {
-	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_'
+	return h.completionProvider(input, cursorPos)
 }
 
 func (h *dangShellHandler) IsComplete(input string) bool {
