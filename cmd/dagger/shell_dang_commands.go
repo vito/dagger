@@ -168,23 +168,47 @@ func (h *dangShellHandler) commandCompletions(input string) tuist.CompletionResu
 	}
 }
 
-// showDocBrowser opens the interactive API documentation browser as an overlay.
+// showDocBrowser opens the interactive API documentation browser, temporarily
+// removing the normal TUI children and replacing them with the browser.
+// Blocks until the user dismisses the browser, preventing handleShellDone
+// from stealing focus back.
 func (h *dangShellHandler) showDocBrowser() {
 	if h.tui == nil {
 		return
 	}
 
-	db := replpkg.NewDocBrowserOverlay(h.typeEnv)
-	var overlay *tuist.OverlayHandle
-	db.OnExit = func() {
-		if overlay != nil {
-			overlay.Hide()
+	done := make(chan struct{})
+
+	h.tui.Dispatch(func() {
+		// Remember current focus and children
+		prevFocus := h.tui.Focused()
+		prevChildren := make([]tuist.Component, len(h.tui.Children))
+		copy(prevChildren, h.tui.Children)
+
+		// Remove existing children (don't dismount — we'll restore them)
+		for _, ch := range prevChildren {
+			h.tui.RemoveChild(ch)
 		}
-	}
-	overlay = h.tui.ShowOverlay(db, &tuist.OverlayOptions{
-		Width:     tuist.SizePct(100),
-		MaxHeight: tuist.SizePct(100),
+
+		db := replpkg.NewDocBrowserOverlay(h.typeEnv)
+		db.OnExit = func() {
+			h.tui.RemoveChild(db)
+			// Restore previous children and focus
+			for _, ch := range prevChildren {
+				h.tui.AddChild(ch)
+			}
+			if prevFocus != nil {
+				h.tui.SetFocus(prevFocus)
+			}
+			close(done)
+		}
+		h.tui.AddChild(db)
+		h.tui.SetFocus(db)
 	})
+
+	// Block until the doc browser is dismissed, so handleShellDone
+	// doesn't steal focus back.
+	<-done
 }
 
 // envCommand lists environment bindings.

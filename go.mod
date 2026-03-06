@@ -154,11 +154,11 @@ require (
 	github.com/vektah/gqlparser/v2 v2.5.30
 	github.com/vishvananda/netlink v1.3.1
 	github.com/vito/bubbline v0.0.0-20250312195236-5f4f49d6ebcb
-	github.com/vito/dang v0.0.0-20260306011635-343abd303fff
+	github.com/vito/dang v0.0.0-20260306014541-5b06c023bed2
 	github.com/vito/go-interact v1.0.2
 	github.com/vito/go-sse v1.1.3
 	github.com/vito/midterm v0.2.3
-	github.com/vito/tuist v0.0.0-20260305182649-e6d49d27039b
+	github.com/vito/tuist v0.0.0-20260306014439-e8007743f36b
 	github.com/zeebo/xxh3 v1.0.2
 	go.etcd.io/bbolt v1.4.3
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.63.0
