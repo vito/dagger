@@ -367,14 +367,14 @@ func (h *dangShellHandler) Prompt(ctx context.Context, out idtui.TermOutput, fg 
 	sb.WriteString(termenv.CSI + termenv.ResetSeq + "m")
 
 	// Purple color (63) for Dang prompt, matching the standalone REPL
-	dangPurple := termenv.ANSIColor(63)
+	dangColor := termenv.ANSIMagenta
 
 	var init func()
 
 	switch h.mode {
 	case modeShell: // "dang" mode
-		sb.WriteString(out.String("dang").Bold().Foreground(dangPurple).String())
-		sb.WriteString(out.String("> ").Bold().Foreground(dangPurple).String())
+		sb.WriteString(out.String("dang").Bold().Foreground(dangColor).String())
+		sb.WriteString(out.String("> ").Bold().Foreground(dangColor).String())
 	case modePrompt:
 		llm, err := h.llmMaybe()
 		if err != nil {
