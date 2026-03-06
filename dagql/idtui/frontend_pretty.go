@@ -215,6 +215,10 @@ type SpanTreeView struct {
 	// Synced by syncSpanTreeState from fe.FocusedSpan.
 	focused bool
 
+	// expanded tracks row.Expanded so we can detect transitions
+	// (e.g. running→completed) and invalidate the render cache.
+	expanded bool
+
 	// Render metadata — set during Render() for focus-line lookup.
 	// These are output-derived values, not input state that drives rendering.
 	selfLineCount   int   // lines from self content (before children)
@@ -1360,15 +1364,28 @@ func (fe *frontendPretty) syncTreeNode(st *SpanTreeView, newPrefix treePrefix) {
 		changed = true
 	}
 
-	// Sync spinner
+	// Sync expanded state — when a span transitions from expanded to
+	// collapsed (e.g. running→completed), the render output changes
+	// (different log truncation) and needs to be invalidated.
+	row := fe.rows.BySpan[st.spanID]
+	isExpanded := row != nil && row.Expanded
+	if st.expanded != isExpanded {
+		st.expanded = isExpanded
+		changed = true
+	}
+
+	// Sync spinner — track whether it was added or removed.
+	hadSpinner := st.spinner != nil
 	fe.syncSpinnerTree(st)
+	if hadSpinner != (st.spinner != nil) {
+		changed = true
+	}
 
 	if changed {
 		st.Update()
 	}
 
 	// Sync children for expanded nodes
-	row := fe.rows.BySpan[st.spanID]
 	tree := fe.rowsView.BySpan[st.spanID]
 	if row == nil || tree == nil || !row.Expanded {
 		// Collapsed: clear children so they get dismounted on next render
