@@ -382,5 +382,3 @@ replace (
 )
 
 tool github.com/matryer/moq
-
-replace github.com/vito/dang => /home/vito/src/dang
