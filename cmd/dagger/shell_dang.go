@@ -449,6 +449,11 @@ func (h *dangShellHandler) IsComplete(input string) bool {
 		return true
 	}
 
+	// Colon commands are always complete on one line
+	if strings.HasPrefix(strings.TrimSpace(input), ":") {
+		return true
+	}
+
 	// Try to parse; if we get an error, check if it looks like
 	// the input just needs more text (e.g., unclosed parens, brackets)
 	_, err := dang.ParseWithRecovery("check", []byte(input))
