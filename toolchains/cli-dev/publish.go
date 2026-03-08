@@ -44,11 +44,15 @@ func (cli *CliDev) Publish(
 	if err != nil {
 		return nil, err
 	}
+	binaries, err := cli.goreleaserBinaries(ctx)
+	if err != nil {
+		return nil, err
+	}
 	ctr = ctr.
 		WithWorkdir("/app").
 		WithDirectory(".", cli.Go.Source()).
 		WithDirectory(".", git.Ref(tag).Tree()).
-		WithDirectory("build", cli.goreleaserBinaries())
+		WithDirectory("build", binaries)
 
 	if !semver.IsValid(tag) {
 		// all non-semver tags (like "main") are dev builds
@@ -206,7 +210,11 @@ func (cli *CliDev) ReleaseDryRun(ctx context.Context) error {
 			// a key which is private. For now, this just builds the CLI for the same
 			// targets so there's at least some coverage
 			func(ctx context.Context) error {
-				_, err := cli.goreleaserBinaries().Sync(ctx)
+				binaries, err := cli.goreleaserBinaries(ctx)
+				if err != nil {
+					return err
+				}
+				_, err = binaries.Sync(ctx)
 				return err
 			}).
 		WithJob(
@@ -222,7 +230,7 @@ func (cli *CliDev) ReleaseDryRun(ctx context.Context) error {
 		Run(ctx)
 }
 
-func (cli *CliDev) goreleaserBinaries() *dagger.Directory {
+func (cli *CliDev) goreleaserBinaries(ctx context.Context) (*dagger.Directory, error) {
 	oses := []string{"linux", "windows", "darwin"}
 	arches := []string{"amd64", "arm64", "arm"}
 
@@ -238,12 +246,15 @@ func (cli *CliDev) goreleaserBinaries() *dagger.Directory {
 				platform += "/v7" // not always correct but not sure of better way
 			}
 
-			binary := cli.Binary(dagger.Platform(platform))
+			binary, err := cli.Binary(ctx, dagger.Platform(platform))
+			if err != nil {
+				return nil, err
+			}
 			dest := fmt.Sprintf("dagger_%s_%s/dagger", cli.Version, strings.ReplaceAll(platform, "/", "_"))
 			dir = dir.WithFile(dest, binary)
 		}
 	}
-	return dir
+	return dir, nil
 }
 
 func publishEnv(ctx context.Context) (*dagger.Container, error) {
