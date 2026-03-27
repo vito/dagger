@@ -325,7 +325,6 @@ var bootstrapQueryFields = map[string]bool{
 	"currentTypeDefs":     true,
 	"currentModule":       true,
 	"currentFunctionCall": true,
-	"version":             true,
 	// address is the CLI's entry point for resolving user-supplied flag
 	// values (containers, directories, files, secrets, services, etc.)
 	"address": true,
