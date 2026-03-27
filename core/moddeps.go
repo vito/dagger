@@ -322,10 +322,13 @@ func (b *SchemaBuilder) lazilyLoadSchema(ctx context.Context) (
 // client-facing server even when HideCoreAPI is set, because the CLI
 // and other tooling depend on them for schema discovery.
 var bootstrapQueryFields = map[string]bool{
-	"currentTypeDefs":      true,
-	"currentModule":        true,
-	"currentFunctionCall":  true,
-	"version":              true,
+	"currentTypeDefs":     true,
+	"currentModule":       true,
+	"currentFunctionCall": true,
+	"version":             true,
+	// address is the CLI's entry point for resolving user-supplied flag
+	// values (containers, directories, files, secrets, services, etc.)
+	"address": true,
 }
 
 // stripCoreQueryFields removes core-originated fields from the outer
