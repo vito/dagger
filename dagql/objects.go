@@ -439,7 +439,7 @@ func (r ObjectResult[T]) preselect(ctx context.Context, s *Server, sel Selector)
 	cacheKey := newCacheKey(ctx, newID, field.Spec)
 	if field.Spec.GetCacheConfig != nil {
 		cacheCfgCtx := idToContext(ctx, newID)
-		cacheCfgCtx = srvToContext(cacheCfgCtx, s)
+		cacheCfgCtx = srvToContext(cacheCfgCtx, s.Canonical())
 		cacheCfgResp, err := field.Spec.GetCacheConfig(cacheCfgCtx, r, inputArgs, view, GetCacheConfigRequest{
 			CacheKey: cacheKey,
 		})
@@ -557,7 +557,7 @@ func (r ObjectResult[T]) call(
 	cacheKey CacheKey,
 ) (AnyResult, error) {
 	ctx = idToContext(ctx, newID)
-	ctx = srvToContext(ctx, s)
+	ctx = srvToContext(ctx, s.Canonical())
 	var opts []CacheCallOpt
 	if s.telemetry != nil {
 		fieldName := newID.Field()

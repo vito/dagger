@@ -325,7 +325,6 @@ var bootstrapQueryFields = map[string]bool{
 	"currentTypeDefs":      true,
 	"currentModule":        true,
 	"currentFunctionCall":  true,
-	"currentWorkspace":     true,
 	"version":              true,
 }
 
