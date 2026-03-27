@@ -193,6 +193,28 @@ func (class Class[T]) TypeName() string {
 	return class.inner.Type().Name()
 }
 
+func (class Class[T]) StripFields(keep func(name string, spec FieldSpec) bool) {
+	class.fieldsL.Lock()
+	for name, fields := range class.fields {
+		var kept []*Field[T]
+		for _, f := range fields {
+			if keep(name, *f.Spec) {
+				kept = append(kept, f)
+			}
+		}
+		if len(kept) == 0 {
+			delete(class.fields, name)
+		} else {
+			class.fields[name] = kept
+		}
+	}
+	class.fieldsL.Unlock()
+
+	if class.invalidateSchemaCache != nil {
+		class.invalidateSchemaCache()
+	}
+}
+
 func (class Class[T]) Extend(spec FieldSpec, fun FieldFunc) {
 	class.fieldsL.Lock()
 	f := &Field[T]{

@@ -643,6 +643,9 @@ func (srv *Server) initializeDaggerClient(
 	}
 	client.defaultDeps = core.NewSchemaBuilder(client.dagqlRoot, []core.Mod{coreMod})
 	client.servedMods = core.NewSchemaBuilder(client.dagqlRoot, []core.Mod{coreMod})
+	if client.clientMetadata.HideCoreAPI {
+		client.servedMods = client.servedMods.WithHideCoreAPI()
+	}
 	coreMod.Dag.View = call.View(engine.BaseVersion(engine.NormalizeVersion(client.clientVersion)))
 
 	if opts.EncodedModuleID != "" {

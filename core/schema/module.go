@@ -11,7 +11,6 @@ import (
 	"github.com/dagger/dagger/core"
 	"github.com/dagger/dagger/core/sdk"
 	"github.com/dagger/dagger/dagql"
-	"github.com/dagger/dagger/engine"
 )
 
 type moduleSchema struct{}
@@ -763,48 +762,7 @@ func (s *moduleSchema) currentTypeDefs(ctx context.Context, self *core.Query, ar
 	if err != nil {
 		return nil, fmt.Errorf("failed to get current schema: %w", err)
 	}
-	typeDefs, err := served.TypeDefs(ctx, dag)
-	if err != nil {
-		return nil, err
-	}
-
-	// When HideCoreAPI is set (by the CLI/shell), strip core Query-root
-	// functions so that core API fields (container, directory,
-	// loadContainerFromID, etc.) don't appear alongside entrypoint
-	// functions. Core types (Container, Directory, etc.) are kept so
-	// return types and method chaining still work.
-	if md, _ := engine.ClientMetadataFromContext(ctx); md != nil && md.HideCoreAPI {
-		typeDefs = stripCoreQueryFunctions(typeDefs)
-	}
-
-	return typeDefs, nil
-}
-
-// stripCoreQueryFunctions removes core-originated functions from the Query
-// type definition, leaving only module-sourced functions (constructors,
-// entrypoint proxies, etc.). This is used when HideCoreAPI is set so the
-// CLI/shell only sees module functions at the top level.
-func stripCoreQueryFunctions(typeDefs []*core.TypeDef) []*core.TypeDef {
-	result := make([]*core.TypeDef, 0, len(typeDefs))
-	for _, td := range typeDefs {
-		if td.AsObject.Valid && td.AsObject.Value.Name == "Query" {
-			// Clone the Query typedef and filter its functions.
-			obj := td.AsObject.Value.Clone()
-			filtered := make([]*core.Function, 0, len(obj.Functions))
-			for _, fn := range obj.Functions {
-				// Keep functions that originate from a module (non-empty
-				// SourceModuleName). Core functions have empty source.
-				if fn.SourceModuleName != "" {
-					filtered = append(filtered, fn)
-				}
-			}
-			obj.Functions = filtered
-			td = td.Clone()
-			td.AsObject = dagql.NonNull(obj)
-		}
-		result = append(result, td)
-	}
-	return result
+	return served.TypeDefs(ctx, dag)
 }
 
 func (s *moduleSchema) functionCallReturnValue(ctx context.Context, fnCall *core.FunctionCall, args struct {

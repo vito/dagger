@@ -55,6 +55,8 @@ type ObjectType interface {
 	FieldSpec(name string, view call.View) (FieldSpec, bool)
 	// FieldSpecs returns all field specs visible under the given view.
 	FieldSpecs(view call.View) []FieldSpec
+	// StripFields removes all fields for which keep returns false.
+	StripFields(keep func(name string, spec FieldSpec) bool)
 }
 
 type IDType interface {

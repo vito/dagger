@@ -30,6 +30,12 @@ type SchemaBuilder struct {
 	root    *Query
 	entries []modDepEntry
 
+	// hideCoreAPI, when true, causes the client-facing server to omit
+	// core API fields from the Query root (container, directory, etc.).
+	// Core types remain installed so return types and method chaining
+	// still work; only the Query-level entry points are stripped.
+	hideCoreAPI bool
+
 	// lazy cache — computed once per instance, never invalidated
 	lazilyLoadedServer *dagql.Server
 	loadSchemaErr      error
@@ -57,9 +63,20 @@ func NewSchemaBuilder(root *Query, mods []Mod) *SchemaBuilder {
 // Clone returns a shallow copy with the same entries.
 func (b *SchemaBuilder) Clone() *SchemaBuilder {
 	return &SchemaBuilder{
-		root:    b.root,
-		entries: slices.Clone(b.entries),
+		root:        b.root,
+		entries:     slices.Clone(b.entries),
+		hideCoreAPI: b.hideCoreAPI,
 	}
+}
+
+// WithHideCoreAPI returns a new SchemaBuilder that omits core API fields
+// from the Query root on the client-facing server. Core types (Container,
+// Directory, etc.) remain in the schema so that return types and method
+// chaining still work.
+func (b *SchemaBuilder) WithHideCoreAPI() *SchemaBuilder {
+	cp := b.Clone()
+	cp.hideCoreAPI = true
+	return cp
 }
 
 // Prepend returns a new SchemaBuilder with the given modules (default opts)
@@ -70,8 +87,9 @@ func (b *SchemaBuilder) Prepend(mods ...Mod) *SchemaBuilder {
 		extra[i] = modDepEntry{mod: m}
 	}
 	return &SchemaBuilder{
-		root:    b.root,
-		entries: append(extra, b.entries...),
+		root:        b.root,
+		entries:     append(extra, b.entries...),
+		hideCoreAPI: b.hideCoreAPI,
 	}
 }
 
@@ -83,8 +101,9 @@ func (b *SchemaBuilder) Append(mods ...Mod) *SchemaBuilder {
 		extra[i] = modDepEntry{mod: m}
 	}
 	return &SchemaBuilder{
-		root:    b.root,
-		entries: append(slices.Clone(b.entries), extra...),
+		root:        b.root,
+		entries:     append(slices.Clone(b.entries), extra...),
+		hideCoreAPI: b.hideCoreAPI,
 	}
 }
 
@@ -94,8 +113,9 @@ func (b *SchemaBuilder) Append(mods ...Mod) *SchemaBuilder {
 // restrictive combination of old and new.
 func (b *SchemaBuilder) With(mod Mod, opts InstallOpts) *SchemaBuilder {
 	cp := &SchemaBuilder{
-		root:    b.root,
-		entries: slices.Clone(b.entries),
+		root:        b.root,
+		entries:     slices.Clone(b.entries),
+		hideCoreAPI: b.hideCoreAPI,
 	}
 	for i, e := range cp.entries {
 		if e.mod.Name() == mod.Name() {
@@ -241,8 +261,10 @@ func (b *SchemaBuilder) lazilyLoadSchema(ctx context.Context) (
 		}
 	}
 
-	if len(entrypoints) == 0 {
-		// No entrypoints — single server suffices (inner == outer).
+	needsSplit := len(entrypoints) > 0 || b.hideCoreAPI
+
+	if !needsSplit {
+		// No entrypoints and no core API hiding — single server suffices.
 		mods := make([]modInstall, len(b.entries))
 		for i, e := range b.entries {
 			mods[i] = modInstall(e)
@@ -255,6 +277,7 @@ func (b *SchemaBuilder) lazilyLoadSchema(ctx context.Context) (
 	}
 
 	// Build inner server: all modules with Entrypoint forced to false.
+	// This is the canonical server used for ID loading and proxy resolution.
 	innerMods := make([]modInstall, len(b.entries))
 	for i, e := range b.entries {
 		opts := e.opts
@@ -279,10 +302,49 @@ func (b *SchemaBuilder) lazilyLoadSchema(ctx context.Context) (
 		return nil, err
 	}
 
+	// When HideCoreAPI is set, strip core Query-root fields from the
+	// outer server so clients only see module entrypoints and
+	// bootstrapping primitives. Core types (Container, Directory, etc.)
+	// remain in the schema for return-type resolution.
+	if b.hideCoreAPI {
+		stripCoreQueryFields(outer)
+	}
+
 	// Wire up delegation: the outer server's Load, LoadType, and
 	// Canonical() all route to the inner server, ensuring IDs are
 	// canonical and proxy resolvers can reach the real constructors.
 	outer.SetCanonical(inner)
 
 	return outer, nil
+}
+
+// bootstrapQueryFields are Query-root fields that must remain on the
+// client-facing server even when HideCoreAPI is set, because the CLI
+// and other tooling depend on them for schema discovery.
+var bootstrapQueryFields = map[string]bool{
+	"currentTypeDefs":      true,
+	"currentModule":        true,
+	"currentFunctionCall":  true,
+	"version":              true,
+}
+
+// stripCoreQueryFields removes core-originated fields from the outer
+// server's Query root, keeping only module-provided fields and a small
+// set of bootstrapping primitives.
+func stripCoreQueryFields(dag *dagql.Server) {
+	queryType, ok := dag.ObjectType("Query")
+	if !ok {
+		return
+	}
+	queryType.StripFields(func(name string, spec dagql.FieldSpec) bool {
+		// Keep fields installed by modules (constructors, entrypoint proxies, etc.)
+		if spec.Module != nil {
+			return true
+		}
+		// Keep bootstrapping fields needed by the CLI.
+		if bootstrapQueryFields[name] {
+			return true
+		}
+		return false
+	})
 }

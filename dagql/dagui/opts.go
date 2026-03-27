@@ -156,12 +156,15 @@ func ShouldSkipFunction(obj, field string) bool {
 			"generatedCode",
 			"currentFunctionCall",
 			"currentModule",
+			"currentTypeDefs",
 			"typeDef",
 			"sourceMap",
 			"function",
 			// not useful until the CLI accepts ID inputs
 			"cacheVolume",
 			"setSecret",
+			// not useful for end users
+			"version",
 			// deprecated
 			"pipeline",
 		},
