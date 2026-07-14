@@ -1,129 +1,160 @@
-# llm-workspace-stacked — handoff
+# llm-workspace stacked PRs — CI-greening handoff
 
-The tidied, stack-ready rewrite of `llm-workspace-fresh`: 109 commits squashed
-and reordered into 40, in five slices ready to become stacked PRs. Based on the
-current head of **#13600 `workspace-overlay-export`** (`e55008800`, which
-already includes the cherry-picked lock-reads fix). Written 2026-07-13 for a
-fresh session whose job is: open the stacked PRs, then run a regenerate for
-each PR (see §4).
+State as of 2026-07-14, after the CI-greening session for the stack. Written for
+a fresh session. The stack (all `dagger/dagger`, chained bottom-up):
 
-## 1. The stack
+| PR | branch | state |
+|---|---|---|
+| #13632 A — engine & TUI fixes | `llm-workspace-engine-tui-fixes` → main | **GREEN** (85 pass) |
+| #13633 B — Workspace glob/search | `llm-workspace-file-apis` | **GREEN** (85 pass) |
+| #13634 C — LLM foundation | `llm-workspace-llm-foundation` | in progress, see §2 |
+| #13635 D — LLM ⇄ Workspace | `llm-workspace-llm-binding` | untouched, needs rebase onto green C |
+| #13636 tip — dev tooling | `llm-workspace-dev-tooling` | untouched, needs rebase onto D |
 
-Each slice builds green on the one below it. `⛳` marks a PR head.
+Old refs from the tidy session (`llm-workspace-stacked`, `llm-workspace-tidy`,
+`backup/llm-workspace-fresh-2026-07-13`, `regen-workspace-overlay-base`) still
+exist locally; the PR branches are the live line now. #13600 merged into main.
+
+## 1. What landed on B (context for C/D)
+
+- `core/schema: gate Workspace.glob and search to v1` — new public APIs MUST be
+  gated `View(AfterVersion("v1.0.0-0"))` or `TestBaseSchemaAllowlist` fails.
+  Fixture modules calling gated APIs need `engineVersion: v1.0.0` bumps.
+- `regen go sdk module runtimes` — **vendored `**/internal/dagger/dagger.gen.go`
+  clients must stay byte-identical to main.** CI's `go:generate-dagger-runtimes`
+  runs a FIXED DEPLOYED engine (not PR source); local regens of those files with
+  any other engine produce bogus drift. Never regenerate them on these branches.
+- The gocyclo refactor of `searchWithRipgrep` is folded into the search commit.
+
+## 2. PR C — where it stands
+
+**Local branch `llm-workspace-llm-foundation` is at `e3cfbb3ac`, 5 commits
+ahead of the pushed remote (`6c5cadb6e`) and with rewritten history below it (a
+DCO fix); the next push must be `--force-with-lease`.** Worktree clean.
+
+Local commits on top of the rebased 12-commit foundation:
 
 ```
-                e55008800  (base: #13600 workspace-overlay-export)
-PR A — engine & TUI fixes (independent; could even target main)
-     1  3487ae343  fix(clientdb): cap SQLite pool at one connection
-     2  ef2ed559c  fix(engine): batch client DB log writes
-     3  022aaaf30  fix(dagql): bound parallel resolution fan-out
-     4  77e2e4433  fix(dagui): let verbosity expand rolled-up spans
-  ⛳ 5  a5c391f2b  feat(trace): fetch whole trace at high verbosity
-PR B — Workspace file APIs
-     6  697bb96f3  feat(workspace): add Workspace.glob API
-  ⛳ 7  a401ef883  feat(workspace): add Workspace.search API
-PR C — LLM foundation: providers, config, session CLI, TUI
-     8  16dd8da20  feat(llm): add config, CLI, and Anthropic OAuth
-     9  c18af1f88  feat(llm): content-block model, API, and SDKs
-    10  b287cd589  feat(llm): add OpenAI Codex provider
-    11  51ff724c5  feat(cli): add LLM session save/resume/interject
-    12  71b4ee99b  feat(tui): render LLM diffs, queue, status, branch
-    13  4493ea6ee  fix(sdk/typescript): keep LLM acronym raw
-    14  92a70d188  feat(llm): round-trip extended thinking
-    15  7c873145f  feat(llm): trace HTTP and stream display live
-    16  9719f56ef  fix(llm): guard handle-form digests, fix setup UX
-    17  111d32220  fix(llm): decode inputs, detect streaming mode
-    18  661bcc383  feat(llm): route local models through a c2h tunnel
-  ⛳19  35d33c5ec  chore(lint): resolve golangci-lint findings
-PR D — the LLM ⇄ Workspace rework: object tools, Env removal, @agent
-    20  07387bc36  feat(llm)!: bind the LLM to a Workspace
-    21  270ba445c  feat(core): resolve module context via workspace
-    22  90e125980  feat(llm)!: generate tools from bound objects, eliminate Env
-    23  a0a0ec338  feat(core): add Query.currentNode
-    24  b8fc7d6b4  feat(llm): add skill discovery and reading tools
-    25  2064b0c3b  fix(llm): add context tokens, fix cache accounting
-    26  80ad08b41  feat(cli): rework the LLM session UX
-    27  dd37d7b89  feat(tui): surface LLM conversations like checks
-    28  3d5bf612c  llm: installable @agent plugins via dagger agent
-    29  00b7041cc  test: cover @agent discovery and composition
-    30  4707ef3ad  fix(tui): agent prompt log visibility and duration display
-    31  da026307f  workspace: run group leaves on the bound workspace
-    32  06862409c  core: carry the bound workspace across module calls
-    33  793345b37  core: rebind LLM workspace when a tool returns one
-    34  a739a5430  chore(lint): resolve golangci-lint findings
-    35  9d47c5136  chore: regen SDKs, docs, and toolchains
-  ⛳36  31c8b75c2  docs(design): add workspace-agents as-built design doc
-tip — dev tooling (probably not a PR, or a final small one)
-    37  d91fc18cd  docs(skills): add tui-surfacing, extend tui-qa
-    38  6db861670  skills: add dagger-llm-workspace development skill
-    39  fe9093644  add tui-qa agent module
-  ⛳40  66394f7a2  docs(design): add overlay sparse-read design doc
+03d0f04d0  chore(lint): resolve golangci-lint findings        (DCO signoff added)
+75dd6f610  core/schema: gate the new LLM API surface to v1    KEEP
+72537c2ae  test(llm): pass max-api-calls to loop              KEEP
+46473615d  core/schema: restore evaluation semantics for LLM.sync   DROP (§3)
+9fc6b24fd  core: decode legacy string-content LLM replays           DROP (§3)
+82488a788  core: resolve golangci-lint findings in llm.go     KEEP
+4508b9db1  codegen/typescript: align enum golden with acronym casing KEEP
+e3cfbb3ac  core/schema: evaluate on pre-v1 LLM state getters        DROP (§3)
 ```
 
-Commit 22 deliberately absorbs the whole intermediate "Dang as the LLM's tool
-scheme" era: the object-tools rework deleted that layer wholesale, so the
-squash presents only the final form. `hack/designs/workspace-agents.md`
-(commit 36) is the as-built design doc replacing the retired working docs
-(`LLM_PLUGINS.md`, `WORKSPACE_GENERATE_SYNC.md`, `hack/designs/llm-object-tools.md`,
-the old `HANDOFF.md`, `ideas.md` — all stripped from history).
+### CI failure map from C's last run (15 checks) and status
 
-## 2. Verification done
+| Cluster | Checks | Status |
+|---|---|---|
+| DCO | DCO | fixed locally (03d0f04d0) |
+| Stale regens | docs:references, golang:generate-all, php-sdk:api | **NOT DONE** — see §4 |
+| Markdown lint | markdown-lint:{lint,fix} | **NOT DONE** — part of §4 |
+| Go lint | golang:lint-all (5 findings in core/llm.go) | fixed (82488a788) |
+| ci:bootstrap | composite of lint+markdown | clears with the above |
+| TS enum golden | test-split:test-base (TestTypeEnum: EstarGz→EStarGz) | fixed (4508b9db1); the committed TS client already shipped `EStarGz`, golden follows |
+| Replay + allow-llm | test-split:test-llm (13 failures) | fixed the WRONG WAY — redo per §3 |
+| Flakes | elixir-sdk:{codegen-test,lint,release-dry-run,sdk-test} ("cloning repo: engine is shutting down"), golang:test-all (helm TestInstallK3S k3s timeout) | no fix needed; any push re-runs them |
 
-- **Tree identity**: the tip tree is byte-identical to the original
-  `llm-workspace-fresh` HEAD (see `backup/llm-workspace-fresh-2026-07-13`)
-  except for intended deltas: working docs removed, the new design doc, ~22
-  code comments repointed from the dead docs to it, and the fixes below.
-- **Fixes made during the tidy** (each inside the commit that introduces the
-  code): `core/workspace_context.go` call to `EnsureWorkspaceModules` updated
-  for the `bestEffort` arg the #13600 rebase introduced (the original branch
-  HEAD did not compile); a `codexAPIError` helper moved from commit 10 to 15 so
-  every commit in PR C compiles; two pre-existing gofmt misses folded into the
-  lint commits.
-- **Builds**: `go build ./...` is clean at all five PR heads; `gofmt -l` clean
-  at tip.
-- **Generate**: the tip (= PR D head + tip commits) is `dagger generate`-clean
-  across go-sdk/docs/python/typescript/rust/php/elixir/engine-dev/go/golang/
-  markdown-lint.
+## 3. DIRECTION CHANGE (decided by Alex): no backwards compatibility
 
-## 3. Two findings that gate the PRs
+The session's agents fixed two test-llm root causes by adding backwards
+compatibility. **That direction is rejected. Drop these three commits** (rebase
+them out):
 
-1. **The base PR #13600 is generate-dirty (~14k lines).** The vendored module
-   clients (core/integration testdata, toolchains, modules, viztest) and SDK
-   client libraries were never regenerated for the overlay/export schema types
-   (`RemoteGitMirror`, `HTTPState`, `ClientFilesyncMirror`, …). Any PR based on
-   it fails `check-generated` before our changes even enter the picture.
-   Branch **`regen-workspace-overlay-base`** (`023c77784`, one commit on the
-   base) holds the exact `dagger generate` output — cherry-pick it into
-   #13600 like the lock fix. PRs A/B/C then only need their own deltas.
-2. **`dagger generate` lies at older checkouts** (why per-PR regen must be done
-   carefully, or in CI): the `*-sdk-dev` toolchains' generate cache key does
-   not include the engine schema — e.g. `GoSdkDev.workspaceDir` includes only
-   `sdk/go` + `cmd/codegen`, and the engine-dev service is addressed by the
-   stable name `"sdk"`. Once a generate has run at one checkout, running it at
-   an older one cache-hits (`go-sdk:generate DONE [0.3s]`) and replays results
-   from the wrong schema. Fresh CI checkouts are immune. Locally, bust the key
-   by leaving the previous run's generated-file changes dirty in the worktree
-   when re-running (the generated files are inside the input sets), or prune
-   the engine cache. This toolchain cache-key bug deserves its own fix on main.
+- `46473615d` restore evaluation semantics for LLM.sync
+- `e3cfbb3ac` evaluate on pre-v1 LLM state getters
+- `9fc6b24fd` decode legacy string-content LLM replays
 
-## 4. Next session's job
+Redo both fixes by updating the tests/fixtures to the new world instead:
 
-1. Cherry-pick `regen-workspace-overlay-base` into #13600 and push.
-2. Rebase this branch onto the new #13600 head (the regen commit will make
-   commit 35 partially redundant; expect generated-file conflicts — resolve by
-   re-running generate at the affected heads).
-3. Open the stacked PRs at the ⛳ heads: A → B → C → D (and decide whether the
-   tip's dev tooling ships as a small fifth PR or stays local).
-4. Per PR, run `dagger generate -y <all generators except changelog>` at the PR
-   head and commit the delta as the PR's final commit. Expected deltas: A none;
-   B glob/search in SDK clients + docs schema; C the LLM API surface; D none
-   (commit 35 already reconciles; verify).
+1. **Old-format replay goldens** — `core/integration/llmtest/{api-limit,
+   hello-world,allow-llm}.golden` are pre-content-block recordings (`"content"`
+   is a string; new shape is `[]*LLMContentBlock`), so `getReplay`
+   (core/llm.go ~566) fails to unmarshal. Re-record them in the new format with
+   `-update` (needs live provider credentials) and keep the strict decoder.
+2. **TestAllowLLM / sync semantics** — the branch makes `LLM.sync` a pure
+   ID-return (no evaluation), so module clients that relied on `sync` to force
+   the loop never evaluate, and allow-llm enforcement never fires. Update the
+   TEST (and whichever fixture module TestAllowLLM drives) to force evaluation
+   the way the new API intends (e.g. `loop` / `lastReply` / whatever
+   `internal/cmd/dagger` uses), rather than making sync evaluate again. While
+   in there, confirm the allow-llm gate actually fires under the new flow — the
+   enforcement point (`llm.allowed()`) is unchanged from main; it just needs an
+   evaluating call to reach it. NOTE the fixture's vendored client must stay
+   main-identical (§1); if the fixture would need new-API bindings it can't
+   have, restructure the test to drive evaluation from the CLI/shell side.
 
-## 5. Ref inventory
+Distinction that stays: the gating commit `75dd6f610` restores
+`Query.llm(maxAPICalls:)` for pre-v1.0.0 **views** with a behavioral fallback.
+That is NOT optional compat — removing an arg from the base view fails
+`TestBaseSchemaAllowlist` outright. Leave it.
 
-- `llm-workspace-stacked` — this branch (tip = §1 log + this doc).
-- `llm-workspace-tidy` — same tip, minus this doc; working branch of the tidy.
-- `backup/llm-workspace-fresh-2026-07-13` — untouched original branch.
-- `base/workspace-overlay-export` — local pin of #13600's head (`e55008800`).
-- `regen-workspace-overlay-base` — the base regen cherry-pick candidate (§3.1).
-- `tmp-regen` — scratch, safe to delete.
+## 4. Remaining work for C (in order)
+
+1. Rebase out the three dropped commits (§3), redo the two fixes as test/fixture
+   updates.
+2. Run the missing regens at C's head (an agent had this staged but never ran):
+   `dagger generate -y docs golang php-sdk markdown-lint`
+   - docs:references → docs/docs-graphql/schema.graphqls must GAIN the
+     content-block surface (LLMMessage/LLMContentBlock, LLM.loop/messages) and
+     LOSE `maxAPICalls` on Query.llm; golang → docs/current_docs/reference
+     (committed cli/index.mdx predates `dagger session`); php-sdk → PHP client +
+     doctum static docs; markdown-lint → whitespace fixes in
+     internal/cmd/dagger/llm_branch_summary.md (verify whitespace-only; it's a
+     go:embed'ed prompt template — if the fixer rewrites content, revert and add
+     the file to .markdownlintignore instead).
+   - Do NOT run the `go` generator (vendored clients, §1). If a generator
+     dirties `**/internal/dagger/dagger.gen.go`, revert those files.
+3. Local canaries before pushing (cheap, catch CI failures early):
+   - `go build ./... && go vet ./core/...`
+   - `go test ./core/schema -run 'TestBaseSchemaAllowlist|TestCoreModTypeDefs' -count=1`
+   - `go test ./cmd/codegen/... -count=1`
+   - DCO scan: `for c in $(git rev-list <base>..HEAD); do git log -1 --format='%B' $c | grep -q Signed-off-by || echo $c; done`
+   - `gofmt -l core internal engine dagql | grep -v dagger.gen`
+4. `git push --force-with-lease upstream llm-workspace-llm-foundation`, then
+   `gh pr checks 13634 --watch` (~85 checks; expect 1 skipping).
+5. Then D: rebase `llm-workspace-llm-binding` onto green C. Expect the same
+   classes of work: allowlist gating for D's new API surface (@agent, object
+   tools — and Env REMOVAL: deleting types/fields from the base view will need
+   allowlist/view care!), regens, replay goldens. Then tip.
+
+## 5. Operational knowledge (hard-won, read before debugging CI)
+
+- **Traces**: always `dagger --x-release 1.0.0-beta.6 trace <id>` (plain
+  `dagger trace` is the wrong CLI). Pipe to a file and grep; traces are huge.
+- **Re-running one failed check**: `dagger --x-release 1.0.0-beta.6 cloud rerun
+  --check <name>` reported "no Cloud checks found for the target commit" for
+  every targeting combination tried (--commit head SHA, --commit merge-ref SHA,
+  --pr, --org dagger) from this environment — possibly an auth/org context
+  issue. Workaround used: `git commit --amend --no-edit` + force-push (SHA bump,
+  same tree) re-runs everything; Cloud caching makes green checks cheap
+  replays. The checks are commit STATUSES (not GitHub check runs), so `gh run
+  rerun` and the check-runs rerequest API don't apply.
+- **Generator cache lying**: several toolchains' generate cache keys omit the
+  engine schema (e.g. go-sdk-dev's inputs are just sdk/go + cmd/codegen, and the
+  engine-dev service is name-keyed "sdk"). A <1s generator run is a replay from
+  whatever schema state ran first. Bust by leaving the previous output dirty in
+  the worktree, or fresh dev engine (`./hack/dev` + `./hack/with-dev`). This
+  cache-key bug deserves an upstream fix of its own.
+- **`dagger generate` needs `-y`** in non-TTY contexts (else `huh: could not
+  open a new TTY`). If export fails with "'dagql/idtui/' does not have a commit
+  checked out", a prior generator session left a nested `.git`/`dagger.toml`
+  under dagql/idtui — delete them and retry.
+- **Latent main breakage** (independent of this stack): when Dagger Cloud's
+  native-ci engine is next redeployed from current main,
+  go:generate-dagger-runtimes will fail ON MAIN — committed vendored clients
+  still carry the removed `Workspace.Update()` and current codegen emits new
+  `<module>.gen.go` self-bindings. A coordinated regen will be needed then.
+- Flake signatures seen: LLM replay divergence from `failed to emit telemetry
+  ... context canceled` leaking into captured tool logs (telemetry-teardown
+  race; consider hardening `captureLogs` to filter otel error-handler noise);
+  elixir-sdk "cloning repo: engine is shutting down"; helm TestInstallK3S
+  k3s-readiness timeout.
+- Local `golangci-lint` is older than the repo's Go (1.26.1) and won't run;
+  rely on the canaries above + CI.
+- Two engines run locally: `dagger-engine-v0.21.7` (stock CLI's) and
+  `dagger-engine.dev` (built from branch source via ./hack/with-dev). A dev
+  engine built from C's HEAD may still be running.
