@@ -485,6 +485,7 @@ func (fe *frontendPlain) renderFinalTests() bool {
 		Profile:         fe.profile,
 		Logs:            fe.testLogs,
 		SummaryLogLines: -1,
+		AgentStyle:      RunningInAgent(),
 	}
 	for _, line := range tv.renderTestSummaryLines(fe.output, view, 80, finalTestViewHeight(tv)) {
 		fmt.Fprintln(fe.output, line)

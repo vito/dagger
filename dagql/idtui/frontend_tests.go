@@ -100,6 +100,11 @@ type TestView struct {
 	// warning). Subject to the same height budget as the rest of the summary.
 	SummaryNote []string
 
+	// AgentStyle renders the summary heading in the flat, greppable agent
+	// style (== TESTS ==) instead of bold. Set from the owning frontend so
+	// engine-side rendering can force it regardless of the process env.
+	AgentStyle bool
+
 	OnFocusSpan func(*dagui.Span)
 
 	// RequestLogs lazily fetches a span's logs when this view renders them, so a
@@ -744,7 +749,7 @@ func (tv *TestView) renderTestSummaryLines(out TermOutput, view *dagui.TestView,
 // there is room for.
 func (tv *TestView) renderTestSummaryOneLine(out TermOutput, counts dagui.TestCounts, width int) string {
 	prefix := strings.Repeat(" ", max(tv.SummaryIndent, 0))
-	line := prefix + reportHeadingLine(out, tv.summaryHeading())
+	line := prefix + reportHeadingLine(out, tv.summaryHeading(), tv.AgentStyle)
 	if parts := renderTestCountParts(out, counts); len(parts) > 0 {
 		line += "  " + strings.Join(parts, "  ")
 	}
@@ -855,7 +860,7 @@ func (tv *TestView) renderTestSummaryCountsCompact(out TermOutput, counts dagui.
 }
 
 func (tv *TestView) renderTestSummaryHeader(out TermOutput, prefix string, width int) string {
-	heading := prefix + reportHeadingLine(out, tv.summaryHeading())
+	heading := prefix + reportHeadingLine(out, tv.summaryHeading(), tv.AgentStyle)
 	if tv.ShowTestViewerHint && !tv.testSummaryFinal() {
 		heading += " " + renderTestViewerHint(out)
 	}

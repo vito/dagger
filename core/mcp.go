@@ -18,6 +18,7 @@ import (
 	"github.com/dagger/dagger/dagql"
 	"github.com/dagger/dagger/dagql/call"
 	"github.com/dagger/dagger/dagql/dagui"
+	"github.com/dagger/dagger/dagql/idtui"
 	"github.com/dagger/dagger/engine"
 	"github.com/dagger/dagger/engine/clientdb"
 	"github.com/dagger/dagger/engine/slog"
@@ -30,7 +31,9 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/log"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
+	collogspb "go.opentelemetry.io/proto/otlp/collector/logs/v1"
 	otlpcommonv1 "go.opentelemetry.io/proto/otlp/common/v1"
 	"google.golang.org/protobuf/proto"
 )
@@ -1030,6 +1033,89 @@ func (m *MCP) captureLogs(ctx context.Context, spanID string) ([]string, error) 
 	), nil
 }
 
+// captureTraceReport renders the session's trace the way the user sees it:
+// the pretty frontend's final report (span tree with statuses, timings, and
+// log tails, plus the surfaced CHECKS/TESTS/CONVERSATION sections), replayed
+// from the client's telemetry DB. spanID, when non-empty, zooms the report to
+// that span's subtree, mirroring 'dagger trace --span'. verbosity follows the
+// dagui levels (dagql/dagui/opts.go).
+func (m *MCP) captureTraceReport(ctx context.Context, spanID string, verbosity int) (string, error) {
+	var zoom dagui.SpanID
+	if spanID != "" {
+		sid, err := trace.SpanIDFromHex(spanID)
+		if err != nil {
+			return "", fmt.Errorf("invalid span ID %q: %w", spanID, err)
+		}
+		zoom = dagui.SpanID{SpanID: sid}
+	}
+
+	root, err := CurrentQuery(ctx)
+	if err != nil {
+		return "", err
+	}
+	mainMeta, err := root.MainClientCallerMetadata(ctx)
+	if err != nil {
+		return "", fmt.Errorf("get main client caller metadata: %w", err)
+	}
+	// ClientTelemetry flushes the whole session's telemetry first, so the
+	// span tree is complete as of this call.
+	q, err := root.ClientTelemetry(ctx, mainMeta.SessionID, mainMeta.ClientID)
+	if err != nil {
+		return "", err
+	}
+	defer q.Close()
+
+	report := idtui.NewTraceReport()
+
+	// Replay spans first so log records route to their spans rather than
+	// buffering as orphans.
+	spanExp := report.SpanExporter()
+	var lastSpanID int64
+	for {
+		rows, err := q.SelectSpansSince(ctx, clientdb.SelectSpansSinceParams{
+			ID:    lastSpanID,
+			Limit: llmLogsBatchSize,
+		})
+		if err != nil {
+			return "", fmt.Errorf("select spans: %w", err)
+		}
+		if len(rows) == 0 {
+			break
+		}
+		roSpans := make([]sdktrace.ReadOnlySpan, 0, len(rows))
+		for _, row := range rows {
+			lastSpanID = row.ID
+			roSpans = append(roSpans, row.ReadOnly())
+		}
+		if err := spanExp.ExportSpans(ctx, roSpans); err != nil {
+			return "", fmt.Errorf("export spans: %w", err)
+		}
+	}
+
+	logExp := report.LogExporter()
+	var lastLogID int64
+	for {
+		logs, err := q.SelectLogsSince(ctx, clientdb.SelectLogsSinceParams{
+			ID:    lastLogID,
+			Limit: llmLogsBatchSize,
+		})
+		if err != nil {
+			return "", fmt.Errorf("select logs: %w", err)
+		}
+		if len(logs) == 0 {
+			break
+		}
+		lastLogID = logs[len(logs)-1].ID
+		if err := telemetry.ReexportLogsFromPB(ctx, logExp, &collogspb.ExportLogsServiceRequest{
+			ResourceLogs: clientdb.LogsToPB(logs),
+		}); err != nil {
+			return "", fmt.Errorf("re-export logs: %w", err)
+		}
+	}
+
+	return report.Render(zoom, verbosity), nil
+}
+
 func toolErrorMessage(err error) string {
 	errResponse := err.Error()
 	// propagate error values to the model
@@ -1105,6 +1191,81 @@ func (m *MCP) loadBuiltins(srv *dagql.Server, allTools *LLMToolSet) {
 		Strict: false,
 		Call:   m.readLogsTool(srv),
 	})
+
+	allTools.Add(LLMTool{
+		Name: "ReadTrace",
+		Description: "Render the current session's trace the way the user sees it: the span tree with statuses, timings, and log tails, plus CHECKS, TESTS, and CONVERSATION sections when present." + "\n" +
+			"Zoom to a span ID (from a traceparent in an error, or from a previous ReadTrace) to focus on its subtree; raise verbosity to reveal more." + "\n" +
+			"Complements ReadLogs, which returns raw log lines.",
+		ReadOnly: true,
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"span": map[string]any{
+					"type":        "string",
+					"description": "Span ID to zoom the report to. Omit for the whole trace.",
+				},
+				"verbosity": map[string]any{
+					"type":        "integer",
+					"description": "Detail level: 0 shows only failed/running spans, 1 also lists completed spans (collapsed), 3 includes internal spans, 5 expands everything.",
+					"minimum":     0,
+					"maximum":     5,
+					"default":     1,
+				},
+				"limit": map[string]any{
+					"type":        "integer",
+					"description": "Maximum number of report lines to return; the middle is snipped when exceeded.",
+					"minimum":     1,
+					"default":     1000,
+				},
+			},
+			"additionalProperties": false,
+		},
+		Strict: false,
+		Call:   m.readTraceTool(srv),
+	})
+}
+
+func (m *MCP) readTraceTool(srv *dagql.Server) LLMToolFunc {
+	return ToolFunc(srv, func(ctx context.Context, args struct {
+		Span      string `default:""`
+		Verbosity int    `default:"1"`
+		Limit     int    `default:"1000"`
+	}) (any, error) {
+		report, err := m.captureTraceReport(ctx, args.Span, args.Verbosity)
+		if err != nil {
+			return nil, fmt.Errorf("failed to capture trace report: %w", err)
+		}
+		report = strings.TrimRight(report, "\n")
+		if report == "" {
+			return "WARNING: trace report is empty.", nil
+		}
+		lines := limitReportLines(strings.Split(report, "\n"), args.Limit, llmLogsMaxLineLen)
+		return strings.Join(lines, "\n"), nil
+	})
+}
+
+// limitReportLines caps a rendered report at limit lines. Unlike limitLines'
+// tail-only keep (right for logs, where the end matters most), a report leads
+// with its most important content — the verdict and surfaced sections — so
+// keep the head and tail and snip the middle.
+func limitReportLines(lines []string, limit, maxLineLen int) []string {
+	if limit > 0 && len(lines) > limit {
+		head := limit / 2
+		tail := limit - head
+		snipped := fmt.Sprintf("... %d lines omitted (zoom into a span or raise limit to see more) ...", len(lines)-limit)
+		capped := make([]string, 0, limit+1)
+		capped = append(capped, lines[:head]...)
+		capped = append(capped, snipped)
+		capped = append(capped, lines[len(lines)-tail:]...)
+		lines = capped
+	}
+	for i, line := range lines {
+		if len(line) > maxLineLen {
+			lines[i] = line[:maxLineLen] + fmt.Sprintf("[... %d chars truncated]", len(line)-maxLineLen)
+		}
+	}
+	return lines
 }
 
 func (m *MCP) readLogsTool(srv *dagql.Server) LLMToolFunc {

@@ -78,6 +78,13 @@ type frontendPretty struct {
 	reportOnly bool
 	reportMu   sync.Mutex // protects state in reportOnly mode (no TUI event loop)
 
+	// agentStyle renders report headings and sections in the flat, greppable
+	// style meant for AI agents rather than humans (== TITLE == markers, no
+	// body indent, no visual-density cues). Defaults to RunningInAgent();
+	// engine-side rendering for an LLM forces it on regardless of the
+	// process environment (see TraceReport).
+	agentStyle bool
+
 	// console, when set (DAGGER_TUI_CONSOLE=<addr>), serves the TUI over HTTP on
 	// a headless terminal instead of attaching to a real one (frontend_console.go).
 	console string
@@ -756,9 +763,10 @@ func newWithTerminal(w io.Writer, db *dagui.DB, term tuist.Terminal) *frontendPr
 	profile := ColorProfile()
 	tui := tuist.New(term)
 	fe := &frontendPretty{
-		db:        db,
-		logs:      newPrettyLogs(profile, db),
-		autoFocus: true,
+		db:         db,
+		logs:       newPrettyLogs(profile, db),
+		autoFocus:  true,
+		agentStyle: RunningInAgent(),
 
 		// set empty initial row state to avoid nil checks
 		rowsView: &dagui.RowsView{},
@@ -2611,7 +2619,7 @@ func (fe *frontendPretty) renderTraceHeader(r *renderer) []string {
 		icon, word, color = Diamond, "RUNNING", termenv.ANSIYellow
 	}
 	status := out.String(fmt.Sprintf("%s %s", icon, word)).Foreground(color).String()
-	lines := []string{reportHeadingLine(out, "TRACE") + "  " + status}
+	lines := []string{reportHeadingLine(out, "TRACE", fe.agentStyle) + "  " + status}
 
 	name := root.Name
 	if name == "" {
@@ -2684,6 +2692,7 @@ func (fe *frontendPretty) renderZoomedCheckTests(ctx tuist.Context, span *dagui.
 		SummaryIndent:   2,
 		SummaryLogLines: -1,
 		TraceID:         fe.traceID,
+		AgentStyle:      fe.agentStyle,
 	}
 	width := ctx.Width
 	if width <= 0 {
@@ -2702,8 +2711,8 @@ func (fe *frontendPretty) renderZoomedCheckTests(ctx tuist.Context, span *dagui.
 // (daggercmd.section, which idtui can't import without a cycle): a flat,
 // greppable "== TITLE ==" marker under an AI agent, or a bold heading for
 // humans.
-func reportHeadingLine(out TermOutput, title string) string {
-	if RunningInAgent() {
+func reportHeadingLine(out TermOutput, title string, agent bool) string {
+	if agent {
 		return fmt.Sprintf("== %s ==", title)
 	}
 	return out.String(title).Bold().String()
@@ -2712,15 +2721,15 @@ func reportHeadingLine(out TermOutput, title string) string {
 // reportSectionLines renders a titled block: the heading from reportHeadingLine
 // with the body left at the margin under an agent or indented two spaces for
 // humans. body lines are pre-rendered and may already carry styling.
-func reportSectionLines(out TermOutput, title string, body []string) []string {
+func reportSectionLines(out TermOutput, title string, body []string, agent bool) []string {
 	if len(body) == 0 {
 		return nil
 	}
 	lines := make([]string, 0, len(body)+1)
-	lines = append(lines, reportHeadingLine(out, title))
+	lines = append(lines, reportHeadingLine(out, title, agent))
 	for _, b := range body {
 		switch {
-		case RunningInAgent(), b == "":
+		case agent, b == "":
 			lines = append(lines, b)
 		default:
 			lines = append(lines, "  "+b)
@@ -2802,7 +2811,7 @@ func (fe *frontendPretty) renderSuggestionsSection(zoomed *dagui.Span) []string 
 	for _, sel := range targets {
 		body = append(body, fmt.Sprintf("dagger trace %s %s", fe.traceID, sel))
 	}
-	return reportSectionLines(out, "MORE DETAILS", body)
+	return reportSectionLines(out, "MORE DETAILS", body, fe.agentStyle)
 }
 
 // renderRerunSection prints copy-paste commands to re-run the failed checks,
@@ -2859,7 +2868,7 @@ func (fe *frontendPretty) renderRerunSection(zoomed *dagui.Span) []string {
 		for _, name := range names {
 			body = append(body, fmt.Sprintf("dagger cloud rerun --commit %s --check %q", fe.ciMeta.commit, name))
 		}
-		lines = append(lines, reportSectionLines(out, "RE-RUN IN CI", body)...)
+		lines = append(lines, reportSectionLines(out, "RE-RUN IN CI", body, fe.agentStyle)...)
 	}
 
 	// Run the check locally to reproduce (and then fix) the failure against your
@@ -2871,7 +2880,7 @@ func (fe *frontendPretty) renderRerunSection(zoomed *dagui.Span) []string {
 	if len(lines) > 0 {
 		lines = append(lines, "")
 	}
-	lines = append(lines, reportSectionLines(out, "RUN LOCALLY", body)...)
+	lines = append(lines, reportSectionLines(out, "RUN LOCALLY", body, fe.agentStyle)...)
 
 	return lines
 }
@@ -2908,15 +2917,15 @@ func outermostSurfacedCheck(roots []*dagui.CheckNode, checkName string) *dagui.C
 // roots only; the per-level tallies live on the nested headers.
 func (fe *frontendPretty) renderChecksHeader() []string {
 	out := NewOutput(io.Discard, termenv.WithProfile(fe.profile))
-	return []string{checksHeaderLine(out, fe.db.SurfacedChecks())}
+	return []string{checksHeaderLine(out, fe.db.SurfacedChecks(), fe.agentStyle)}
 }
 
 // checksHeaderLine renders a "CHECKS" heading with the failed/passed tally for
 // the given checks joined onto the same line (mirroring the TESTS header). The
 // nodes are the checks listed directly beneath this header -- a level -- so the
 // tally agrees with what's rendered right under it.
-func checksHeaderLine(out TermOutput, nodes []*dagui.CheckNode) string {
-	line := reportHeadingLine(out, "CHECKS")
+func checksHeaderLine(out TermOutput, nodes []*dagui.CheckNode, agent bool) string {
+	line := reportHeadingLine(out, "CHECKS", agent)
 	for _, part := range checkBreakdownPartsFor(out, nodes) {
 		line += "  " + part
 	}
@@ -5539,7 +5548,7 @@ func (fe *frontendPretty) renderRollUpDots(out TermOutput, span *dagui.Span, row
 
 	// The braille rollup is a visual density cue; an agent reading the output as
 	// text gets nothing from it but noise, so skip it entirely.
-	if RunningInAgent() {
+	if fe.agentStyle {
 		return ""
 	}
 
