@@ -8,8 +8,8 @@ session. The stack (all `dagger/dagger`, chained bottom-up):
 | #13632 A — engine & TUI fixes | `llm-workspace-engine-tui-fixes` → main | **GREEN** |
 | #13633 B — Workspace glob/search | `llm-workspace-file-apis` | **GREEN** |
 | #13634 C — LLM foundation | `llm-workspace-llm-foundation` @ `5bb87a5d8f` | **GREEN** (30/30 Cloud statuses) |
-| #13635 D — LLM ⇄ Workspace | `llm-workspace-llm-binding` @ `11c2787075` | REBASED onto green C + greening work, MERGEABLE, **Cloud checks running** at session end — verify before touching |
-| #13636 tip — dev tooling | `llm-workspace-dev-tooling` @ `e43b62155b` | rebased onto new D, pushed, MERGEABLE |
+| #13635 D — LLM ⇄ Workspace | `llm-workspace-llm-binding` @ `2ac7469458` | REBASED onto green C + two greening waves, MERGEABLE, **Cloud checks running** at session end — verify before touching |
+| #13636 tip — dev tooling | `llm-workspace-dev-tooling` @ `4c4c366cf9` | rebased onto new D, pushed, MERGEABLE |
 
 ## 1. What landed on D this session
 
@@ -142,3 +142,63 @@ latent main breakage re go:generate-dagger-runtimes vendored clients.
 4. The `@agent` directive is visible in the base view (directives can't be
    view-gated) — flagged in the gating commit; acceptable, but worth a
    maintainer's eye on review.
+
+## 5. Second greening wave (same session, after the first CI run)
+
+The first full CI run on D failed 8 checks; all root causes found and fixed
+(commits `4bbd0c2eb8..2ac7469458`), verified locally where possible:
+
+- **docs:check** — hand-maintained docs still referenced the deleted Env
+  reference page (coreTypes.js promoted-types list → invalid sidebar id, the
+  types index table, and a core-types guidance section). All removed.
+- **DCO** — one inherited old-D commit lacked signoff; fixed via reword
+  rebase. Every commit in the PR range now carries Signed-off-by.
+- **java-sdk:test / release-dry-run / test-modules java** — REAL SDK bug:
+  `withTools(object: ID! @expectedType(Node))` generates a Node-typed Java
+  parameter that Arguments.Builder can't marshal. Fix: id-providing
+  interfaces are generated as `extends IDAble<ID>` (InterfaceVisitor), so the
+  existing IDAble overload/marshalling covers interface values. Note the
+  overload-ambiguity trap: adding a separate `add(String, Node)` overload
+  instead makes every concrete-object call site ambiguous.
+- **test-split:test-llm** — two causes: (1) the allow-llm gate matches repo
+  URLs WITHOUT version pins, so `@llm-workspace`-pinned allow entries never
+  matched — fixture refs stay pinned for `-m`, allow entries use unpinned
+  variants; (2) TestAPILimit still drove the deleted `with-env` shell
+  pipeline — now binds `container | from alpine` via with-tools and the
+  golden was re-recorded live (model calls the container's envVariable tool).
+- **test-split:test-workspaces / test-base checks family** — the
+  hello-with-services and hello-with-checks fixtures called dag.CurrentEnv()
+  (load-time codegen → compile error). Replaced with auto-injected
+  `Workspace!` args reading Workspace.services/checks; functions renamed
+  Workspace{Services,Checks}, up_test.go updated.
+- **golang:lint-all / ci:bootstrap** — two lint rounds (receiver naming,
+  error punctuation, stale + new gocyclo nolints, unparam drops incl.
+  renderStep's always-empty prefix, dead functionRequiresArgs, unused
+  DAGUI_DEBUG logger). `dagger check golang:lint-all` passes locally.
+- **cmd/codegen filter tests** — dropped "Env" from ExtendableTypes
+  (Binding was already gone) and regenerated the filter goldens with
+  `-update`.
+
+### KNOWN-OPEN feature gaps (not mechanical greening — need design/debugging)
+
+1. **TestMCP (mcp_test.go)** — expects the retired ListMethods/SelectMethods
+   meta-tool scheme and `--env-privileged` core exposure. D's `dagger mcp`
+   serves `llm.__mcp`, which for a bare LLM exposes only builtins (ReadLogs,
+   list_skills, read_skill) — verified by speaking MCP over stdio to a dev
+   CLI. Needs a design call (bind workspace-module entrypoints via
+   withTools? what does --env-privileged mean now?) and a test rewrite to
+   the native tools/list flow.
+2. **TestContextualWorkspaceCaching (3 subtests)** — in CI they fail fast
+   (FUNCTION_EXECUTED where a cache hit is expected); locally they hang for
+   10m each. Exercises loadWorkspaceArg cache identity / the workspace
+   carry. Use the dagger-llm-workspace skill's A/B methodology.
+3. **modules/evals, doug, dev, claude, evaluator** still use the Env API in
+   their module code (vendored clients keep them compiling, but they are
+   broken at runtime against a D engine). Not CI-blocking; needs a sweep
+   when the eval harness is next used.
+4. TestChecksFailFast locally reports no "context canceled" — warm-cache
+   artifact (all checks replay in ~1s, nothing left to cancel); in CI it
+   only ever failed on the fixture compile error. Judge by CI.
+5. TestTelemetry/TestGolden (idtui) fails locally at the pushed head but
+   passes in CI (golang:test-all was green) — local render-env difference;
+   don't chase.
