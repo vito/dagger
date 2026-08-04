@@ -203,6 +203,36 @@ source = "github.com/dagger/dang-sdk"
 [modules.dagger-go-sdk]
 source = "github.com/dagger/go-sdk"
 
+[env.dev.modules.editor]
+source = "modules/editor"
+
+[env.dev.modules.tui-qa]
+source = "modules/tui-qa"
+
+[env.dev.modules.engine-lab]
+source = "modules/engine-lab"
+
+[env.dev.modules.golang]
+source = "github.com/vito/dagger-go@go-doc"
+
+[env.dev.modules.golang.settings]
+base = "engine-dev:go-container"
+
+[env.dev.modules.delegate]
+source = "modules/delegate"
+
+[env.dev.modules.review]
+source = "modules/review"
+
+[env.dev.modules.contributor]
+source = "modules/contributor"
+
+[env.dev.modules.contributor.settings]
+githubToken = "cmd://gh auth token"
+
+[modules.history]
+source = "modules/history"
+
 [modules.dagger-dang-sdk.as-sdk]
 name = "dang"
 
