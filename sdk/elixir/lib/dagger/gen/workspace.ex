@@ -472,6 +472,34 @@ defmodule Dagger.Workspace do
   end
 
   @doc """
+  Return this workspace with its uncommitted changes staged as a git commit, without mutating the source.
+
+  The commit is created engine-side, on top of the workspace's git HEAD plus any previously staged commit: the local checkout is left untouched. Afterwards Workspace.git.head resolves to the new commit, and Workspace.git.uncommitted holds whatever was left out of it, still pending on top.
+
+  The commit is deterministic: the same workspace state and the same arguments always produce the same commit hash.
+  """
+  @spec with_commit(t(), String.t(), String.t(), [
+          {:paths, [String.t()]},
+          {:author_name, String.t() | nil},
+          {:author_email, String.t() | nil}
+        ]) :: Dagger.Workspace.t()
+  def with_commit(%__MODULE__{} = workspace, message, date, optional_args \\ []) do
+    query_builder =
+      workspace.query_builder
+      |> QB.select("withCommit")
+      |> QB.put_arg("message", message)
+      |> QB.put_arg("date", date)
+      |> QB.maybe_put_arg("paths", optional_args[:paths])
+      |> QB.maybe_put_arg("authorName", optional_args[:author_name])
+      |> QB.maybe_put_arg("authorEmail", optional_args[:author_email])
+
+    %Dagger.Workspace{
+      query_builder: query_builder,
+      client: workspace.client
+    }
+  end
+
+  @doc """
   Return this workspace with a named config environment created.
   """
   @spec with_config_env(t(), String.t(), [{:here, boolean() | nil}]) :: Dagger.Workspace.t()

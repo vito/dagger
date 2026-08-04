@@ -12205,6 +12205,27 @@ class Query(Root):
         _ctx = self._select("currentNode", _args)
         return _NodeClient(_ctx)
 
+    async def current_timestamp(self) -> str:
+        """The current UTC time in RFC3339 format. Never cached.
+
+        Returns
+        -------
+        str
+            The `String` scalar type represents textual data, represented as
+            UTF-8 character sequences. The String type is most often used by
+            GraphQL to represent free-form human-readable text.
+
+        Raises
+        ------
+        ExecuteTimeoutError
+            If the time to execute the query exceeds the configured timeout.
+        QueryError
+            If the API returns an error.
+        """
+        _args: list[Arg] = []
+        _ctx = self._select("currentTimestamp", _args)
+        return await _ctx.execute(str)
+
     async def current_type_defs(
         self,
         *,
@@ -15066,6 +15087,55 @@ class Workspace(Type):
         _ctx = self._select("withChanges", _args)
         return Workspace(_ctx)
 
+    def with_commit(
+        self,
+        message: str,
+        date: str,
+        *,
+        paths: list[str] | None = None,
+        author_name: str | None = None,
+        author_email: str | None = None,
+    ) -> Self:
+        """Return this workspace with its uncommitted changes staged as a git
+        commit, without mutating the source.
+
+        The commit is created engine-side, on top of the workspace's git HEAD
+        plus any previously staged commit: the local checkout is left
+        untouched. Afterwards Workspace.git.head resolves to the new commit,
+        and Workspace.git.uncommitted holds whatever was left out of it, still
+        pending on top.
+
+        The commit is deterministic: the same workspace state and the same
+        arguments always produce the same commit hash.
+
+        Parameters
+        ----------
+        message:
+            Commit message.
+        date:
+            RFC3339 author and committer date. Required, so that the resulting
+            commit hash does not depend on a hidden clock.
+        paths:
+            Restrict the commit to these paths, like `git commit -- <paths>`.
+            Relative paths resolve from the workspace cwd. Empty commits all
+            uncommitted changes.
+        author_name:
+            Author and committer name. Defaults to the git identity recorded
+            when the workspace was loaded, else "Dagger".
+        author_email:
+            Author and committer email. Defaults to the git identity recorded
+            when the workspace was loaded, else "dagger@localhost".
+        """
+        _args = [
+            Arg("message", message),
+            Arg("date", date),
+            Arg("paths", [] if paths is None else paths, []),
+            Arg("authorName", author_name, None),
+            Arg("authorEmail", author_email, None),
+        ]
+        _ctx = self._select("withCommit", _args)
+        return Workspace(_ctx)
+
     def with_config_env(
         self,
         name: str,
@@ -15573,12 +15643,34 @@ class WorkspaceGit(Type):
         _ctx = self._select("id", _args)
         return await _ctx.execute(str)
 
+    async def staged_commits(self) -> list["WorkspaceStagedCommit"]:
+        """Commits staged in this workspace but not yet saved to the local
+        checkout.
+
+        Ordered oldest to newest, matching the order they were staged in on
+        top of the checkout's HEAD. Empty when nothing is staged.
+        """
+        _args: list[Arg] = []
+        _ctx = self._select("stagedCommits", _args)
+        return await _ctx.execute_object_list(WorkspaceStagedCommit)
+
     def uncommitted(self) -> Changeset:
         """Uncommitted changes in this workspace, using the same rules as
         GitRepository.uncommitted.
         """
         _args: list[Arg] = []
         _ctx = self._select("uncommitted", _args)
+        return Changeset(_ctx)
+
+    def unmanaged(self) -> Changeset:
+        """Pending workspace edits git cannot see - gitignored, or inside a
+        nested repository.
+
+        Workspace.export writes these to the local checkout, but they never
+        appear in `uncommitted` and cannot be committed.
+        """
+        _args: list[Arg] = []
+        _ctx = self._select("unmanaged", _args)
         return Changeset(_ctx)
 
 
@@ -16034,6 +16126,153 @@ class WorkspaceSDK(Type):
         return await _ctx.execute(str)
 
 
+@typecheck
+class WorkspaceStagedCommit(Type):
+    """A commit staged in a workspace but not yet saved to the local
+    checkout."""
+
+    async def author_email(self) -> str:
+        """The author and committer email the commit was made with.
+
+        Returns
+        -------
+        str
+            The `String` scalar type represents textual data, represented as
+            UTF-8 character sequences. The String type is most often used by
+            GraphQL to represent free-form human-readable text.
+
+        Raises
+        ------
+        ExecuteTimeoutError
+            If the time to execute the query exceeds the configured timeout.
+        QueryError
+            If the API returns an error.
+        """
+        _args: list[Arg] = []
+        _ctx = self._select("authorEmail", _args)
+        return await _ctx.execute(str)
+
+    async def author_name(self) -> str:
+        """The author and committer name the commit was made with.
+
+        Returns
+        -------
+        str
+            The `String` scalar type represents textual data, represented as
+            UTF-8 character sequences. The String type is most often used by
+            GraphQL to represent free-form human-readable text.
+
+        Raises
+        ------
+        ExecuteTimeoutError
+            If the time to execute the query exceeds the configured timeout.
+        QueryError
+            If the API returns an error.
+        """
+        _args: list[Arg] = []
+        _ctx = self._select("authorName", _args)
+        return await _ctx.execute(str)
+
+    def changes(self) -> Changeset:
+        """The changes this commit folded in, relative to the state staged before
+        it.
+        """
+        _args: list[Arg] = []
+        _ctx = self._select("changes", _args)
+        return Changeset(_ctx)
+
+    async def date(self) -> str:
+        """The RFC3339 author and committer date the commit was made with.
+
+        Returns
+        -------
+        str
+            The `String` scalar type represents textual data, represented as
+            UTF-8 character sequences. The String type is most often used by
+            GraphQL to represent free-form human-readable text.
+
+        Raises
+        ------
+        ExecuteTimeoutError
+            If the time to execute the query exceeds the configured timeout.
+        QueryError
+            If the API returns an error.
+        """
+        _args: list[Arg] = []
+        _ctx = self._select("date", _args)
+        return await _ctx.execute(str)
+
+    async def id(self) -> str:
+        """A unique identifier for this WorkspaceStagedCommit.
+
+        Note
+        ----
+        This is lazily evaluated, no operation is actually run.
+
+        Returns
+        -------
+        str
+            The `ID` scalar type represents a unique identifier, often used to
+            refetch an object or as key for a cache. The ID type appears in a
+            JSON response as a String; however, it is not intended to be
+            human-readable. When expected as an input type, any string (such
+            as `"4"`) or integer (such as `4`) input value will be accepted as
+            an ID.
+
+        Raises
+        ------
+        ExecuteTimeoutError
+            If the time to execute the query exceeds the configured timeout.
+        QueryError
+            If the API returns an error.
+        """
+        _args: list[Arg] = []
+        _ctx = self._select("id", _args)
+        return await _ctx.execute(str)
+
+    async def message(self) -> str:
+        """The full commit message, subject and body.
+
+        Returns
+        -------
+        str
+            The `String` scalar type represents textual data, represented as
+            UTF-8 character sequences. The String type is most often used by
+            GraphQL to represent free-form human-readable text.
+
+        Raises
+        ------
+        ExecuteTimeoutError
+            If the time to execute the query exceeds the configured timeout.
+        QueryError
+            If the API returns an error.
+        """
+        _args: list[Arg] = []
+        _ctx = self._select("message", _args)
+        return await _ctx.execute(str)
+
+    async def sha(self) -> str:
+        """The full hash of the staged commit.
+
+        Returns
+        -------
+        str
+            The `String` scalar type represents textual data, represented as
+            UTF-8 character sequences. The String type is most often used by
+            GraphQL to represent free-form human-readable text.
+
+        Raises
+        ------
+        ExecuteTimeoutError
+            If the time to execute the query exceeds the configured timeout.
+        QueryError
+            If the API returns an error.
+        """
+        _args: list[Arg] = []
+        _ctx = self._select("sha", _args)
+        return await _ctx.execute(str)
+
+
 class Client(Query):
     """The Dagger client.
 
@@ -16153,5 +16392,6 @@ __all__ = [
     "WorkspaceModule",
     "WorkspaceModuleSetting",
     "WorkspaceSDK",
+    "WorkspaceStagedCommit",
     "dag",
 ]

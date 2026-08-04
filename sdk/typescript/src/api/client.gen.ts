@@ -3178,6 +3178,28 @@ export type WorkspaceServicesOpts = {
   include?: string[]
 }
 
+export type WorkspaceWithCommitOpts = {
+  /**
+   * Restrict the commit to these paths, like `git commit -- <paths>`. Relative paths resolve from the workspace cwd. Empty commits all uncommitted changes.
+   */
+  paths?: string[]
+
+  /**
+   * RFC3339 author and committer date. Required, so that the resulting commit hash does not depend on a hidden clock.
+   */
+  date: string
+
+  /**
+   * Author and committer name. Defaults to the git identity recorded when the workspace was loaded, else "Dagger".
+   */
+  authorName?: string
+
+  /**
+   * Author and committer email. Defaults to the git identity recorded when the workspace was loaded, else "dagger@localhost".
+   */
+  authorEmail?: string
+}
+
 export type WorkspaceWithConfigEnvOpts = {
   /**
    * Write to the workspace config directory at the workspace cwd.
@@ -12425,6 +12447,7 @@ export class Port extends BaseClient {
  */
 export class Client extends BaseClient {
   private readonly _id?: ID = undefined
+  private readonly _currentTimestamp?: string = undefined
   private readonly _defaultPlatform?: Platform = undefined
   private readonly _version?: string = undefined
 
@@ -12434,12 +12457,14 @@ export class Client extends BaseClient {
   constructor(
     ctx?: Context,
     _id?: ID,
+    _currentTimestamp?: string,
     _defaultPlatform?: Platform,
     _version?: string,
   ) {
     super(ctx)
 
     this._id = _id
+    this._currentTimestamp = _currentTimestamp
     this._defaultPlatform = _defaultPlatform
     this._version = _version
   }
@@ -12545,6 +12570,17 @@ export class Client extends BaseClient {
   currentNode = (): Node => {
     const ctx = this._ctx.select("currentNode")
     return new _NodeClient(ctx)
+  }
+
+  /**
+   * The current UTC time in RFC3339 format. Never cached.
+   */
+  currentTimestamp = async (): Promise<string> => {
+    const ctx = this._ctx.select("currentTimestamp")
+
+    const response: Awaited<string> = await ctx.execute()
+
+    return response
   }
 
   /**
@@ -14786,6 +14822,23 @@ export class Workspace extends BaseClient {
   }
 
   /**
+   * Return this workspace with its uncommitted changes staged as a git commit, without mutating the source.
+   *
+   * The commit is created engine-side, on top of the workspace's git HEAD plus any previously staged commit: the local checkout is left untouched. Afterwards Workspace.git.head resolves to the new commit, and Workspace.git.uncommitted holds whatever was left out of it, still pending on top.
+   *
+   * The commit is deterministic: the same workspace state and the same arguments always produce the same commit hash.
+   * @param message Commit message.
+   * @param opts.paths Restrict the commit to these paths, like `git commit -- <paths>`. Relative paths resolve from the workspace cwd. Empty commits all uncommitted changes.
+   * @param opts.date RFC3339 author and committer date. Required, so that the resulting commit hash does not depend on a hidden clock.
+   * @param opts.authorName Author and committer name. Defaults to the git identity recorded when the workspace was loaded, else "Dagger".
+   * @param opts.authorEmail Author and committer email. Defaults to the git identity recorded when the workspace was loaded, else "dagger@localhost".
+   */
+  withCommit = (message: string, opts?: WorkspaceWithCommitOpts): Workspace => {
+    const ctx = this._ctx.select("withCommit", { message, ...opts })
+    return new Workspace(ctx)
+  }
+
+  /**
    * Return this workspace with a named config environment created.
    * @param name Environment name.
    * @param opts.here Write to the workspace config directory at the workspace cwd.
@@ -15084,10 +15137,42 @@ export class WorkspaceGit extends BaseClient {
   }
 
   /**
+   * Commits staged in this workspace but not yet saved to the local checkout.
+   *
+   * Ordered oldest to newest, matching the order they were staged in on top of the checkout's HEAD. Empty when nothing is staged.
+   */
+  stagedCommits = async (): Promise<WorkspaceStagedCommit[]> => {
+    type stagedCommits = {
+      id: ID
+    }
+
+    const ctx = this._ctx.select("stagedCommits").select("id")
+
+    const response: Awaited<stagedCommits[]> = await ctx.execute()
+
+    return response.map(
+      (r) =>
+        new WorkspaceStagedCommit(
+          ctx.copy().selectNode(r.id, "WorkspaceStagedCommit"),
+        ),
+    )
+  }
+
+  /**
    * Uncommitted changes in this workspace, using the same rules as GitRepository.uncommitted.
    */
   uncommitted = (): Changeset => {
     const ctx = this._ctx.select("uncommitted")
+    return new Changeset(ctx)
+  }
+
+  /**
+   * Pending workspace edits git cannot see - gitignored, or inside a nested repository.
+   *
+   * Workspace.export writes these to the local checkout, but they never appear in `uncommitted` and cannot be committed.
+   */
+  unmanaged = (): Changeset => {
+    const ctx = this._ctx.select("unmanaged")
     return new Changeset(ctx)
   }
 }
@@ -15543,6 +15628,138 @@ export class WorkspaceSDK extends BaseClient {
     }
 
     const ctx = this._ctx.select("ref")
+
+    const response: Awaited<string> = await ctx.execute()
+
+    return response
+  }
+}
+
+/**
+ * A commit staged in a workspace but not yet saved to the local checkout.
+ */
+export class WorkspaceStagedCommit extends BaseClient {
+  private readonly _id?: ID = undefined
+  private readonly _authorEmail?: string = undefined
+  private readonly _authorName?: string = undefined
+  private readonly _date?: string = undefined
+  private readonly _message?: string = undefined
+  private readonly _sha?: string = undefined
+
+  /**
+   * Constructor is used for internal usage only, do not create object from it.
+   */
+  constructor(
+    ctx?: Context,
+    _id?: ID,
+    _authorEmail?: string,
+    _authorName?: string,
+    _date?: string,
+    _message?: string,
+    _sha?: string,
+  ) {
+    super(ctx)
+
+    this._id = _id
+    this._authorEmail = _authorEmail
+    this._authorName = _authorName
+    this._date = _date
+    this._message = _message
+    this._sha = _sha
+  }
+
+  /**
+   * A unique identifier for this WorkspaceStagedCommit.
+   */
+  id = async (): Promise<ID> => {
+    if (this._id) {
+      return this._id
+    }
+
+    const ctx = this._ctx.select("id")
+
+    const response: Awaited<ID> = await ctx.execute()
+
+    return response
+  }
+
+  /**
+   * The author and committer email the commit was made with.
+   */
+  authorEmail = async (): Promise<string> => {
+    if (this._authorEmail) {
+      return this._authorEmail
+    }
+
+    const ctx = this._ctx.select("authorEmail")
+
+    const response: Awaited<string> = await ctx.execute()
+
+    return response
+  }
+
+  /**
+   * The author and committer name the commit was made with.
+   */
+  authorName = async (): Promise<string> => {
+    if (this._authorName) {
+      return this._authorName
+    }
+
+    const ctx = this._ctx.select("authorName")
+
+    const response: Awaited<string> = await ctx.execute()
+
+    return response
+  }
+
+  /**
+   * The changes this commit folded in, relative to the state staged before it.
+   */
+  changes = (): Changeset => {
+    const ctx = this._ctx.select("changes")
+    return new Changeset(ctx)
+  }
+
+  /**
+   * The RFC3339 author and committer date the commit was made with.
+   */
+  date = async (): Promise<string> => {
+    if (this._date) {
+      return this._date
+    }
+
+    const ctx = this._ctx.select("date")
+
+    const response: Awaited<string> = await ctx.execute()
+
+    return response
+  }
+
+  /**
+   * The full commit message, subject and body.
+   */
+  message = async (): Promise<string> => {
+    if (this._message) {
+      return this._message
+    }
+
+    const ctx = this._ctx.select("message")
+
+    const response: Awaited<string> = await ctx.execute()
+
+    return response
+  }
+
+  /**
+   * The full hash of the staged commit.
+   */
+  sha = async (): Promise<string> => {
+    if (this._sha) {
+      return this._sha
+    }
+
+    const ctx = this._ctx.select("sha")
 
     const response: Awaited<string> = await ctx.execute()
 
