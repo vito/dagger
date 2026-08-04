@@ -14,12 +14,12 @@ import (
 	"github.com/dagger/dagger/dagql"
 	"github.com/dagger/dagger/engine"
 	telemetry "github.com/dagger/otel-go"
-	"go.opentelemetry.io/otel/trace"
 	"github.com/vito/dang/pkg/dang"
 	"github.com/vito/dang/pkg/hm"
 	"github.com/vito/dang/pkg/introspection"
 	"github.com/vito/dang/pkg/ioctx"
 	"github.com/vito/dang/pkg/querybuilder"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type dangSourceRunner func(context.Context, string) (dang.ValueScope, error)
