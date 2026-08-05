@@ -15504,6 +15504,29 @@ impl Workspace {
             graphql_client: self.graphql_client.clone(),
         }
     }
+    /// Return this workspace with a cache volume mounted at a path.
+    /// The mounted cache shadows base workspace content at that path, is excluded from Workspace.changes, and is committed into the volume on export.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Mount path. Relative paths resolve from the workspace cwd; absolute from the workspace root.
+    /// * `cache` - Cache volume to mount.
+    pub fn with_mounted_cache(&self, path: impl Into<String>, cache: impl IntoID<Id>) -> Workspace {
+        let mut query = self.selection.select("withMountedCache");
+        query = query.arg("path", path.into());
+        query = query.arg_lazy(
+            "cache",
+            Box::new(move || {
+                let cache = cache.clone();
+                Box::pin(async move { cache.into_id().await.unwrap().quote() })
+            }),
+        );
+        Workspace {
+            proc: self.proc.clone(),
+            selection: query,
+            graphql_client: self.graphql_client.clone(),
+        }
+    }
     /// Return this workspace with a directory added, without mutating the source.
     ///
     /// # Arguments
@@ -15827,6 +15850,20 @@ impl Workspace {
         if let Some(here) = opts.here {
             query = query.arg("here", here);
         }
+        Workspace {
+            proc: self.proc.clone(),
+            selection: query,
+            graphql_client: self.graphql_client.clone(),
+        }
+    }
+    /// Return this workspace with a previously mounted cache volume removed.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Mount path to remove. Relative paths resolve from the workspace cwd; absolute from the workspace root.
+    pub fn without_mount(&self, path: impl Into<String>) -> Workspace {
+        let mut query = self.selection.select("withoutMount");
+        query = query.arg("path", path.into());
         Workspace {
             proc: self.proc.clone(),
             selection: query,

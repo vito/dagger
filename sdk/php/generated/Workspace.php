@@ -476,6 +476,19 @@ class Workspace extends Client\AbstractObject implements Client\IdAble, Node
     }
 
     /**
+     * Return this workspace with a cache volume mounted at a path.
+     *
+     * The mounted cache shadows base workspace content at that path, is excluded from Workspace.changes, and is committed into the volume on export.
+     */
+    public function withMountedCache(string $path, CacheVolume $cache): Workspace
+    {
+        $innerQueryBuilder = new \Dagger\Client\QueryBuilder('withMountedCache');
+        $innerQueryBuilder->setArgument('path', $path);
+        $innerQueryBuilder->setArgument('cache', $cache);
+        return new \Dagger\Workspace($this->client, $this->queryBuilderChain->chain($innerQueryBuilder));
+    }
+
+    /**
      * Return this workspace with a directory added, without mutating the source.
      */
     public function withNewDirectory(string $path, Directory $source): Workspace
@@ -622,6 +635,16 @@ class Workspace extends Client\AbstractObject implements Client\IdAble, Node
         if (null !== $here) {
         $innerQueryBuilder->setArgument('here', $here);
         }
+        return new \Dagger\Workspace($this->client, $this->queryBuilderChain->chain($innerQueryBuilder));
+    }
+
+    /**
+     * Return this workspace with a previously mounted cache volume removed.
+     */
+    public function withoutMount(string $path): Workspace
+    {
+        $innerQueryBuilder = new \Dagger\Client\QueryBuilder('withoutMount');
+        $innerQueryBuilder->setArgument('path', $path);
         return new \Dagger\Workspace($this->client, $this->queryBuilderChain->chain($innerQueryBuilder));
     }
 

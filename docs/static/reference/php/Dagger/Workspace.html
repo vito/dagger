@@ -456,6 +456,16 @@
                     <a href="../Dagger/Workspace.html"><abbr title="Dagger\Workspace">Workspace</abbr></a>
                 </div>
                 <div class="col-md-8">
+                    <a href="#method_withMountedCache">withMountedCache</a>(string $path, <a href="../Dagger/CacheVolume.html"><abbr title="Dagger\CacheVolume">CacheVolume</abbr></a> $cache)
+        
+                                            <p><p>Return this workspace with a cache volume mounted at a path.</p></p>                </div>
+                <div class="col-md-2"></div>
+            </div>
+                    <div class="row">
+                <div class="col-md-2 type">
+                    <a href="../Dagger/Workspace.html"><abbr title="Dagger\Workspace">Workspace</abbr></a>
+                </div>
+                <div class="col-md-8">
                     <a href="#method_withNewDirectory">withNewDirectory</a>(string $path, <a href="../Dagger/Directory.html"><abbr title="Dagger\Directory">Directory</abbr></a> $source)
         
                                             <p><p>Return this workspace with a directory added, without mutating the source.</p></p>                </div>
@@ -569,6 +579,16 @@
                     <a href="#method_withoutModule">withoutModule</a>(string $name, bool|null $here = false)
         
                                             <p><p>Return this workspace with a module removed from its config.</p></p>                </div>
+                <div class="col-md-2"></div>
+            </div>
+                    <div class="row">
+                <div class="col-md-2 type">
+                    <a href="../Dagger/Workspace.html"><abbr title="Dagger\Workspace">Workspace</abbr></a>
+                </div>
+                <div class="col-md-8">
+                    <a href="#method_withoutMount">withoutMount</a>(string $path)
+        
+                                            <p><p>Return this workspace with a previously mounted cache volume removed.</p></p>                </div>
                 <div class="col-md-2"></div>
             </div>
                     <div class="row">
@@ -2031,8 +2051,55 @@
 
             </div>
                     <div class="method-item">
+                    <h3 id="method_withMountedCache">
+        <div class="location">at line 483</div>
+        <code>                    <a href="../Dagger/Workspace.html"><abbr title="Dagger\Workspace">Workspace</abbr></a>
+    <strong>withMountedCache</strong>(string $path, <a href="../Dagger/CacheVolume.html"><abbr title="Dagger\CacheVolume">CacheVolume</abbr></a> $cache)
+        </code>
+    </h3>
+    <div class="details">    
+    
+            
+
+        <div class="method-description">
+                            <p><p>Return this workspace with a cache volume mounted at a path.</p></p>                <p><p>The mounted cache shadows base workspace content at that path, is excluded from Workspace.changes, and is committed into the volume on export.</p></p>        
+        </div>
+        <div class="tags">
+                            <h4>Parameters</h4>
+
+                    <table class="table table-condensed">
+                    <tr>
+                <td>string</td>
+                <td>$path</td>
+                <td></td>
+            </tr>
+                    <tr>
+                <td><a href="../Dagger/CacheVolume.html"><abbr title="Dagger\CacheVolume">CacheVolume</abbr></a></td>
+                <td>$cache</td>
+                <td></td>
+            </tr>
+            </table>
+
+            
+                            <h4>Return Value</h4>
+
+                    <table class="table table-condensed">
+        <tr>
+            <td><a href="../Dagger/Workspace.html"><abbr title="Dagger\Workspace">Workspace</abbr></a></td>
+            <td></td>
+        </tr>
+    </table>
+
+            
+            
+            
+                    </div>
+    </div>
+
+            </div>
+                    <div class="method-item">
                     <h3 id="method_withNewDirectory">
-        <div class="location">at line 481</div>
+        <div class="location">at line 494</div>
         <code>                    <a href="../Dagger/Workspace.html"><abbr title="Dagger\Workspace">Workspace</abbr></a>
     <strong>withNewDirectory</strong>(string $path, <a href="../Dagger/Directory.html"><abbr title="Dagger\Directory">Directory</abbr></a> $source)
         </code>
@@ -2079,7 +2146,7 @@
             </div>
                     <div class="method-item">
                     <h3 id="method_withNewFile">
-        <div class="location">at line 492</div>
+        <div class="location">at line 505</div>
         <code>                    <a href="../Dagger/Workspace.html"><abbr title="Dagger\Workspace">Workspace</abbr></a>
     <strong>withNewFile</strong>(string $path, string $contents, int|null $permissions = 420)
         </code>
@@ -2131,7 +2198,7 @@
             </div>
                     <div class="method-item">
                     <h3 id="method_withReferenceDirectory">
-        <div class="location">at line 508</div>
+        <div class="location">at line 521</div>
         <code>                    <a href="../Dagger/Workspace.html"><abbr title="Dagger\Workspace">Workspace</abbr></a>
     <strong>withReferenceDirectory</strong>(string $path, <a href="../Dagger/Directory.html"><abbr title="Dagger\Directory">Directory</abbr></a> $source)
         </code>
@@ -2178,7 +2245,7 @@
             </div>
                     <div class="method-item">
                     <h3 id="method_withReferenceFile">
-        <div class="location">at line 521</div>
+        <div class="location">at line 534</div>
         <code>                    <a href="../Dagger/Workspace.html"><abbr title="Dagger\Workspace">Workspace</abbr></a>
     <strong>withReferenceFile</strong>(string $path, <a href="../Dagger/File.html"><abbr title="Dagger\File">File</abbr></a> $source)
         </code>
@@ -2225,7 +2292,7 @@
             </div>
                     <div class="method-item">
                     <h3 id="method_withSDK">
-        <div class="location">at line 532</div>
+        <div class="location">at line 545</div>
         <code>                    <a href="../Dagger/Workspace.html"><abbr title="Dagger\Workspace">Workspace</abbr></a>
     <strong>withSDK</strong>(string $ref, string|null $name = &#039;&#039;, bool|null $here = false, string|null $asSdkName = &#039;&#039;)
         </code>
@@ -2282,7 +2349,7 @@
             </div>
                     <div class="method-item">
                     <h3 id="method_withUpdatedLock">
-        <div class="location">at line 551</div>
+        <div class="location">at line 564</div>
         <code>                    <a href="../Dagger/Workspace.html"><abbr title="Dagger\Workspace">Workspace</abbr></a>
     <strong>withUpdatedLock</strong>()
         </code>
@@ -2314,7 +2381,7 @@
             </div>
                     <div class="method-item">
                     <h3 id="method_withWorkdir">
-        <div class="location">at line 560</div>
+        <div class="location">at line 573</div>
         <code>                    <a href="../Dagger/Workspace.html"><abbr title="Dagger\Workspace">Workspace</abbr></a>
     <strong>withWorkdir</strong>(string $path)
         </code>
@@ -2356,7 +2423,7 @@
             </div>
                     <div class="method-item">
                     <h3 id="method_withoutConfigEnv">
-        <div class="location">at line 570</div>
+        <div class="location">at line 583</div>
         <code>                    <a href="../Dagger/Workspace.html"><abbr title="Dagger\Workspace">Workspace</abbr></a>
     <strong>withoutConfigEnv</strong>(string $name, bool|null $here = false)
         </code>
@@ -2403,7 +2470,7 @@
             </div>
                     <div class="method-item">
                     <h3 id="method_withoutConfigValue">
-        <div class="location">at line 585</div>
+        <div class="location">at line 598</div>
         <code>                    <a href="../Dagger/Workspace.html"><abbr title="Dagger\Workspace">Workspace</abbr></a>
     <strong>withoutConfigValue</strong>(string $key, bool|null $here = false)
         </code>
@@ -2450,7 +2517,7 @@
             </div>
                     <div class="method-item">
                     <h3 id="method_withoutDirectory">
-        <div class="location">at line 598</div>
+        <div class="location">at line 611</div>
         <code>                    <a href="../Dagger/Workspace.html"><abbr title="Dagger\Workspace">Workspace</abbr></a>
     <strong>withoutDirectory</strong>(string $path)
         </code>
@@ -2492,7 +2559,7 @@
             </div>
                     <div class="method-item">
                     <h3 id="method_withoutFile">
-        <div class="location">at line 608</div>
+        <div class="location">at line 621</div>
         <code>                    <a href="../Dagger/Workspace.html"><abbr title="Dagger\Workspace">Workspace</abbr></a>
     <strong>withoutFile</strong>(string $path)
         </code>
@@ -2534,7 +2601,7 @@
             </div>
                     <div class="method-item">
                     <h3 id="method_withoutModule">
-        <div class="location">at line 618</div>
+        <div class="location">at line 631</div>
         <code>                    <a href="../Dagger/Workspace.html"><abbr title="Dagger\Workspace">Workspace</abbr></a>
     <strong>withoutModule</strong>(string $name, bool|null $here = false)
         </code>
@@ -2580,8 +2647,50 @@
 
             </div>
                     <div class="method-item">
+                    <h3 id="method_withoutMount">
+        <div class="location">at line 644</div>
+        <code>                    <a href="../Dagger/Workspace.html"><abbr title="Dagger\Workspace">Workspace</abbr></a>
+    <strong>withoutMount</strong>(string $path)
+        </code>
+    </h3>
+    <div class="details">    
+    
+            
+
+        <div class="method-description">
+                            <p><p>Return this workspace with a previously mounted cache volume removed.</p></p>                        
+        </div>
+        <div class="tags">
+                            <h4>Parameters</h4>
+
+                    <table class="table table-condensed">
+                    <tr>
+                <td>string</td>
+                <td>$path</td>
+                <td></td>
+            </tr>
+            </table>
+
+            
+                            <h4>Return Value</h4>
+
+                    <table class="table table-condensed">
+        <tr>
+            <td><a href="../Dagger/Workspace.html"><abbr title="Dagger\Workspace">Workspace</abbr></a></td>
+            <td></td>
+        </tr>
+    </table>
+
+            
+            
+            
+                    </div>
+    </div>
+
+            </div>
+                    <div class="method-item">
                     <h3 id="method_withoutSDK">
-        <div class="location">at line 631</div>
+        <div class="location">at line 654</div>
         <code>                    <a href="../Dagger/Workspace.html"><abbr title="Dagger\Workspace">Workspace</abbr></a>
     <strong>withoutSDK</strong>(string $name, bool|null $here = false)
         </code>

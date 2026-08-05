@@ -581,6 +581,25 @@ defmodule Dagger.Workspace do
   end
 
   @doc """
+  Return this workspace with a cache volume mounted at a path.
+
+  The mounted cache shadows base workspace content at that path, is excluded from Workspace.changes, and is committed into the volume on export.
+  """
+  @spec with_mounted_cache(t(), String.t(), Dagger.CacheVolume.t()) :: Dagger.Workspace.t()
+  def with_mounted_cache(%__MODULE__{} = workspace, path, cache) do
+    query_builder =
+      workspace.query_builder
+      |> QB.select("withMountedCache")
+      |> QB.put_arg("path", path)
+      |> QB.put_arg("cache", Dagger.ID.id!(cache))
+
+    %Dagger.Workspace{
+      query_builder: query_builder,
+      client: workspace.client
+    }
+  end
+
+  @doc """
   Return this workspace with a directory added, without mutating the source.
   """
   @spec with_new_directory(t(), String.t(), Dagger.Directory.t()) :: Dagger.Workspace.t()
@@ -779,6 +798,20 @@ defmodule Dagger.Workspace do
       |> QB.select("withoutModule")
       |> QB.put_arg("name", name)
       |> QB.maybe_put_arg("here", optional_args[:here])
+
+    %Dagger.Workspace{
+      query_builder: query_builder,
+      client: workspace.client
+    }
+  end
+
+  @doc """
+  Return this workspace with a previously mounted cache volume removed.
+  """
+  @spec without_mount(t(), String.t()) :: Dagger.Workspace.t()
+  def without_mount(%__MODULE__{} = workspace, path) do
+    query_builder =
+      workspace.query_builder |> QB.select("withoutMount") |> QB.put_arg("path", path)
 
     %Dagger.Workspace{
       query_builder: query_builder,

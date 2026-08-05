@@ -15223,6 +15223,28 @@ class Workspace(Type):
         _ctx = self._select("withModule", _args)
         return Workspace(_ctx)
 
+    def with_mounted_cache(self, path: str, cache: CacheVolume) -> Self:
+        """Return this workspace with a cache volume mounted at a path.
+
+        The mounted cache shadows base workspace content at that path, is
+        excluded from Workspace.changes, and is committed into the volume on
+        export.
+
+        Parameters
+        ----------
+        path:
+            Mount path. Relative paths resolve from the workspace cwd;
+            absolute from the workspace root.
+        cache:
+            Cache volume to mount.
+        """
+        _args = [
+            Arg("path", path),
+            Arg("cache", cache),
+        ]
+        _ctx = self._select("withMountedCache", _args)
+        return Workspace(_ctx)
+
     def with_new_directory(self, path: str, source: Directory) -> Self:
         """Return this workspace with a directory added, without mutating the
         source.
@@ -15466,6 +15488,21 @@ class Workspace(Type):
             Arg("here", here, False),
         ]
         _ctx = self._select("withoutModule", _args)
+        return Workspace(_ctx)
+
+    def without_mount(self, path: str) -> Self:
+        """Return this workspace with a previously mounted cache volume removed.
+
+        Parameters
+        ----------
+        path:
+            Mount path to remove. Relative paths resolve from the workspace
+            cwd; absolute from the workspace root.
+        """
+        _args = [
+            Arg("path", path),
+        ]
+        _ctx = self._select("withoutMount", _args)
         return Workspace(_ctx)
 
     def without_sdk(

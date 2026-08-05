@@ -7320,6 +7320,12 @@
 		},
 		{
 			"t": "M",
+			"n": "Dagger\\Workspace::withMountedCache",
+			"p": "Dagger/Workspace.html#method_withMountedCache",
+			"d": "<p>Return this workspace with a cache volume mounted at a path.</p>"
+		},
+		{
+			"t": "M",
 			"n": "Dagger\\Workspace::withNewDirectory",
 			"p": "Dagger/Workspace.html#method_withNewDirectory",
 			"d": "<p>Return this workspace with a directory added, without mutating the source.</p>"
@@ -7389,6 +7395,12 @@
 			"n": "Dagger\\Workspace::withoutModule",
 			"p": "Dagger/Workspace.html#method_withoutModule",
 			"d": "<p>Return this workspace with a module removed from its config.</p>"
+		},
+		{
+			"t": "M",
+			"n": "Dagger\\Workspace::withoutMount",
+			"p": "Dagger/Workspace.html#method_withoutMount",
+			"d": "<p>Return this workspace with a previously mounted cache volume removed.</p>"
 		},
 		{
 			"t": "M",

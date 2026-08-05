@@ -14868,6 +14868,18 @@ export class Workspace extends BaseClient {
   }
 
   /**
+   * Return this workspace with a cache volume mounted at a path.
+   *
+   * The mounted cache shadows base workspace content at that path, is excluded from Workspace.changes, and is committed into the volume on export.
+   * @param path Mount path. Relative paths resolve from the workspace cwd; absolute from the workspace root.
+   * @param cache Cache volume to mount.
+   */
+  withMountedCache = (path: string, cache: CacheVolume): Workspace => {
+    const ctx = this._ctx.select("withMountedCache", { path, cache })
+    return new Workspace(ctx)
+  }
+
+  /**
    * Return this workspace with a directory added, without mutating the source.
    * @param path Path of the added directory. Relative paths resolve from the workspace cwd.
    * @param source Directory to add.
@@ -15001,6 +15013,15 @@ export class Workspace extends BaseClient {
     opts?: WorkspaceWithoutModuleOpts,
   ): Workspace => {
     const ctx = this._ctx.select("withoutModule", { name, ...opts })
+    return new Workspace(ctx)
+  }
+
+  /**
+   * Return this workspace with a previously mounted cache volume removed.
+   * @param path Mount path to remove. Relative paths resolve from the workspace cwd; absolute from the workspace root.
+   */
+  withoutMount = (path: string): Workspace => {
+    const ctx = this._ctx.select("withoutMount", { path })
     return new Workspace(ctx)
   }
 
