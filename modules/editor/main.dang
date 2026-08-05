@@ -153,6 +153,11 @@ type Editor {
   }
 
   """
+  Keep track of files the agent read, so we can enforce read-before-write.
+  """
+  let readFiles: Map[Void]! = [:]
+
+  """
   Read the contents of a file. Output is truncated to 2000 lines by default. Each line is prefixed with its line number. Use offset/limit for large files. When you need the full file, continue with offset until complete.
   """
   read(
@@ -169,24 +174,34 @@ type Editor {
     Limit the number of lines read
     """
     limit: Int! = 2000,
-  ): String! {
+  ): Editor! {
+    filePath = normalize(filePath)
+
     let fileContents = source
-      .file(normalize(filePath))
+      .file(filePath)
       .contents(
         offsetLines: offset,
         limitLines: limit,
       )
 
-    if (fileContents == "") {
-      "WARNING: File contents are empty."
-    } else {
-      fileContents
-        .split("\n", 0)
-        .map { line, i =>
-          `${toString(offset + i + 1).padLeft(6)}→${line}`
-        }
-        .join("\n")
-    }
+    # print the output, so we can "return" it to the LLM while also returning
+    # new state
+    print(
+      if (fileContents == "") {
+        "WARNING: File contents are empty."
+      } else {
+        fileContents
+          .split("\n", 0)
+          .map { line, i =>
+            `${toString(offset + i + 1).padLeft(6)}→${line}`
+          }
+          .join("\n")
+      },
+    )
+
+    # track that we read the file
+    readFiles = readFiles.with(filePath, null)
+    self
   }
 
   """
@@ -207,6 +222,11 @@ type Editor {
     """
     force: Boolean! = false,
   ): Workspace! {
+    filePath = normalize(filePath)
+    if (!readFiles.has(filePath) and (source.file(filePath).name != "" rescue false)) {
+      raise `File ${filePath} exists but has not been read - read it first.`
+    }
+
     source.withNewFile(normalize(filePath), contents)
   }
 
@@ -444,7 +464,7 @@ type Editor {
       # e.g. a stale-looking path that the repository resolves as unchanged
       # shows up in `uncommitted` but never lands in the commit.
       let staged = committed.git.stagedCommits.{{
-        changes.{{ diffStats.{{ path, kind, addedLines, removedLines }} }},
+        changes.{{diffStats.{{path, kind, addedLines, removedLines}}}}
       }}
       staged.takeLast(1).each { c =>
         let rows = c.changes.diffStats
