@@ -30,6 +30,13 @@ export type AddressFileOpts = {
   noCache?: boolean
 }
 
+export type AgentGroupComposeOpts = {
+  /**
+   * The base LLM to compose onto. Defaults to a fresh workspace-bound LLM.
+   */
+  base?: LLM
+}
+
 export type BuildArg = {
   /**
    * The build argument name.
@@ -3040,6 +3047,13 @@ export function TypeDefKindNameToValue(name: string): TypeDefKind {
  */
 export type Void = string & { __Void: never }
 
+export type WorkspaceAgentsOpts = {
+  /**
+   * Only include agents matching the specified patterns
+   */
+  include?: string[]
+}
+
 export type WorkspaceChecksOpts = {
   /**
    * Only include checks matching the specified patterns
@@ -3423,6 +3437,139 @@ export class Address extends BaseClient {
   volume = (): Volume => {
     const ctx = this._ctx.select("volume")
     return new Volume(ctx)
+  }
+}
+
+export class Agent extends BaseClient {
+  private readonly _id?: ID = undefined
+  private readonly _description?: string = undefined
+  private readonly _name?: string = undefined
+
+  /**
+   * Constructor is used for internal usage only, do not create object from it.
+   */
+  constructor(ctx?: Context, _id?: ID, _description?: string, _name?: string) {
+    super(ctx)
+
+    this._id = _id
+    this._description = _description
+    this._name = _name
+  }
+
+  /**
+   * A unique identifier for this Agent.
+   */
+  id = async (): Promise<ID> => {
+    if (this._id) {
+      return this._id
+    }
+
+    const ctx = this._ctx.select("id")
+
+    const response: Awaited<ID> = await ctx.execute()
+
+    return response
+  }
+
+  /**
+   * The description of the agent
+   */
+  description = async (): Promise<string> => {
+    if (this._description) {
+      return this._description
+    }
+
+    const ctx = this._ctx.select("description")
+
+    const response: Awaited<string> = await ctx.execute()
+
+    return response
+  }
+
+  /**
+   * Return the fully qualified name of the agent
+   */
+  name = async (): Promise<string> => {
+    if (this._name) {
+      return this._name
+    }
+
+    const ctx = this._ctx.select("name")
+
+    const response: Awaited<string> = await ctx.execute()
+
+    return response
+  }
+
+  /**
+   * The original module in which the agent has been defined
+   */
+  originalModule = (): Module_ => {
+    const ctx = this._ctx.select("originalModule")
+    return new Module_(ctx)
+  }
+
+  /**
+   * The path of the agent within its module
+   */
+  path = async (): Promise<string[]> => {
+    const ctx = this._ctx.select("path")
+
+    const response: Awaited<string[]> = await ctx.execute()
+
+    return response
+  }
+}
+
+export class AgentGroup extends BaseClient {
+  private readonly _id?: ID = undefined
+
+  /**
+   * Constructor is used for internal usage only, do not create object from it.
+   */
+  constructor(ctx?: Context, _id?: ID) {
+    super(ctx)
+
+    this._id = _id
+  }
+
+  /**
+   * A unique identifier for this AgentGroup.
+   */
+  id = async (): Promise<ID> => {
+    if (this._id) {
+      return this._id
+    }
+
+    const ctx = this._ctx.select("id")
+
+    const response: Awaited<ID> = await ctx.execute()
+
+    return response
+  }
+
+  /**
+   * Compose all selected agent middlewares onto a base LLM, in alphabetical module:fn order, and return the composed LLM.
+   * @param opts.base The base LLM to compose onto. Defaults to a fresh workspace-bound LLM.
+   */
+  compose = (opts?: AgentGroupComposeOpts): LLM => {
+    const ctx = this._ctx.select("compose", { ...opts })
+    return new LLM(ctx)
+  }
+
+  /**
+   * Return a list of individual agents and their details
+   */
+  list = async (): Promise<Agent[]> => {
+    type list = {
+      id: ID
+    }
+
+    const ctx = this._ctx.select("list").select("id")
+
+    const response: Awaited<list[]> = await ctx.execute()
+
+    return response.map((r) => new Agent(ctx.copy().selectNode(r.id, "Agent")))
   }
 }
 
@@ -8113,6 +8260,14 @@ export class Function_ extends BaseClient {
   }
 
   /**
+   * Returns the function with a flag indicating it is an agent middleware.
+   */
+  withAgent = (): Function_ => {
+    const ctx = this._ctx.select("withAgent")
+    return new Function_(ctx)
+  }
+
+  /**
    * Returns the function with the provided argument
    * @param name The name of the argument
    * @param typeDef The type of the argument
@@ -9878,6 +10033,7 @@ export class LLM extends BaseClient {
   private readonly _model?: string = undefined
   private readonly _portableID?: ID = undefined
   private readonly _provider?: string = undefined
+  private readonly _reasoningEffort?: string = undefined
   private readonly _replay?: ID = undefined
   private readonly _sync?: ID = undefined
   private readonly _tools?: string = undefined
@@ -9896,6 +10052,7 @@ export class LLM extends BaseClient {
     _model?: string,
     _portableID?: ID,
     _provider?: string,
+    _reasoningEffort?: string,
     _replay?: ID,
     _sync?: ID,
     _tools?: string,
@@ -9911,6 +10068,7 @@ export class LLM extends BaseClient {
     this._model = _model
     this._portableID = _portableID
     this._provider = _provider
+    this._reasoningEffort = _reasoningEffort
     this._replay = _replay
     this._sync = _sync
     this._tools = _tools
@@ -10044,7 +10202,7 @@ export class LLM extends BaseClient {
   }
 
   /**
-   * A portable, self-contained ID for the conversation that node() can resolve in any session. Unlike id, which may return an engine-local runtime handle valid only within the current session, this returns the recipe form suitable for persisting and later restoring the conversation.
+   * A portable, self-contained ID for the conversation that node() can resolve in any session. Unlike id, which may return an engine-local runtime handle valid only within the current session, this returns the recipe form suitable for persisting and later restoring the conversation. The recipe is flattened: bindings superseded during the session (workspace overlays recorded by each mutating tool call, and re-bound toolsets) are dropped, while the current workspace binding — including any pending, un-exported edits — is preserved.
    */
   portableID = async (): Promise<ID> => {
     if (this._portableID) {
@@ -10067,6 +10225,21 @@ export class LLM extends BaseClient {
     }
 
     const ctx = this._ctx.select("provider")
+
+    const response: Awaited<string> = await ctx.execute()
+
+    return response
+  }
+
+  /**
+   * The reasoning effort in use, e.g. "low", "medium", or "high". Empty or "none" when reasoning is disabled.
+   */
+  reasoningEffort = async (): Promise<string> => {
+    if (this._reasoningEffort) {
+      return this._reasoningEffort
+    }
+
+    const ctx = this._ctx.select("reasoningEffort")
 
     const response: Awaited<string> = await ctx.execute()
 
@@ -10198,10 +10371,11 @@ export class LLM extends BaseClient {
   }
 
   /**
-   * Return a new LLM with the workspace reset to its base, dropping any accumulated changes. The conversation and configuration are re-emitted as a flat recipe bound to the live workspace, so a persisted session (globalID) no longer replays workspace edits when loaded. Use after exporting changes (Workspace.export) so a resumed session continues from the workspace's on-disk state.
+   * Change the reasoning effort for the rest of the conversation, overriding any configured default. The message history is preserved; the new effort takes effect on the next step.
+   * @param effort The reasoning effort, e.g. "low", "medium", or "high"; "none" disables reasoning. Supported levels are model-specific — some models also accept e.g. "minimal", "xhigh", or "max".
    */
-  withResetWorkspace = (): LLM => {
-    const ctx = this._ctx.select("withResetWorkspace")
+  withReasoningEffort = (effort: string): LLM => {
+    const ctx = this._ctx.select("withReasoningEffort", { effort })
     return new LLM(ctx)
   }
 
@@ -14287,6 +14461,15 @@ export class Workspace extends BaseClient {
   }
 
   /**
+   * Return all agent middlewares from modules loaded in the workspace.
+   * @param opts.include Only include agents matching the specified patterns
+   */
+  agents = (opts?: WorkspaceAgentsOpts): AgentGroup => {
+    const ctx = this._ctx.select("agents", { ...opts })
+    return new AgentGroup(ctx)
+  }
+
+  /**
    * Return this workspace's pending overlay changes.
    */
   changes = (): Changeset => {
@@ -14519,6 +14702,14 @@ export class Workspace extends BaseClient {
   }
 
   /**
+   * Return this workspace with its cached host reads invalidated, so subsequent file and directory reads re-read the live host instead of a snapshot cached earlier in the session.
+   */
+  reloaded = (): Workspace => {
+    const ctx = this._ctx.select("reloaded")
+    return new Workspace(ctx)
+  }
+
+  /**
    * An installed SDK, by name.
    * @param name SDK name to look up.
    */
@@ -14698,6 +14889,30 @@ export class Workspace extends BaseClient {
     opts?: WorkspaceWithNewFileOpts,
   ): Workspace => {
     const ctx = this._ctx.select("withNewFile", { path, contents, ...opts })
+    return new Workspace(ctx)
+  }
+
+  /**
+   * Return this workspace with a directory mounted read-only under the reserved references prefix.
+   *
+   * Referenced content is readable through the normal workspace file tools but is excluded from the pending changeset: it never appears in changes and is never exported.
+   * @param path Reference-relative mount path under the reserved references prefix.
+   * @param source Directory to mount read-only.
+   */
+  withReferenceDirectory = (path: string, source: Directory): Workspace => {
+    const ctx = this._ctx.select("withReferenceDirectory", { path, source })
+    return new Workspace(ctx)
+  }
+
+  /**
+   * Return this workspace with a file mounted read-only under the reserved references prefix.
+   *
+   * Referenced content is readable through the normal workspace file tools but is excluded from the pending changeset: it never appears in changes and is never exported.
+   * @param path Reference-relative mount path under the reserved references prefix.
+   * @param source File to mount read-only.
+   */
+  withReferenceFile = (path: string, source: File): Workspace => {
+    const ctx = this._ctx.select("withReferenceFile", { path, source })
     return new Workspace(ctx)
   }
 

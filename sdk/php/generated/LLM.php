@@ -102,7 +102,7 @@ class LLM extends Client\AbstractObject implements Client\IdAble, Node, Syncer
     }
 
     /**
-     * A portable, self-contained ID for the conversation that node() can resolve in any session. Unlike id, which may return an engine-local runtime handle valid only within the current session, this returns the recipe form suitable for persisting and later restoring the conversation.
+     * A portable, self-contained ID for the conversation that node() can resolve in any session. Unlike id, which may return an engine-local runtime handle valid only within the current session, this returns the recipe form suitable for persisting and later restoring the conversation. The recipe is flattened: bindings superseded during the session (workspace overlays recorded by each mutating tool call, and re-bound toolsets) are dropped, while the current workspace binding — including any pending, un-exported edits — is preserved.
      */
     public function portableID(): Id
     {
@@ -117,6 +117,15 @@ class LLM extends Client\AbstractObject implements Client\IdAble, Node, Syncer
     {
         $leafQueryBuilder = new \Dagger\Client\QueryBuilder('provider');
         return (string)$this->queryLeaf($leafQueryBuilder, 'provider');
+    }
+
+    /**
+     * The reasoning effort in use, e.g. "low", "medium", or "high". Empty or "none" when reasoning is disabled.
+     */
+    public function reasoningEffort(): string
+    {
+        $leafQueryBuilder = new \Dagger\Client\QueryBuilder('reasoningEffort');
+        return (string)$this->queryLeaf($leafQueryBuilder, 'reasoningEffort');
     }
 
     /**
@@ -232,11 +241,12 @@ class LLM extends Client\AbstractObject implements Client\IdAble, Node, Syncer
     }
 
     /**
-     * Return a new LLM with the workspace reset to its base, dropping any accumulated changes. The conversation and configuration are re-emitted as a flat recipe bound to the live workspace, so a persisted session (globalID) no longer replays workspace edits when loaded. Use after exporting changes (Workspace.export) so a resumed session continues from the workspace's on-disk state.
+     * Change the reasoning effort for the rest of the conversation, overriding any configured default. The message history is preserved; the new effort takes effect on the next step.
      */
-    public function withResetWorkspace(): LLM
+    public function withReasoningEffort(string $effort): LLM
     {
-        $innerQueryBuilder = new \Dagger\Client\QueryBuilder('withResetWorkspace');
+        $innerQueryBuilder = new \Dagger\Client\QueryBuilder('withReasoningEffort');
+        $innerQueryBuilder->setArgument('effort', $effort);
         return new \Dagger\LLM($this->client, $this->queryBuilderChain->chain($innerQueryBuilder));
     }
 

@@ -700,6 +700,159 @@ class Address(Type):
 
 
 @typecheck
+class Agent(Type):
+    async def description(self) -> str:
+        """The description of the agent
+
+        Returns
+        -------
+        str
+            The `String` scalar type represents textual data, represented as
+            UTF-8 character sequences. The String type is most often used by
+            GraphQL to represent free-form human-readable text.
+
+        Raises
+        ------
+        ExecuteTimeoutError
+            If the time to execute the query exceeds the configured timeout.
+        QueryError
+            If the API returns an error.
+        """
+        _args: list[Arg] = []
+        _ctx = self._select("description", _args)
+        return await _ctx.execute(str)
+
+    async def id(self) -> str:
+        """A unique identifier for this Agent.
+
+        Note
+        ----
+        This is lazily evaluated, no operation is actually run.
+
+        Returns
+        -------
+        str
+            The `ID` scalar type represents a unique identifier, often used to
+            refetch an object or as key for a cache. The ID type appears in a
+            JSON response as a String; however, it is not intended to be
+            human-readable. When expected as an input type, any string (such
+            as `"4"`) or integer (such as `4`) input value will be accepted as
+            an ID.
+
+        Raises
+        ------
+        ExecuteTimeoutError
+            If the time to execute the query exceeds the configured timeout.
+        QueryError
+            If the API returns an error.
+        """
+        _args: list[Arg] = []
+        _ctx = self._select("id", _args)
+        return await _ctx.execute(str)
+
+    async def name(self) -> str:
+        """Return the fully qualified name of the agent
+
+        Returns
+        -------
+        str
+            The `String` scalar type represents textual data, represented as
+            UTF-8 character sequences. The String type is most often used by
+            GraphQL to represent free-form human-readable text.
+
+        Raises
+        ------
+        ExecuteTimeoutError
+            If the time to execute the query exceeds the configured timeout.
+        QueryError
+            If the API returns an error.
+        """
+        _args: list[Arg] = []
+        _ctx = self._select("name", _args)
+        return await _ctx.execute(str)
+
+    def original_module(self) -> "Module":
+        """The original module in which the agent has been defined"""
+        _args: list[Arg] = []
+        _ctx = self._select("originalModule", _args)
+        return Module(_ctx)
+
+    async def path(self) -> list[str]:
+        """The path of the agent within its module
+
+        Returns
+        -------
+        list[str]
+            The `String` scalar type represents textual data, represented as
+            UTF-8 character sequences. The String type is most often used by
+            GraphQL to represent free-form human-readable text.
+
+        Raises
+        ------
+        ExecuteTimeoutError
+            If the time to execute the query exceeds the configured timeout.
+        QueryError
+            If the API returns an error.
+        """
+        _args: list[Arg] = []
+        _ctx = self._select("path", _args)
+        return await _ctx.execute(list[str])
+
+
+@typecheck
+class AgentGroup(Type):
+    def compose(self, *, base: "LLM | None" = None) -> "LLM":
+        """Compose all selected agent middlewares onto a base LLM, in
+        alphabetical module:fn order, and return the composed LLM.
+
+        Parameters
+        ----------
+        base:
+            The base LLM to compose onto. Defaults to a fresh workspace-bound
+            LLM.
+        """
+        _args = [
+            Arg("base", base, None),
+        ]
+        _ctx = self._select("compose", _args)
+        return LLM(_ctx)
+
+    async def id(self) -> str:
+        """A unique identifier for this AgentGroup.
+
+        Note
+        ----
+        This is lazily evaluated, no operation is actually run.
+
+        Returns
+        -------
+        str
+            The `ID` scalar type represents a unique identifier, often used to
+            refetch an object or as key for a cache. The ID type appears in a
+            JSON response as a String; however, it is not intended to be
+            human-readable. When expected as an input type, any string (such
+            as `"4"`) or integer (such as `4`) input value will be accepted as
+            an ID.
+
+        Raises
+        ------
+        ExecuteTimeoutError
+            If the time to execute the query exceeds the configured timeout.
+        QueryError
+            If the API returns an error.
+        """
+        _args: list[Arg] = []
+        _ctx = self._select("id", _args)
+        return await _ctx.execute(str)
+
+    async def list_(self) -> list[Agent]:
+        """Return a list of individual agents and their details"""
+        _args: list[Arg] = []
+        _ctx = self._select("list", _args)
+        return await _ctx.execute_object_list(Agent)
+
+
+@typecheck
 class CacheVolume(Type):
     """A directory whose contents persist across runs."""
 
@@ -6964,6 +7117,12 @@ class Function(Type):
         _ctx = self._select("sourceModuleName", _args)
         return await _ctx.execute(str)
 
+    def with_agent(self) -> Self:
+        """Returns the function with a flag indicating it is an agent middleware."""
+        _args: list[Arg] = []
+        _ctx = self._select("withAgent", _args)
+        return Function(_ctx)
+
     def with_arg(
         self,
         name: str,
@@ -9313,7 +9472,10 @@ class LLM(Type):
         resolve in any session. Unlike id, which may return an engine-local
         runtime handle valid only within the current session, this returns the
         recipe form suitable for persisting and later restoring the
-        conversation.
+        conversation. The recipe is flattened: bindings superseded during the
+        session (workspace overlays recorded by each mutating tool call, and
+        re-bound toolsets) are dropped, while the current workspace binding —
+        including any pending, un-exported edits — is preserved.
 
         Returns
         -------
@@ -9356,6 +9518,28 @@ class LLM(Type):
         """
         _args: list[Arg] = []
         _ctx = self._select("provider", _args)
+        return await _ctx.execute(str)
+
+    async def reasoning_effort(self) -> str:
+        """The reasoning effort in use, e.g. "low", "medium", or "high". Empty or
+        "none" when reasoning is disabled.
+
+        Returns
+        -------
+        str
+            The `String` scalar type represents textual data, represented as
+            UTF-8 character sequences. The String type is most often used by
+            GraphQL to represent free-form human-readable text.
+
+        Raises
+        ------
+        ExecuteTimeoutError
+            If the time to execute the query exceeds the configured timeout.
+        QueryError
+            If the API returns an error.
+        """
+        _args: list[Arg] = []
+        _ctx = self._select("reasoningEffort", _args)
         return await _ctx.execute(str)
 
     async def replay(self) -> Self:
@@ -9537,16 +9721,22 @@ class LLM(Type):
         _ctx = self._select("withPromptFile", _args)
         return LLM(_ctx)
 
-    def with_reset_workspace(self) -> Self:
-        """Return a new LLM with the workspace reset to its base, dropping any
-        accumulated changes. The conversation and configuration are re-emitted
-        as a flat recipe bound to the live workspace, so a persisted session
-        (globalID) no longer replays workspace edits when loaded. Use after
-        exporting changes (Workspace.export) so a resumed session continues
-        from the workspace's on-disk state.
+    def with_reasoning_effort(self, effort: str) -> Self:
+        """Change the reasoning effort for the rest of the conversation,
+        overriding any configured default. The message history is preserved;
+        the new effort takes effect on the next step.
+
+        Parameters
+        ----------
+        effort:
+            The reasoning effort, e.g. "low", "medium", or "high"; "none"
+            disables reasoning. Supported levels are model-specific — some
+            models also accept e.g. "minimal", "xhigh", or "max".
         """
-        _args: list[Arg] = []
-        _ctx = self._select("withResetWorkspace", _args)
+        _args = [
+            Arg("effort", effort),
+        ]
+        _ctx = self._select("withReasoningEffort", _args)
         return LLM(_ctx)
 
     def with_response(
@@ -14336,6 +14526,24 @@ class Workspace(Type):
         _ctx = self._select("address", _args)
         return await _ctx.execute(str)
 
+    def agents(
+        self,
+        *,
+        include: list[str] | None = None,
+    ) -> AgentGroup:
+        """Return all agent middlewares from modules loaded in the workspace.
+
+        Parameters
+        ----------
+        include:
+            Only include agents matching the specified patterns
+        """
+        _args = [
+            Arg("include", include, None),
+        ]
+        _ctx = self._select("agents", _args)
+        return AgentGroup(_ctx)
+
     def changes(self) -> Changeset:
         """Return this workspace's pending overlay changes."""
         _args: list[Arg] = []
@@ -14731,6 +14939,15 @@ class Workspace(Type):
         _ctx = self._select("modules", _args)
         return await _ctx.execute_object_list(WorkspaceModule)
 
+    def reloaded(self) -> Self:
+        """Return this workspace with its cached host reads invalidated, so
+        subsequent file and directory reads re-read the live host instead of a
+        snapshot cached earlier in the session.
+        """
+        _args: list[Arg] = []
+        _ctx = self._select("reloaded", _args)
+        return Workspace(_ctx)
+
     def sdk(self, name: str) -> "WorkspaceSDK":
         """An installed SDK, by name.
 
@@ -15051,6 +15268,52 @@ class Workspace(Type):
             Arg("permissions", permissions, 420),
         ]
         _ctx = self._select("withNewFile", _args)
+        return Workspace(_ctx)
+
+    def with_reference_directory(self, path: str, source: Directory) -> Self:
+        """Return this workspace with a directory mounted read-only under the
+        reserved references prefix.
+
+        Referenced content is readable through the normal workspace file tools
+        but is excluded from the pending changeset: it never appears in
+        changes and is never exported.
+
+        Parameters
+        ----------
+        path:
+            Reference-relative mount path under the reserved references
+            prefix.
+        source:
+            Directory to mount read-only.
+        """
+        _args = [
+            Arg("path", path),
+            Arg("source", source),
+        ]
+        _ctx = self._select("withReferenceDirectory", _args)
+        return Workspace(_ctx)
+
+    def with_reference_file(self, path: str, source: File) -> Self:
+        """Return this workspace with a file mounted read-only under the reserved
+        references prefix.
+
+        Referenced content is readable through the normal workspace file tools
+        but is excluded from the pending changeset: it never appears in
+        changes and is never exported.
+
+        Parameters
+        ----------
+        path:
+            Reference-relative mount path under the reserved references
+            prefix.
+        source:
+            File to mount read-only.
+        """
+        _args = [
+            Arg("path", path),
+            Arg("source", source),
+        ]
+        _ctx = self._select("withReferenceFile", _args)
         return Workspace(_ctx)
 
     def with_sdk(
@@ -15748,6 +16011,8 @@ __all__ = [
     "JSON",
     "LLM",
     "Address",
+    "Agent",
+    "AgentGroup",
     "BuildArg",
     "CacheSharingMode",
     "CacheVolume",

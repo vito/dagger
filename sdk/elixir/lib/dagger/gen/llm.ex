@@ -137,7 +137,7 @@ defmodule Dagger.LLM do
   end
 
   @doc """
-  A portable, self-contained ID for the conversation that node() can resolve in any session. Unlike id, which may return an engine-local runtime handle valid only within the current session, this returns the recipe form suitable for persisting and later restoring the conversation.
+  A portable, self-contained ID for the conversation that node() can resolve in any session. Unlike id, which may return an engine-local runtime handle valid only within the current session, this returns the recipe form suitable for persisting and later restoring the conversation. The recipe is flattened: bindings superseded during the session (workspace overlays recorded by each mutating tool call, and re-bound toolsets) are dropped, while the current workspace binding — including any pending, un-exported edits — is preserved.
   """
   @spec portable_id(t()) :: {:ok, String.t()} | {:error, term()}
   def portable_id(%__MODULE__{} = llm) do
@@ -154,6 +154,17 @@ defmodule Dagger.LLM do
   def provider(%__MODULE__{} = llm) do
     query_builder =
       llm.query_builder |> QB.select("provider")
+
+    Client.execute(llm.client, query_builder)
+  end
+
+  @doc """
+  The reasoning effort in use, e.g. "low", "medium", or "high". Empty or "none" when reasoning is disabled.
+  """
+  @spec reasoning_effort(t()) :: {:ok, String.t()} | {:error, term()}
+  def reasoning_effort(%__MODULE__{} = llm) do
+    query_builder =
+      llm.query_builder |> QB.select("reasoningEffort")
 
     Client.execute(llm.client, query_builder)
   end
@@ -338,12 +349,12 @@ defmodule Dagger.LLM do
   end
 
   @doc """
-  Return a new LLM with the workspace reset to its base, dropping any accumulated changes. The conversation and configuration are re-emitted as a flat recipe bound to the live workspace, so a persisted session (globalID) no longer replays workspace edits when loaded. Use after exporting changes (Workspace.export) so a resumed session continues from the workspace's on-disk state.
+  Change the reasoning effort for the rest of the conversation, overriding any configured default. The message history is preserved; the new effort takes effect on the next step.
   """
-  @spec with_reset_workspace(t()) :: Dagger.LLM.t()
-  def with_reset_workspace(%__MODULE__{} = llm) do
+  @spec with_reasoning_effort(t(), String.t()) :: Dagger.LLM.t()
+  def with_reasoning_effort(%__MODULE__{} = llm, effort) do
     query_builder =
-      llm.query_builder |> QB.select("withResetWorkspace")
+      llm.query_builder |> QB.select("withReasoningEffort") |> QB.put_arg("effort", effort)
 
     %Dagger.LLM{
       query_builder: query_builder,

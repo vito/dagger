@@ -5112,6 +5112,12 @@
 		},
 		{
 			"t": "M",
+			"n": "Dagger\\Function_::withAgent",
+			"p": "Dagger/Function_.html#method_withAgent",
+			"d": "<p>Returns the function with a flag indicating it is an agent middleware.</p>"
+		},
+		{
+			"t": "M",
 			"n": "Dagger\\Function_::withArg",
 			"p": "Dagger/Function_.html#method_withArg",
 			"d": "<p>Returns the function with the provided argument</p>"
@@ -5684,13 +5690,19 @@
 			"t": "M",
 			"n": "Dagger\\LLM::portableID",
 			"p": "Dagger/LLM.html#method_portableID",
-			"d": "<p>A portable, self-contained ID for the conversation that node() can resolve in any session. Unlike id, which may return an engine-local runtime handle valid only within the current session, this returns the recipe form suitable for persisting and later restoring the conversation.</p>"
+			"d": "<p>A portable, self-contained ID for the conversation that node() can resolve in any session. Unlike id, which may return an engine-local runtime handle valid only within the current session, this returns the recipe form suitable for persisting and later restoring the conversation. The recipe is flattened: bindings superseded during the session (workspace overlays recorded by each mutating tool call, and re-bound toolsets) are dropped, while the current workspace binding \u2014 including any pending, un-exported edits \u2014 is preserved.</p>"
 		},
 		{
 			"t": "M",
 			"n": "Dagger\\LLM::provider",
 			"p": "Dagger/LLM.html#method_provider",
 			"d": "<p>The provider serving the model, e.g. &quot;anthropic&quot;, &quot;openai&quot;, &quot;google&quot;, or &quot;local&quot;.</p>"
+		},
+		{
+			"t": "M",
+			"n": "Dagger\\LLM::reasoningEffort",
+			"p": "Dagger/LLM.html#method_reasoningEffort",
+			"d": "<p>The reasoning effort in use, e.g. &quot;low&quot;, &quot;medium&quot;, or &quot;high&quot;. Empty or &quot;none&quot; when reasoning is disabled.</p>"
 		},
 		{
 			"t": "M",
@@ -5760,9 +5772,9 @@
 		},
 		{
 			"t": "M",
-			"n": "Dagger\\LLM::withResetWorkspace",
-			"p": "Dagger/LLM.html#method_withResetWorkspace",
-			"d": "<p>Return a new LLM with the workspace reset to its base, dropping any accumulated changes. The conversation and configuration are re-emitted as a flat recipe bound to the live workspace, so a persisted session (globalID) no longer replays workspace edits when loaded. Use after exporting changes (Workspace.export) so a resumed session continues from the workspace's on-disk state.</p>"
+			"n": "Dagger\\LLM::withReasoningEffort",
+			"p": "Dagger/LLM.html#method_withReasoningEffort",
+			"d": "<p>Change the reasoning effort for the rest of the conversation, overriding any configured default. The message history is preserved; the new effort takes effect on the next step.</p>"
 		},
 		{
 			"t": "M",
@@ -7128,6 +7140,12 @@
 		},
 		{
 			"t": "M",
+			"n": "Dagger\\Workspace::agents",
+			"p": "Dagger/Workspace.html#method_agents",
+			"d": "<p>Return all agent middlewares from modules loaded in the workspace.</p>"
+		},
+		{
+			"t": "M",
 			"n": "Dagger\\Workspace::changes",
 			"p": "Dagger/Workspace.html#method_changes",
 			"d": "<p>Return this workspace's pending overlay changes.</p>"
@@ -7236,6 +7254,12 @@
 		},
 		{
 			"t": "M",
+			"n": "Dagger\\Workspace::reloaded",
+			"p": "Dagger/Workspace.html#method_reloaded",
+			"d": "<p>Return this workspace with its cached host reads invalidated, so subsequent file and directory reads re-read the live host instead of a snapshot cached earlier in the session.</p>"
+		},
+		{
+			"t": "M",
 			"n": "Dagger\\Workspace::sdk",
 			"p": "Dagger/Workspace.html#method_sdk",
 			"d": "<p>An installed SDK, by name.</p>"
@@ -7305,6 +7329,18 @@
 			"n": "Dagger\\Workspace::withNewFile",
 			"p": "Dagger/Workspace.html#method_withNewFile",
 			"d": "<p>Return this workspace with a new or replaced file, without mutating the source.</p>"
+		},
+		{
+			"t": "M",
+			"n": "Dagger\\Workspace::withReferenceDirectory",
+			"p": "Dagger/Workspace.html#method_withReferenceDirectory",
+			"d": "<p>Return this workspace with a directory mounted read-only under the reserved references prefix.</p>"
+		},
+		{
+			"t": "M",
+			"n": "Dagger\\Workspace::withReferenceFile",
+			"p": "Dagger/Workspace.html#method_withReferenceFile",
+			"d": "<p>Return this workspace with a file mounted read-only under the reserved references prefix.</p>"
 		},
 		{
 			"t": "M",

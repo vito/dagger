@@ -27,6 +27,22 @@ defmodule Dagger.Workspace do
   end
 
   @doc """
+  Return all agent middlewares from modules loaded in the workspace.
+  """
+  @spec agents(t(), [{:include, [String.t()]}]) :: Dagger.AgentGroup.t()
+  def agents(%__MODULE__{} = workspace, optional_args \\ []) do
+    query_builder =
+      workspace.query_builder
+      |> QB.select("agents")
+      |> QB.maybe_put_arg("include", optional_args[:include])
+
+    %Dagger.AgentGroup{
+      query_builder: query_builder,
+      client: workspace.client
+    }
+  end
+
+  @doc """
   Return this workspace's pending overlay changes.
   """
   @spec changes(t()) :: Dagger.Changeset.t()
@@ -322,6 +338,20 @@ defmodule Dagger.Workspace do
   end
 
   @doc """
+  Return this workspace with its cached host reads invalidated, so subsequent file and directory reads re-read the live host instead of a snapshot cached earlier in the session.
+  """
+  @spec reloaded(t()) :: Dagger.Workspace.t()
+  def reloaded(%__MODULE__{} = workspace) do
+    query_builder =
+      workspace.query_builder |> QB.select("reloaded")
+
+    %Dagger.Workspace{
+      query_builder: query_builder,
+      client: workspace.client
+    }
+  end
+
+  @doc """
   An installed SDK, by name.
   """
   @spec sdk(t(), String.t()) :: Dagger.WorkspaceSDK.t()
@@ -579,6 +609,44 @@ defmodule Dagger.Workspace do
       |> QB.put_arg("path", path)
       |> QB.put_arg("contents", contents)
       |> QB.maybe_put_arg("permissions", optional_args[:permissions])
+
+    %Dagger.Workspace{
+      query_builder: query_builder,
+      client: workspace.client
+    }
+  end
+
+  @doc """
+  Return this workspace with a directory mounted read-only under the reserved references prefix.
+
+  Referenced content is readable through the normal workspace file tools but is excluded from the pending changeset: it never appears in changes and is never exported.
+  """
+  @spec with_reference_directory(t(), String.t(), Dagger.Directory.t()) :: Dagger.Workspace.t()
+  def with_reference_directory(%__MODULE__{} = workspace, path, source) do
+    query_builder =
+      workspace.query_builder
+      |> QB.select("withReferenceDirectory")
+      |> QB.put_arg("path", path)
+      |> QB.put_arg("source", Dagger.ID.id!(source))
+
+    %Dagger.Workspace{
+      query_builder: query_builder,
+      client: workspace.client
+    }
+  end
+
+  @doc """
+  Return this workspace with a file mounted read-only under the reserved references prefix.
+
+  Referenced content is readable through the normal workspace file tools but is excluded from the pending changeset: it never appears in changes and is never exported.
+  """
+  @spec with_reference_file(t(), String.t(), Dagger.File.t()) :: Dagger.Workspace.t()
+  def with_reference_file(%__MODULE__{} = workspace, path, source) do
+    query_builder =
+      workspace.query_builder
+      |> QB.select("withReferenceFile")
+      |> QB.put_arg("path", path)
+      |> QB.put_arg("source", Dagger.ID.id!(source))
 
     %Dagger.Workspace{
       query_builder: query_builder,

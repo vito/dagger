@@ -278,7 +278,9 @@
 <abbr title="Dagger\TypeDef">TypeDef</abbr>::asScalar</a>() &mdash; <em>Method in class <a href="Dagger/TypeDef.html"><abbr title="Dagger\TypeDef">TypeDef</abbr></a></em></dt>
                     <dd><p>If kind is SCALAR, the scalar-specific type definition. If kind is not SCALAR, this will be null.</p></dd><dt><a href="Dagger/Workspace.html#method_address">
 <abbr title="Dagger\Workspace">Workspace</abbr>::address</a>() &mdash; <em>Method in class <a href="Dagger/Workspace.html"><abbr title="Dagger\Workspace">Workspace</abbr></a></em></dt>
-                    <dd><p>Canonical Dagger address of the workspace location, or an opaque identity for synthetic workspaces.</p></dd>        </dl><h2 id="letterB">B</h2>
+                    <dd><p>Canonical Dagger address of the workspace location, or an opaque identity for synthetic workspaces.</p></dd><dt><a href="Dagger/Workspace.html#method_agents">
+<abbr title="Dagger\Workspace">Workspace</abbr>::agents</a>() &mdash; <em>Method in class <a href="Dagger/Workspace.html"><abbr title="Dagger\Workspace">Workspace</abbr></a></em></dt>
+                    <dd><p>Return all agent middlewares from modules loaded in the workspace.</p></dd>        </dl><h2 id="letterB">B</h2>
         <dl id="indexB"><dt><a href="Dagger/Binding.html"><abbr title="Dagger\Binding">Binding</abbr></a> &mdash; <em>Class in namespace <a href="Dagger.html">Dagger</a></em></dt>
                     <dd></dd><dt><a href="Dagger/BindingId.html"><abbr title="Dagger\BindingId">BindingId</abbr></a> &mdash; <em>Class in namespace <a href="Dagger.html">Dagger</a></em></dt>
                     <dd><p>A unique identifier for an object.</p></dd><dt><a href="Dagger/BuildArg.html"><abbr title="Dagger\BuildArg">BuildArg</abbr></a> &mdash; <em>Class in namespace <a href="Dagger.html">Dagger</a></em></dt>
@@ -1287,7 +1289,7 @@
 <abbr title="Dagger\Generator">Generator</abbr>::path</a>() &mdash; <em>Method in class <a href="Dagger/Generator.html"><abbr title="Dagger\Generator">Generator</abbr></a></em></dt>
                     <dd><p>The path of the generator within its module</p></dd><dt><a href="Dagger/LLM.html#method_portableID">
 <abbr title="Dagger\LLM">LLM</abbr>::portableID</a>() &mdash; <em>Method in class <a href="Dagger/LLM.html"><abbr title="Dagger\LLM">LLM</abbr></a></em></dt>
-                    <dd><p>A portable, self-contained ID for the conversation that node() can resolve in any session. Unlike id, which may return an engine-local runtime handle valid only within the current session, this returns the recipe form suitable for persisting and later restoring the conversation.</p></dd><dt><a href="Dagger/LLM.html#method_provider">
+                    <dd><p>A portable, self-contained ID for the conversation that node() can resolve in any session. Unlike id, which may return an engine-local runtime handle valid only within the current session, this returns the recipe form suitable for persisting and later restoring the conversation. The recipe is flattened: bindings superseded during the session (workspace overlays recorded by each mutating tool call, and re-bound toolsets) are dropped, while the current workspace binding — including any pending, un-exported edits — is preserved.</p></dd><dt><a href="Dagger/LLM.html#method_provider">
 <abbr title="Dagger\LLM">LLM</abbr>::provider</a>() &mdash; <em>Method in class <a href="Dagger/LLM.html"><abbr title="Dagger\LLM">LLM</abbr></a></em></dt>
                     <dd><p>The provider serving the model, e.g. &quot;anthropic&quot;, &quot;openai&quot;, &quot;google&quot;, or &quot;local&quot;.</p></dd><dt><a href="Dagger/ModuleSource.html#method_pin">
 <abbr title="Dagger\ModuleSource">ModuleSource</abbr>::pin</a>() &mdash; <em>Method in class <a href="Dagger/ModuleSource.html"><abbr title="Dagger\ModuleSource">ModuleSource</abbr></a></em></dt>
@@ -1359,7 +1361,9 @@
 <abbr title="Dagger\GitRepository">GitRepository</abbr>::ref</a>() &mdash; <em>Method in class <a href="Dagger/GitRepository.html"><abbr title="Dagger\GitRepository">GitRepository</abbr></a></em></dt>
                     <dd><p>Returns details of a ref.</p></dd><dt><a href="Dagger/HealthcheckConfig.html#method_retries">
 <abbr title="Dagger\HealthcheckConfig">HealthcheckConfig</abbr>::retries</a>() &mdash; <em>Method in class <a href="Dagger/HealthcheckConfig.html"><abbr title="Dagger\HealthcheckConfig">HealthcheckConfig</abbr></a></em></dt>
-                    <dd><p>The maximum number of consecutive failures before the container is marked as unhealthy. Example:3</p></dd><dt><a href="Dagger/LLM.html#method_replay">
+                    <dd><p>The maximum number of consecutive failures before the container is marked as unhealthy. Example:3</p></dd><dt><a href="Dagger/LLM.html#method_reasoningEffort">
+<abbr title="Dagger\LLM">LLM</abbr>::reasoningEffort</a>() &mdash; <em>Method in class <a href="Dagger/LLM.html"><abbr title="Dagger\LLM">LLM</abbr></a></em></dt>
+                    <dd><p>The reasoning effort in use, e.g. &quot;low&quot;, &quot;medium&quot;, or &quot;high&quot;. Empty or &quot;none&quot; when reasoning is disabled.</p></dd><dt><a href="Dagger/LLM.html#method_replay">
 <abbr title="Dagger\LLM">LLM</abbr>::replay</a>() &mdash; <em>Method in class <a href="Dagger/LLM.html"><abbr title="Dagger\LLM">LLM</abbr></a></em></dt>
                     <dd><p>Re-emit telemetry spans for the full message history, so a loaded conversation displays in the TUI.</p></dd><dt><a href="Dagger/LLMMessage.html#method_role">
 <abbr title="Dagger\LLMMessage">LLMMessage</abbr>::role</a>() &mdash; <em>Method in class <a href="Dagger/LLMMessage.html"><abbr title="Dagger\LLMMessage">LLMMessage</abbr></a></em></dt>
@@ -1373,7 +1377,9 @@
 <abbr title="Dagger\Up">Up</abbr>::run</a>() &mdash; <em>Method in class <a href="Dagger/Up.html"><abbr title="Dagger\Up">Up</abbr></a></em></dt>
                     <dd><p>Execute the service function</p></dd><dt><a href="Dagger/UpGroup.html#method_run">
 <abbr title="Dagger\UpGroup">UpGroup</abbr>::run</a>() &mdash; <em>Method in class <a href="Dagger/UpGroup.html"><abbr title="Dagger\UpGroup">UpGroup</abbr></a></em></dt>
-                    <dd><p>Execute all selected service functions</p></dd><dt><a href="Dagger/WorkspaceSDK.html#method_ref">
+                    <dd><p>Execute all selected service functions</p></dd><dt><a href="Dagger/Workspace.html#method_reloaded">
+<abbr title="Dagger\Workspace">Workspace</abbr>::reloaded</a>() &mdash; <em>Method in class <a href="Dagger/Workspace.html"><abbr title="Dagger\Workspace">Workspace</abbr></a></em></dt>
+                    <dd><p>Return this workspace with its cached host reads invalidated, so subsequent file and directory reads re-read the live host instead of a snapshot cached earlier in the session.</p></dd><dt><a href="Dagger/WorkspaceSDK.html#method_ref">
 <abbr title="Dagger\WorkspaceSDK">WorkspaceSDK</abbr>::ref</a>() &mdash; <em>Method in class <a href="Dagger/WorkspaceSDK.html"><abbr title="Dagger\WorkspaceSDK">WorkspaceSDK</abbr></a></em></dt>
                     <dd><p>The module reference this SDK was installed from.</p></dd>        </dl><h2 id="letterS">S</h2>
         <dl id="indexS"><dt><a href="Dagger/Address.html#method_secret">
@@ -1991,7 +1997,9 @@
 <abbr title="Dagger\File">File</abbr>::withReplaced</a>() &mdash; <em>Method in class <a href="Dagger/File.html"><abbr title="Dagger\File">File</abbr></a></em></dt>
                     <dd><p>Retrieves the file with content replaced with the given text.</p></dd><dt><a href="Dagger/File.html#method_withTimestamps">
 <abbr title="Dagger\File">File</abbr>::withTimestamps</a>() &mdash; <em>Method in class <a href="Dagger/File.html"><abbr title="Dagger\File">File</abbr></a></em></dt>
-                    <dd><p>Retrieves this file with its created/modified timestamps set to the given time.</p></dd><dt><a href="Dagger/Function_.html#method_withArg">
+                    <dd><p>Retrieves this file with its created/modified timestamps set to the given time.</p></dd><dt><a href="Dagger/Function_.html#method_withAgent">
+<abbr title="Dagger\Function_">Function_</abbr>::withAgent</a>() &mdash; <em>Method in class <a href="Dagger/Function_.html"><abbr title="Dagger\Function_">Function_</abbr></a></em></dt>
+                    <dd><p>Returns the function with a flag indicating it is an agent middleware.</p></dd><dt><a href="Dagger/Function_.html#method_withArg">
 <abbr title="Dagger\Function_">Function_</abbr>::withArg</a>() &mdash; <em>Method in class <a href="Dagger/Function_.html"><abbr title="Dagger\Function_">Function_</abbr></a></em></dt>
                     <dd><p>Returns the function with the provided argument</p></dd><dt><a href="Dagger/Function_.html#method_withCachePolicy">
 <abbr title="Dagger\Function_">Function_</abbr>::withCachePolicy</a>() &mdash; <em>Method in class <a href="Dagger/Function_.html"><abbr title="Dagger\Function_">Function_</abbr></a></em></dt>
@@ -2023,9 +2031,9 @@
 <abbr title="Dagger\LLM">LLM</abbr>::withPrompt</a>() &mdash; <em>Method in class <a href="Dagger/LLM.html"><abbr title="Dagger\LLM">LLM</abbr></a></em></dt>
                     <dd><p>Queue a user prompt, to be sent to the model on the next step or loop.</p></dd><dt><a href="Dagger/LLM.html#method_withPromptFile">
 <abbr title="Dagger\LLM">LLM</abbr>::withPromptFile</a>() &mdash; <em>Method in class <a href="Dagger/LLM.html"><abbr title="Dagger\LLM">LLM</abbr></a></em></dt>
-                    <dd><p>Queue a file's contents as a user prompt, like withPrompt.</p></dd><dt><a href="Dagger/LLM.html#method_withResetWorkspace">
-<abbr title="Dagger\LLM">LLM</abbr>::withResetWorkspace</a>() &mdash; <em>Method in class <a href="Dagger/LLM.html"><abbr title="Dagger\LLM">LLM</abbr></a></em></dt>
-                    <dd><p>Return a new LLM with the workspace reset to its base, dropping any accumulated changes. The conversation and configuration are re-emitted as a flat recipe bound to the live workspace, so a persisted session (globalID) no longer replays workspace edits when loaded. Use after exporting changes (Workspace.export) so a resumed session continues from the workspace's on-disk state.</p></dd><dt><a href="Dagger/LLM.html#method_withResponse">
+                    <dd><p>Queue a file's contents as a user prompt, like withPrompt.</p></dd><dt><a href="Dagger/LLM.html#method_withReasoningEffort">
+<abbr title="Dagger\LLM">LLM</abbr>::withReasoningEffort</a>() &mdash; <em>Method in class <a href="Dagger/LLM.html"><abbr title="Dagger\LLM">LLM</abbr></a></em></dt>
+                    <dd><p>Change the reasoning effort for the rest of the conversation, overriding any configured default. The message history is preserved; the new effort takes effect on the next step.</p></dd><dt><a href="Dagger/LLM.html#method_withResponse">
 <abbr title="Dagger\LLM">LLM</abbr>::withResponse</a>() &mdash; <em>Method in class <a href="Dagger/LLM.html"><abbr title="Dagger\LLM">LLM</abbr></a></em></dt>
                     <dd><p>Append an assistant response to the message history without calling the model, e.g. to reconstruct a conversation from another source.</p></dd><dt><a href="Dagger/LLM.html#method_withSkills">
 <abbr title="Dagger\LLM">LLM</abbr>::withSkills</a>() &mdash; <em>Method in class <a href="Dagger/LLM.html"><abbr title="Dagger\LLM">LLM</abbr></a></em></dt>
@@ -2134,7 +2142,11 @@
 <abbr title="Dagger\Workspace">Workspace</abbr>::withNewDirectory</a>() &mdash; <em>Method in class <a href="Dagger/Workspace.html"><abbr title="Dagger\Workspace">Workspace</abbr></a></em></dt>
                     <dd><p>Return this workspace with a directory added, without mutating the source.</p></dd><dt><a href="Dagger/Workspace.html#method_withNewFile">
 <abbr title="Dagger\Workspace">Workspace</abbr>::withNewFile</a>() &mdash; <em>Method in class <a href="Dagger/Workspace.html"><abbr title="Dagger\Workspace">Workspace</abbr></a></em></dt>
-                    <dd><p>Return this workspace with a new or replaced file, without mutating the source.</p></dd><dt><a href="Dagger/Workspace.html#method_withSDK">
+                    <dd><p>Return this workspace with a new or replaced file, without mutating the source.</p></dd><dt><a href="Dagger/Workspace.html#method_withReferenceDirectory">
+<abbr title="Dagger\Workspace">Workspace</abbr>::withReferenceDirectory</a>() &mdash; <em>Method in class <a href="Dagger/Workspace.html"><abbr title="Dagger\Workspace">Workspace</abbr></a></em></dt>
+                    <dd><p>Return this workspace with a directory mounted read-only under the reserved references prefix.</p></dd><dt><a href="Dagger/Workspace.html#method_withReferenceFile">
+<abbr title="Dagger\Workspace">Workspace</abbr>::withReferenceFile</a>() &mdash; <em>Method in class <a href="Dagger/Workspace.html"><abbr title="Dagger\Workspace">Workspace</abbr></a></em></dt>
+                    <dd><p>Return this workspace with a file mounted read-only under the reserved references prefix.</p></dd><dt><a href="Dagger/Workspace.html#method_withSDK">
 <abbr title="Dagger\Workspace">Workspace</abbr>::withSDK</a>() &mdash; <em>Method in class <a href="Dagger/Workspace.html"><abbr title="Dagger\Workspace">Workspace</abbr></a></em></dt>
                     <dd><p>Return this workspace with an SDK installed in its config.</p></dd><dt><a href="Dagger/Workspace.html#method_withUpdatedLock">
 <abbr title="Dagger\Workspace">Workspace</abbr>::withUpdatedLock</a>() &mdash; <em>Method in class <a href="Dagger/Workspace.html"><abbr title="Dagger\Workspace">Workspace</abbr></a></em></dt>

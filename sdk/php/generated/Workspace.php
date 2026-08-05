@@ -23,6 +23,18 @@ class Workspace extends Client\AbstractObject implements Client\IdAble, Node
     }
 
     /**
+     * Return all agent middlewares from modules loaded in the workspace.
+     */
+    public function agents(?array $include = null): AgentGroup
+    {
+        $innerQueryBuilder = new \Dagger\Client\QueryBuilder('agents');
+        if (null !== $include) {
+        $innerQueryBuilder->setArgument('include', $include);
+        }
+        return new \Dagger\AgentGroup($this->client, $this->queryBuilderChain->chain($innerQueryBuilder));
+    }
+
+    /**
      * Return this workspace's pending overlay changes.
      */
     public function changes(): Changeset
@@ -257,6 +269,15 @@ class Workspace extends Client\AbstractObject implements Client\IdAble, Node
     }
 
     /**
+     * Return this workspace with its cached host reads invalidated, so subsequent file and directory reads re-read the live host instead of a snapshot cached earlier in the session.
+     */
+    public function reloaded(): Workspace
+    {
+        $innerQueryBuilder = new \Dagger\Client\QueryBuilder('reloaded');
+        return new \Dagger\Workspace($this->client, $this->queryBuilderChain->chain($innerQueryBuilder));
+    }
+
+    /**
      * An installed SDK, by name.
      */
     public function sdk(string $name): WorkspaceSDK
@@ -476,6 +497,32 @@ class Workspace extends Client\AbstractObject implements Client\IdAble, Node
         if (null !== $permissions) {
         $innerQueryBuilder->setArgument('permissions', $permissions);
         }
+        return new \Dagger\Workspace($this->client, $this->queryBuilderChain->chain($innerQueryBuilder));
+    }
+
+    /**
+     * Return this workspace with a directory mounted read-only under the reserved references prefix.
+     *
+     * Referenced content is readable through the normal workspace file tools but is excluded from the pending changeset: it never appears in changes and is never exported.
+     */
+    public function withReferenceDirectory(string $path, Directory $source): Workspace
+    {
+        $innerQueryBuilder = new \Dagger\Client\QueryBuilder('withReferenceDirectory');
+        $innerQueryBuilder->setArgument('path', $path);
+        $innerQueryBuilder->setArgument('source', $source);
+        return new \Dagger\Workspace($this->client, $this->queryBuilderChain->chain($innerQueryBuilder));
+    }
+
+    /**
+     * Return this workspace with a file mounted read-only under the reserved references prefix.
+     *
+     * Referenced content is readable through the normal workspace file tools but is excluded from the pending changeset: it never appears in changes and is never exported.
+     */
+    public function withReferenceFile(string $path, File $source): Workspace
+    {
+        $innerQueryBuilder = new \Dagger\Client\QueryBuilder('withReferenceFile');
+        $innerQueryBuilder->setArgument('path', $path);
+        $innerQueryBuilder->setArgument('source', $source);
         return new \Dagger\Workspace($this->client, $this->queryBuilderChain->chain($innerQueryBuilder));
     }
 
