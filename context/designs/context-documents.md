@@ -8,6 +8,7 @@ anchors: ["modules/context/main.dang", "modules/context/README.md"]
 asserts: ['modules/context/main.dang ~ @agent', 'modules/context/main.dang ~ docCompose']
 tests: ["context:lint", "context:assertions", "context:drifted"]
 related: ["decisions/context-lives-in-the-repository", "facts/agent-middlewares-fold-alphabetically"]
+verifiedAt: 2605ac7ce790eac46fc80758e7a1295a0080d802
 ---
 
 The working assumption of most agent tooling is that a conversation *is* the

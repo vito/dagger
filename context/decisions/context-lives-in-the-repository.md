@@ -6,6 +6,7 @@ tags: ["context", "persistence"]
 anchors: ["modules/context/main.dang"]
 asserts: ['modules/context/main.dang ~ withNewFile', 'modules/context/main.dang ~ docWrite']
 related: ["designs/context-documents", "glossary/workspace"]
+verifiedAt: 2605ac7ce790eac46fc80758e7a1295a0080d802
 ---
 
 The corpus is markdown with YAML front matter under `context/`, written through
