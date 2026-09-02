@@ -1,0 +1,1119 @@
+<!doctype html>
+<html lang="en" data-palette="#2a78d6,#eb6834">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Context Blocks — a thread that curates its context</title>
+<style>
+  :root {
+    color-scheme: light;
+    --plane:          #f9f9f7;
+    --surface-1:      #fcfcfb;
+    --surface-2:      #f2f1ed;
+    --surface-sunken: #eeede8;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #898781;
+    --grid:           #e1e0d9;
+    --axis:           #c3c2b7;
+    --border:         rgba(11,11,11,0.10);
+    --border-strong:  rgba(11,11,11,0.18);
+    --series-1:       #2a78d6;
+    --series-2:       #eb6834;
+    --good:           #0ca30c;
+    --good-text:      #006300;
+    --warning:        #fab219;
+    --shadow:         0 1px 2px rgba(11,11,11,.05), 0 8px 24px -16px rgba(11,11,11,.28);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --plane:          #0d0d0d;
+      --surface-1:      #1a1a19;
+      --surface-2:      #212120;
+      --surface-sunken: #131312;
+      --text-primary:   #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted:     #898781;
+      --grid:           #2c2c2a;
+      --axis:           #383835;
+      --border:         rgba(255,255,255,0.10);
+      --border-strong:  rgba(255,255,255,0.18);
+      --series-1:       #3987e5;
+      --series-2:       #d95926;
+      --good:           #0ca30c;
+      --good-text:      #0ca30c;
+      --warning:        #fab219;
+      --shadow:         0 1px 2px rgba(0,0,0,.4), 0 8px 24px -16px rgba(0,0,0,.9);
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --plane:          #0d0d0d;
+    --surface-1:      #1a1a19;
+    --surface-2:      #212120;
+    --surface-sunken: #131312;
+    --text-primary:   #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted:     #898781;
+    --grid:           #2c2c2a;
+    --axis:           #383835;
+    --border:         rgba(255,255,255,0.10);
+    --border-strong:  rgba(255,255,255,0.18);
+    --series-1:       #3987e5;
+    --series-2:       #d95926;
+    --good:           #0ca30c;
+    --good-text:      #0ca30c;
+    --warning:        #fab219;
+    --shadow:         0 1px 2px rgba(0,0,0,.4), 0 8px 24px -16px rgba(0,0,0,.9);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--plane);
+    color: var(--text-primary);
+    font: 14px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  code, pre, .mono { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; }
+
+  /* ---------------------------------------------------------------- chrome */
+  header.top {
+    position: sticky; top: 0; z-index: 40;
+    display: flex; align-items: center; gap: 20px;
+    padding: 14px 24px;
+    background: color-mix(in srgb, var(--plane) 88%, transparent);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--border);
+  }
+  .brand { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
+  .brand h1 { font-size: 15px; font-weight: 640; margin: 0; letter-spacing: -0.01em; white-space: nowrap; }
+  .brand p { margin: 0; color: var(--text-muted); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .spacer { flex: 1 1 auto; }
+  .controls { display: flex; align-items: center; gap: 8px; }
+
+  button {
+    font: inherit; font-size: 13px;
+    color: var(--text-primary);
+    background: var(--surface-1);
+    border: 1px solid var(--border-strong);
+    border-radius: 7px;
+    padding: 5px 11px;
+    cursor: pointer;
+    transition: background .12s ease, border-color .12s ease, transform .06s ease;
+  }
+  button:hover:not(:disabled) { background: var(--surface-2); }
+  button:active:not(:disabled) { transform: translateY(1px); }
+  button:disabled { opacity: .4; cursor: default; }
+  button.primary {
+    background: var(--series-1); border-color: transparent; color: #fff; font-weight: 560;
+  }
+  button.primary:hover:not(:disabled) { filter: brightness(1.07); background: var(--series-1); }
+  button.ghost { background: transparent; border-color: transparent; color: var(--text-secondary); padding: 5px 8px; }
+  button.ghost:hover { background: var(--surface-2); }
+  .step-count { font-size: 12.5px; color: var(--text-muted); font-variant-numeric: tabular-nums; min-width: 62px; text-align: center; }
+
+  /* ---------------------------------------------------------------- layout */
+  main {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 400px;
+    gap: 28px;
+    max-width: 1420px;
+    margin: 0 auto;
+    padding: 24px;
+    align-items: start;
+  }
+  @media (max-width: 1080px) { main { grid-template-columns: minmax(0,1fr); } aside.inspector { position: static !important; } }
+
+  /* ------------------------------------------------------------- stat row */
+  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 22px; }
+  .tile {
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px;
+    padding: 12px 14px 13px;
+  }
+  .tile .k { font-size: 11.5px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .045em; font-weight: 560; }
+  .tile .v { font-size: 25px; font-weight: 600; letter-spacing: -0.02em; margin-top: 3px; line-height: 1.1; }
+  .tile .s { font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
+  .tile.accent .v { color: var(--series-1); }
+  .tile.muted .v { color: var(--text-muted); }
+
+  /* --------------------------------------------------------------- thread */
+  .thread-head { display: flex; align-items: baseline; gap: 10px; margin: 0 0 12px; }
+  .thread-head h2 { font-size: 13px; font-weight: 620; margin: 0; text-transform: uppercase; letter-spacing: .05em; color: var(--text-secondary); }
+  .thread-head .hint { font-size: 12px; color: var(--text-muted); }
+
+  .block {
+    position: relative;
+    display: grid; grid-template-columns: 30px minmax(0,1fr);
+    margin-bottom: 10px;
+  }
+  .rail { position: relative; display: flex; justify-content: center; }
+  .rail::before {
+    content: ""; position: absolute; top: 26px; bottom: -12px; left: 50%;
+    width: 1px; background: var(--grid); transform: translateX(-.5px);
+  }
+  .block:last-child .rail::before { display: none; }
+  .glyph {
+    position: relative; z-index: 1;
+    width: 21px; height: 21px; margin-top: 9px; border-radius: 6px;
+    background: var(--surface-1); border: 1px solid var(--border-strong);
+    display: grid; place-items: center;
+    font-size: 11px; color: var(--text-secondary);
+  }
+  .block[data-kind="decision"] .glyph, .block[data-kind="design"] .glyph { border-color: var(--series-1); color: var(--series-1); }
+  .block[data-kind="promote"] .glyph { border-color: var(--good); color: var(--good-text); }
+
+  .card {
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 10px; box-shadow: var(--shadow);
+    overflow: hidden;
+    transition: opacity .18s ease, border-color .12s ease;
+  }
+  .block.dimmed .card { opacity: .45; }
+  .block.linked .card { border-color: var(--series-1); }
+
+  .card-head { display: flex; align-items: flex-start; gap: 10px; padding: 11px 13px; }
+  .badge {
+    flex: none; font-size: 10.5px; font-weight: 640; letter-spacing: .05em; text-transform: uppercase;
+    padding: 3px 7px; border-radius: 5px; margin-top: 1px;
+    background: var(--surface-sunken); color: var(--text-secondary); border: 1px solid var(--border);
+  }
+  .badge.b-decision, .badge.b-design { color: var(--series-1); border-color: color-mix(in srgb, var(--series-1) 40%, transparent); }
+  .badge.b-promote { color: var(--good-text); border-color: color-mix(in srgb, var(--good) 45%, transparent); }
+  .card-head .title { flex: 1 1 auto; min-width: 0; font-weight: 560; letter-spacing: -0.005em; }
+  .card-head .title small { display: block; font-weight: 400; color: var(--text-muted); font-size: 12px; margin-top: 2px; }
+  .cost { flex: none; font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; text-align: right; margin-top: 2px; }
+  .cost b { display: block; color: var(--text-secondary); font-weight: 560; }
+
+  .kept { margin: 0 13px 12px; }
+  .kept-label {
+    font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; font-weight: 620;
+    color: var(--text-muted); margin-bottom: 6px; display: flex; align-items: center; gap: 6px;
+  }
+  .kept-label::after { content: ""; flex: 1; height: 1px; background: var(--grid); }
+  .kept-item {
+    background: var(--surface-sunken); border: 1px solid var(--border);
+    border-left: 2px solid var(--series-1);
+    border-radius: 0 7px 7px 0; padding: 8px 11px; margin-bottom: 6px;
+  }
+  .kept-item:last-child { margin-bottom: 0; }
+  .kept-item .ki-label { font-size: 11.5px; color: var(--text-muted); font-weight: 560; margin-bottom: 2px; }
+  .kept-item .ki-text { font-size: 13px; color: var(--text-primary); }
+  .kept-item .ki-text em { color: var(--text-secondary); font-style: normal; }
+
+  .discard {
+    border-top: 1px dashed var(--axis);
+    background: var(--surface-sunken);
+    padding: 8px 13px;
+    display: flex; align-items: center; gap: 9px;
+    font-size: 12.5px; color: var(--text-muted);
+  }
+  .discard .strike { text-decoration: line-through; text-decoration-color: var(--axis); }
+  .discard button { margin-left: auto; font-size: 12px; padding: 3px 8px; }
+  .transcript {
+    display: none;
+    background: var(--surface-sunken);
+    border-top: 1px dashed var(--axis);
+    padding: 11px 13px 13px;
+  }
+  .block.open-transcript .transcript { display: block; }
+  .transcript .tnote {
+    font-size: 11.5px; color: var(--text-muted); margin-bottom: 9px;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--axis); flex: none; }
+  .msg { display: grid; grid-template-columns: 74px minmax(0,1fr); gap: 10px; padding: 3px 0; opacity: .62; }
+  .msg .who { font-size: 11px; color: var(--text-muted); text-align: right; padding-top: 2px; text-transform: uppercase; letter-spacing: .04em; }
+  .msg .what { font-size: 12.5px; color: var(--text-secondary); }
+  .msg .what.tool { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11.5px; }
+
+  .working { padding: 11px 13px 13px; }
+  .working .bar { height: 3px; border-radius: 2px; background: var(--surface-sunken); overflow: hidden; }
+  .working .bar i { display: block; height: 100%; width: 30%; background: var(--series-1); border-radius: 2px; animation: slide 1s ease-in-out infinite; }
+  @keyframes slide { 0% { transform: translateX(-100%);} 100% { transform: translateX(400%);} }
+  .working .wnote { font-size: 12.5px; color: var(--text-muted); margin-top: 8px; font-variant-numeric: tabular-nums; }
+
+  .handoff {
+    margin: 0 13px 12px; padding: 9px 11px;
+    border: 1px dashed color-mix(in srgb, var(--series-1) 45%, transparent);
+    border-radius: 8px; background: color-mix(in srgb, var(--series-1) 6%, transparent);
+    font-size: 12.5px; color: var(--text-secondary);
+  }
+  .handoff b { color: var(--text-primary); font-weight: 600; }
+  .handoff ul { margin: 6px 0 0; padding-left: 17px; }
+  .handoff li { margin: 1px 0; }
+
+  .checks { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 13px 12px; }
+  .check {
+    font-size: 12px; padding: 3px 9px; border-radius: 999px;
+    border: 1px solid color-mix(in srgb, var(--good) 45%, transparent);
+    color: var(--good-text); background: color-mix(in srgb, var(--good) 8%, transparent);
+    display: inline-flex; align-items: center; gap: 5px;
+  }
+
+  .thread-end {
+    margin: 16px 0 0 30px; padding: 13px 15px;
+    border: 1px dashed var(--axis); border-radius: 10px;
+    color: var(--text-secondary); font-size: 13px;
+  }
+  .thread-end b { color: var(--text-primary); }
+
+  /* ------------------------------------------------------------ inspector */
+  aside.inspector { position: sticky; top: 78px; display: flex; flex-direction: column; gap: 14px; }
+  .panel { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); }
+  .panel > h3 {
+    margin: 0; padding: 11px 13px 9px;
+    font-size: 11.5px; font-weight: 640; text-transform: uppercase; letter-spacing: .05em;
+    color: var(--text-secondary);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .panel > h3 .count { margin-left: auto; color: var(--text-muted); font-weight: 500; letter-spacing: 0; text-transform: none; font-size: 12px; font-variant-numeric: tabular-nums; }
+
+  .ctx-list { border-top: 1px solid var(--grid); }
+  .ctx-item {
+    display: grid; grid-template-columns: 18px minmax(0,1fr) auto; gap: 9px; align-items: baseline;
+    padding: 7px 13px; border-bottom: 1px solid var(--grid); cursor: pointer;
+  }
+  .ctx-item:last-child { border-bottom: none; }
+  .ctx-item:hover, .ctx-item.linked { background: var(--surface-2); }
+  .ctx-item input { margin: 0; accent-color: var(--series-1); position: relative; top: 2px; }
+  .ctx-item .ci-name { min-width: 0; font-size: 12.5px; }
+  .ctx-item .ci-name span { display: block; color: var(--text-muted); font-size: 11.5px; }
+  .ctx-item .ci-tok { font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+  .ctx-item.off .ci-name, .ctx-item.off .ci-tok { color: var(--text-muted); text-decoration: line-through; text-decoration-color: var(--axis); }
+  .ctx-empty { padding: 14px 13px; color: var(--text-muted); font-size: 12.5px; }
+
+  .meter { padding: 10px 13px 12px; border-top: 1px solid var(--grid); }
+  .meter .row { display: flex; align-items: baseline; justify-content: space-between; font-size: 12px; color: var(--text-muted); }
+  .meter .track { height: 6px; border-radius: 3px; background: var(--surface-sunken); margin-top: 6px; overflow: hidden; }
+  .meter .track i { display: block; height: 100%; background: var(--series-1); border-radius: 3px; transition: width .3s ease; }
+
+  pre.preview {
+    margin: 0; padding: 11px 13px 13px; border-top: 1px solid var(--grid);
+    font-size: 11.5px; line-height: 1.5; color: var(--text-secondary);
+    white-space: pre-wrap; word-break: break-word;
+    max-height: 260px; overflow: auto;
+  }
+  pre.preview .c { color: var(--text-muted); }
+  pre.preview .h { color: var(--text-primary); font-weight: 600; }
+
+  /* ---------------------------------------------------------------- chart */
+  figure.chart { margin: 0; }
+  .chart-head { padding: 11px 13px 4px; }
+  .chart-head .ct { font-size: 13px; font-weight: 600; letter-spacing: -0.005em; }
+  .chart-head .cs { font-size: 11.5px; color: var(--text-muted); margin-top: 1px; }
+  .legend { display: flex; gap: 14px; padding: 6px 13px 2px; font-size: 12px; color: var(--text-secondary); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .swatch { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+  .plot-wrap { position: relative; padding: 2px 13px 10px; }
+  svg.plot { display: block; width: 100%; height: 168px; overflow: visible; }
+  .tip {
+    position: absolute; pointer-events: none; opacity: 0;
+    transform: translate(-50%, -100%);
+    background: var(--surface-1); border: 1px solid var(--border-strong); border-radius: 7px;
+    box-shadow: var(--shadow); padding: 7px 9px; font-size: 12px; white-space: nowrap;
+    transition: opacity .1s ease;
+  }
+  .tip.on { opacity: 1; }
+  .tip .tt { font-weight: 600; margin-bottom: 3px; }
+  .tip .tr { display: flex; align-items: center; gap: 6px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+  .chart-foot { padding: 0 13px 12px; display: flex; align-items: center; gap: 10px; }
+  .chart-foot .fn { font-size: 11.5px; color: var(--text-muted); flex: 1; }
+  .spark-cap {
+    display: flex; align-items: baseline; gap: 8px;
+    padding: 2px 13px 0; font-size: 11.5px; color: var(--text-muted);
+  }
+  .spark-cap b { color: var(--text-secondary); font-weight: 560; }
+  svg.spark { display: block; width: 100%; height: 46px; overflow: visible; padding: 0 13px 8px; }
+  table.dt { width: 100%; border-collapse: collapse; font-size: 12px; display: none; }
+  table.dt.on { display: table; }
+  table.dt th, table.dt td { text-align: right; padding: 4px 13px; border-bottom: 1px solid var(--grid); font-variant-numeric: tabular-nums; }
+  table.dt th:first-child, table.dt td:first-child { text-align: left; }
+  table.dt th { color: var(--text-muted); font-weight: 560; }
+
+  .note {
+    font-size: 12.5px; color: var(--text-secondary); line-height: 1.6;
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px;
+    padding: 12px 14px;
+  }
+  .note b { color: var(--text-primary); }
+  .kbd {
+    font: 11px ui-monospace, Menlo, monospace; padding: 1px 5px; border-radius: 4px;
+    border: 1px solid var(--border-strong); background: var(--surface-2); color: var(--text-secondary);
+  }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <h1>Context Blocks</h1>
+    <p>a thread that curates its context instead of accumulating one</p>
+  </div>
+  <div class="spacer"></div>
+  <div class="controls">
+    <button class="ghost" id="btn-back" title="Previous step (←)">◂</button>
+    <span class="step-count" id="stepc">0 / 7</span>
+    <button class="primary" id="btn-step" title="Next step (→)">Step ▸</button>
+    <button id="btn-play">Play</button>
+    <button class="ghost" id="btn-reset" title="Start over">Reset</button>
+    <button class="ghost" id="btn-theme" title="Toggle theme">◐</button>
+  </div>
+</header>
+
+<main>
+  <section>
+    <div class="stats">
+      <div class="tile accent">
+        <div class="k">Context now</div>
+        <div class="v" id="stat-ctx">930</div>
+        <div class="s" id="stat-ctx-sub">2 documents composed from the corpus</div>
+      </div>
+      <div class="tile muted">
+        <div class="k">Discarded</div>
+        <div class="v" id="stat-disc">0</div>
+        <div class="s">resolved into the blocks above, then dropped</div>
+      </div>
+      <div class="tile">
+        <div class="k">Running conversation</div>
+        <div class="v" id="stat-run">930</div>
+        <div class="s" id="stat-ratio">same work, kept inline</div>
+      </div>
+    </div>
+
+    <div class="thread-head">
+      <h2>Thread</h2>
+      <span class="hint">per-agent configuration for <code>@agent</code> modules</span>
+    </div>
+    <div id="thread"></div>
+    <div class="thread-end" id="thread-end">
+      <b>Press Step</b> to work the thread. Each block spends a sub-conversation, keeps
+      only what it resolved to, and drops the rest — so the context the next block
+      inherits is the synthesized truth, not the transcript that produced it.
+    </div>
+  </section>
+
+  <aside class="inspector">
+    <div class="panel">
+      <h3>Context <span class="count" id="ctx-count">2 items</span></h3>
+      <div class="ctx-list" id="ctx-list"></div>
+      <div class="meter">
+        <div class="row"><span>composed</span><span id="meter-val">930 / 8,000</span></div>
+        <div class="track"><i id="meter-bar" style="width:11%"></i></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <figure class="chart">
+        <div class="chart-head">
+          <div class="ct">Context carried into each step</div>
+          <div class="cs">tokens the next model call has to read</div>
+        </div>
+        <div class="legend">
+          <span><i class="swatch" style="background:var(--series-2)"></i>Running conversation</span>
+          <span><i class="swatch" style="background:var(--series-1)"></i>Curated thread</span>
+        </div>
+        <div class="plot-wrap">
+          <svg class="plot" id="plot" viewBox="0 0 340 168" preserveAspectRatio="none" role="img"
+               aria-label="Line chart comparing context size across thread steps"></svg>
+          <div class="tip" id="tip"></div>
+        </div>
+        <div class="spark-cap"><b>Curated thread alone</b><span>own scale — the flat line above, unflattened</span></div>
+        <svg class="spark" id="spark" role="img" aria-label="Curated thread context size, on its own scale"></svg>
+        <table class="dt" id="dtable"><caption class="visually-hidden"></caption></table>
+        <div class="chart-foot">
+          <span class="fn">Running conversation = the same exploration and tool calls left inline in one thread.</span>
+          <button id="btn-table">Table</button>
+        </div>
+      </figure>
+    </div>
+
+    <div class="note">
+      <b>Try pruning.</b> Untick anything in Context — the block dims in the thread and
+      the composed size drops. Context is a set you edit, not a log you append to.
+      <span class="kbd">←</span> <span class="kbd">→</span> to step.
+    </div>
+
+    <div class="panel">
+      <h3>What the next block will see</h3>
+      <pre class="preview" id="preview"></pre>
+    </div>
+  </aside>
+</main>
+
+<style>
+  table.dt caption { display: none; }
+  .visually-hidden { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); }
+</style>
+
+<script>
+"use strict";
+
+/* ------------------------------------------------------------------ data */
+
+const CORPUS = [
+  {
+    id: "glossary/workspace", kind: "glossary", tokens: 410, verified: "355c84d",
+    title: "Workspace, changeset, staged commit and mount",
+    body: "Four words this codebase uses in its own way. A Workspace is the project as an immutable value; every with… returns a new one. A changeset is the pending edits; Workspace.git.uncommitted holds them. A staged commit exists in the workspace value only, until the session is saved. A mount is readable by the file tools but never enters the changeset."
+  },
+  {
+    id: "facts/agent-middlewares-fold-alphabetically", kind: "fact", tokens: 520, verified: "5be6a6b",
+    title: "@agent middlewares fold onto one LLM in alphabetical module:fn order",
+    body: "A module contributes tools and prompts by marking one function @agent, shaped agent(base: LLM!): LLM!. base is injected by the engine — the running accumulator, not a user argument — which is what lets the fold call every marked function as a zero-argument leaf. AgentMiddlewareGroup.compose threads one LLM through the selected leaves in path order."
+  }
+];
+
+const BLOCKS = [
+  {
+    id: "q", kind: "question", glyph: "?",
+    title: "How should an installed @agent module be configured per project?",
+    sub: "opened by you",
+    kept: [{
+      id: "q.framing", label: "Framing", tokens: 180,
+      text: "@agent leaves are auto-constructed with no arguments, so configuration cannot arrive as a tool argument or as an argument to compose. It has to come from somewhere the engine already threads through construction."
+    }],
+    discarded: {
+      label: "3 messages", tokens: 2100,
+      transcript: [
+        { who: "you", what: "editor and librarian both want per-project settings. Where does that even go today?" },
+        { who: "agent", what: "Two readings: configuration of the agent middleware itself, or of the module that owns it. Which one do you mean?" },
+        { who: "you", what: "The module. The middleware should stay argument-free — that's the whole reason the fold works." }
+      ]
+    }
+  },
+  {
+    id: "explore", kind: "explore", glyph: "◎",
+    title: "How does configuration reach a module today?",
+    sub: "sub-agent · its transcript never enters this thread",
+    kept: [
+      { id: "explore.f1", label: "fact", tokens: 110,
+        text: "dagger.toml settings bind to the module's <em>new()</em> constructor arguments; a module with no explicit new() binds them to its public fields." },
+      { id: "explore.f2", label: "fact", tokens: 95,
+        text: "The rollup auto-constructs an @agent leaf's owner with defaults only, so today a leaf sees exactly its declared defaults." },
+      { id: "explore.f3", label: "fact", tokens: 120,
+        text: "<em>Workspace!</em> and <em>LLM!</em> arguments are injected by the engine and hidden from the model — type-driven injection already exists, and is the precedent for anything else the engine wants to thread in." }
+    ],
+    discarded: {
+      label: "22 tool calls", tokens: 41300,
+      transcript: [
+        { who: "sub-agent", what: "grep -n 'settings' core/schema/workspace.go", tool: true },
+        { who: "result", what: "moduleSettings :585 · settingsFor :2410 · applySettings :2477 … 46 hits", tool: true },
+        { who: "sub-agent", what: "read core/modtree.go:640-720", tool: true },
+        { who: "result", what: "DagqlValue constructs the owner with no arguments; defaults only", tool: true },
+        { who: "sub-agent", what: "read modules/contributor/main.dang:66-101", tool: true },
+        { who: "result", what: "new(githubToken: Secret = null, remote: String! = \"\") { self.token = … }", tool: true },
+        { who: "sub-agent", what: "read core/modfunc.go:628-700 · loadWorkspaceArg :1200", tool: true },
+        { who: "result", what: "DynamicInputsForCall collects Workspace args and fills them from ctx", tool: true },
+        { who: "sub-agent", what: "… 14 more calls", tool: true }
+      ]
+    }
+  },
+  {
+    id: "options", kind: "options", glyph: "⋔",
+    title: "Three shapes for per-agent configuration",
+    sub: "worked through in the open",
+    kept: [{
+      id: "options.set", label: "Options on the table", tokens: 340,
+      text: "<b>A. Module settings.</b> The agent reads its own constructor fields; dagger.toml already binds them. No new mechanism, but configuration is per-module, not per-agent-function.<br><b>B. Arguments on compose.</b> Explicit and per-agent, but puts user arguments back into the fold, which is exactly what the middleware contract forbids.<br><b>C. A separate agents.toml.</b> Per-agent and out of the fold, but a second configuration file with its own resolution rules."
+    }],
+    discarded: {
+      label: "9 messages", tokens: 12400,
+      transcript: [
+        { who: "agent", what: "Sketching B first: compose(base:, config: JSON) would work, but every leaf then has to be handed its slice of the config…" },
+        { who: "you", what: "That reintroduces the argument the injection was designed to avoid." },
+        { who: "agent", what: "Agreed. C avoids it but duplicates the settings resolution that dagger.toml already does — envs, cmd://, file:// …" },
+        { who: "you", what: "How many modules actually expose more than one @agent function?" },
+        { who: "agent", what: "In this workspace, none. The per-module granularity of A costs nothing today." },
+        { who: "…", what: "4 more messages" }
+      ]
+    }
+  },
+  {
+    id: "decision", kind: "decision", glyph: "✓",
+    title: "Configure agents through module settings; keep compose argument-free",
+    sub: "grounded in the facts above",
+    kept: [{
+      id: "decision.d1", label: "Decision", tokens: 260,
+      text: "An @agent module is configured through its own dagger.toml settings, read off its constructor. compose gains no arguments.<br><em>Rejected: arguments on compose</em> — puts a user-supplied argument back into a fold whose whole premise is zero-argument leaves.<br><em>Rejected: a separate agents.toml</em> — duplicates settings resolution (env://, cmd://, file://) for a granularity no module in the workspace needs yet.<br><em>Revisit when</em> one module ships two @agent functions that need different configuration."
+    }],
+    discarded: {
+      label: "6 messages", tokens: 7800,
+      transcript: [
+        { who: "agent", what: "Then the decision is A, with the per-agent case explicitly deferred." },
+        { who: "you", what: "Record what would make us revisit it. That's the part that always gets lost." },
+        { who: "…", what: "4 more messages" }
+      ]
+    }
+  },
+  {
+    id: "design", kind: "design", glyph: "◈",
+    title: "Per-agent configuration via module settings",
+    sub: "the synthesized artifact",
+    kept: [{
+      id: "design.d1", label: "Design", tokens: 640,
+      text: "Settings already resolve per module and per environment. An @agent module declares a new() whose arguments are its configuration; the rollup constructs the owner through the settings-aware path instead of the bare default path, so a leaf is built with the project's values before base is threaded in.<br>Three edits: resolve settings in ModTreeNode.DagqlValue before construction; validate that every settings key matches a constructor argument, so a typo fails loudly at enumeration; document the contract next to the @agent marker.<br>Nothing about the middleware signature changes, so the ID chain and its replay are untouched."
+    }],
+    discarded: {
+      label: "14 messages", tokens: 19600,
+      transcript: [
+        { who: "agent", what: "Draft 1 resolved settings inside compose — wrong layer, compose does not know which module a leaf came from." },
+        { who: "you", what: "The rollup does. It already carries the originating module." },
+        { who: "agent", what: "Then DagqlValue is the seam. Draft 2…" },
+        { who: "…", what: "11 more messages" }
+      ]
+    }
+  },
+  {
+    id: "build", kind: "build", glyph: "⚒",
+    title: "Implement it",
+    sub: "sub-agent · opens on the composed context, not on this thread",
+    handoff: true,
+    kept: [{
+      id: "build.r1", label: "Result", tokens: 210,
+      text: "3 files changed: core/modtree.go, core/schema/agents.go, core/typedef.go. Settings now resolve before an @agent owner is constructed, and an unknown settings key fails at enumeration with the module and key named. 4 tests added."
+    }],
+    discarded: {
+      label: "34 tool calls", tokens: 58900,
+      transcript: [
+        { who: "sub-agent", what: "read core/modtree.go:600-700", tool: true },
+        { who: "sub-agent", what: "edit core/modtree.go — thread settings into DagqlValue", tool: true },
+        { who: "sub-agent", what: "dagger check agents:*", tool: true },
+        { who: "result", what: "FAIL AgentsSuite/TestComposeToolset — settings resolved twice", tool: true },
+        { who: "sub-agent", what: "edit core/modtree.go — memoize per node", tool: true },
+        { who: "result", what: "PASS 17 checks", tool: true },
+        { who: "…", what: "28 more calls" }
+      ]
+    }
+  },
+  {
+    id: "promote", kind: "promote", glyph: "↑",
+    title: "Promote the thread into the corpus",
+    sub: "what outlives the thread",
+    kept: [],
+    writes: [
+      "context/facts/settings-bind-to-constructor-args.md",
+      "context/facts/agent-leaves-construct-with-defaults.md",
+      "context/facts/engine-injected-arguments-are-hidden.md",
+      "context/decisions/agents-are-configured-by-module-settings.md",
+      "context/designs/per-agent-configuration.md"
+    ],
+    checks: ["context:lint", "context:assertions · 17", "context:drifted"],
+    discarded: {
+      label: "5 messages", tokens: 2970,
+      transcript: [
+        { who: "agent", what: "docWrite facts/settings-bind-to-constructor-args — assertions checked before write", tool: true },
+        { who: "result", what: "Wrote /context/facts/settings-bind-to-constructor-args.md — fact/active — verified at 2605ac7", tool: true },
+        { who: "…", what: "3 more messages" }
+      ]
+    }
+  }
+];
+
+const BUDGET = 8000;
+
+/* ----------------------------------------------------------------- state */
+
+const state = {
+  step: 0,                 // 0 = seeded, N = N blocks resolved
+  working: false,
+  off: new Set(),          // context item ids that have been pruned
+  openTranscripts: new Set(),
+  table: false,
+  playing: false,
+  timer: null
+};
+
+/* ------------------------------------------------------------- utilities */
+
+const $ = (s) => document.querySelector(s);
+const fmt = (n) => n.toLocaleString("en-US");
+const kfmt = (n) => n >= 10000 ? (n / 1000).toFixed(0) + "k" : n >= 1000 ? (n / 1000).toFixed(1) + "k" : String(n);
+const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+const seedTokens = () => CORPUS.reduce((a, d) => a + d.tokens, 0);
+const blockKept = (b) => b.kept.reduce((a, k) => a + k.tokens, 0);
+
+// Every context item available at the current step, in composition order.
+function contextItems() {
+  const items = CORPUS.map((d) => ({
+    id: d.id, name: d.id, sub: d.title, tokens: d.tokens, origin: "corpus", ref: "corpus"
+  }));
+  for (let i = 0; i < state.step; i++) {
+    const b = BLOCKS[i];
+    for (const k of b.kept) {
+      items.push({ id: k.id, name: b.id + " · " + k.label.toLowerCase(), sub: b.title, tokens: k.tokens, origin: "block", ref: b.id });
+    }
+  }
+  return items;
+}
+const liveTokens = () => contextItems().filter((i) => !state.off.has(i.id)).reduce((a, i) => a + i.tokens, 0);
+
+// Scripted series: index 0 is the seeded context, index i is after block i-1.
+function series() {
+  const curated = [seedTokens()];
+  const running = [seedTokens()];
+  for (const b of BLOCKS) {
+    curated.push(curated[curated.length - 1] + blockKept(b));
+    running.push(running[running.length - 1] + blockKept(b) + b.discarded.tokens);
+  }
+  return { curated, running };
+}
+const discardedSoFar = () => BLOCKS.slice(0, state.step).reduce((a, b) => a + b.discarded.tokens, 0);
+
+/* --------------------------------------------------------------- render */
+
+function badgeClass(kind) {
+  return "badge b-" + kind;
+}
+
+function renderThread() {
+  const host = $("#thread");
+  host.innerHTML = "";
+  for (let i = 0; i < state.step; i++) {
+    const b = BLOCKS[i];
+    const working = state.working && i === state.step - 1;
+    host.appendChild(renderBlock(b, working, i));
+  }
+  $("#thread-end").style.display = state.step === 0 ? "" : "none";
+}
+
+function renderBlock(b, working, index) {
+  const el = document.createElement("div");
+  el.className = "block";
+  el.dataset.kind = b.kind;
+  el.dataset.ref = b.id;
+  if (state.openTranscripts.has(b.id)) el.classList.add("open-transcript");
+
+  const kept = blockKept(b);
+  const allOff = b.kept.length > 0 && b.kept.every((k) => state.off.has(k.id));
+  if (allOff) el.classList.add("dimmed");
+
+  let body = "";
+  if (working) {
+    body = `<div class="working">
+      <div class="bar"><i></i></div>
+      <div class="wnote" data-count>working — 0 tokens spent</div>
+    </div>`;
+  } else {
+    if (b.handoff) {
+      const items = contextItemsAtBlock(index);
+      body += `<div class="handoff"><b>Opened with ${items.length} items, ${fmt(items.reduce((a, i2) => a + i2.tokens, 0))} tokens</b> — and none of the thread above it:
+        <ul>${items.map((i2) => `<li>${esc(i2.name)}</li>`).join("")}</ul></div>`;
+    }
+    if (b.kept.length) {
+      body += `<div class="kept"><div class="kept-label">kept in context · ${fmt(kept)} tokens</div>` +
+        b.kept.map((k) => `<div class="kept-item${state.off.has(k.id) ? " off" : ""}" data-item="${k.id}">
+            <div class="ki-label">${esc(k.label)}</div>
+            <div class="ki-text">${k.text}</div>
+          </div>`).join("") + `</div>`;
+    }
+    if (b.writes) {
+      body += `<div class="kept"><div class="kept-label">written to the corpus</div>` +
+        `<div class="kept-item"><div class="ki-text mono" style="font-size:12px">${b.writes.map(esc).join("<br>")}</div></div></div>`;
+    }
+    if (b.checks) {
+      body += `<div class="checks">${b.checks.map((c) => `<span class="check">✓ ${esc(c)}</span>`).join("")}</div>`;
+    }
+  }
+
+  const costLabel = b.kept.length ? `<b>+${fmt(kept)}</b>kept` : `<b>+0</b>kept`;
+
+  el.innerHTML = `
+    <div class="rail"><div class="glyph">${b.glyph}</div></div>
+    <div class="card">
+      <div class="card-head">
+        <span class="${badgeClass(b.kind)}">${b.kind}</span>
+        <div class="title">${esc(b.title)}<small>${esc(b.sub)}</small></div>
+        <div class="cost">${costLabel}</div>
+      </div>
+      ${body}
+      ${working ? "" : `<div class="discard">
+        <span class="dot"></span>
+        <span class="strike">${esc(b.discarded.label)} · ${fmt(b.discarded.tokens)} tokens</span>
+        <span>discarded</span>
+        <button data-toggle="${b.id}">${state.openTranscripts.has(b.id) ? "hide" : "peek"}</button>
+      </div>
+      <div class="transcript">
+        <div class="tnote"><span class="dot"></span>this is not in context — it resolved into the block above and was dropped</div>
+        ${b.discarded.transcript.map((m) => `<div class="msg"><div class="who">${esc(m.who)}</div><div class="what${m.tool ? " tool" : ""}">${esc(m.what)}</div></div>`).join("")}
+      </div>`}
+    </div>`;
+  return el;
+}
+
+// What a sub-agent opening at block `index` receives: the corpus plus every
+// kept item from the blocks before it, minus anything pruned.
+function contextItemsAtBlock(index) {
+  const items = CORPUS.map((d) => ({ id: d.id, name: d.id, tokens: d.tokens }));
+  for (let i = 0; i < index; i++) {
+    for (const k of BLOCKS[i].kept) {
+      if (!state.off.has(k.id)) items.push({ id: k.id, name: BLOCKS[i].id + " · " + k.label.toLowerCase(), tokens: k.tokens });
+    }
+  }
+  return items.filter((i2) => !state.off.has(i2.id));
+}
+
+function renderContext() {
+  const items = contextItems();
+  const host = $("#ctx-list");
+  host.innerHTML = items.map((i2) => `
+    <label class="ctx-item${state.off.has(i2.id) ? " off" : ""}" data-ref="${i2.ref}" data-item="${i2.id}">
+      <input type="checkbox" ${state.off.has(i2.id) ? "" : "checked"} data-id="${i2.id}">
+      <span class="ci-name">${esc(i2.name)}<span>${esc(i2.sub)}</span></span>
+      <span class="ci-tok">${fmt(i2.tokens)}</span>
+    </label>`).join("");
+  const on = items.filter((i2) => !state.off.has(i2.id));
+  $("#ctx-count").textContent = on.length + (on.length === 1 ? " item" : " items");
+  const live = liveTokens();
+  $("#meter-val").textContent = fmt(live) + " / " + fmt(BUDGET);
+  $("#meter-bar").style.width = Math.min(100, (live / BUDGET) * 100).toFixed(1) + "%";
+}
+
+function renderPreview() {
+  const items = contextItems().filter((i2) => !state.off.has(i2.id));
+  const live = liveTokens();
+  const corpus = items.filter((i2) => i2.origin === "corpus");
+  const blocks = items.filter((i2) => i2.origin === "block");
+  let out = "";
+  out += `<span class="c"># Composed context — ${items.length} item(s), ~${fmt(live)} tokens\n`;
+  out += `# from: corpus(${corpus.length}) · resolved blocks(${blocks.length})\n`;
+  out += `# no conversation history</span>\n\n`;
+  for (const d of CORPUS) {
+    if (state.off.has(d.id)) continue;
+    out += `<span class="h">## ${esc(d.id)} — ${esc(d.title)}</span>\n`;
+    out += `<span class="c">&lt;!-- kind: ${d.kind} · verified at ${d.verified} --&gt;</span>\n`;
+    out += esc(d.body) + "\n\n";
+  }
+  for (let i = 0; i < state.step; i++) {
+    const b = BLOCKS[i];
+    for (const k of b.kept) {
+      if (state.off.has(k.id)) continue;
+      out += `<span class="h">## ${esc(b.id)}/${esc(k.label.toLowerCase())} — ${esc(b.title)}</span>\n`;
+      out += `<span class="c">&lt;!-- ${b.kind} · resolved from ${esc(b.discarded.label)} --&gt;</span>\n`;
+      out += esc(k.text.replace(/<br>/g, "\n").replace(/<\/?(b|em)>/g, "")) + "\n\n";
+    }
+  }
+  $("#preview").innerHTML = out.trimEnd();
+}
+
+function renderStats() {
+  const live = liveTokens();
+  const s = series();
+  $("#stat-ctx").textContent = fmt(live);
+  const items = contextItems().filter((i2) => !state.off.has(i2.id));
+  const nCorpus = items.filter((i2) => i2.origin === "corpus").length;
+  const nBlocks = items.filter((i2) => i2.origin === "block").length;
+  $("#stat-ctx-sub").textContent = nBlocks === 0
+    ? `${nCorpus} document${nCorpus === 1 ? "" : "s"} composed from the corpus`
+    : `${nCorpus} corpus · ${nBlocks} resolved from ${state.step} block${state.step === 1 ? "" : "s"}`;
+  $("#stat-disc").textContent = fmt(discardedSoFar());
+  const run = s.running[state.step];
+  $("#stat-run").textContent = fmt(run);
+  const ratio = live > 0 ? run / live : 1;
+  $("#stat-ratio").textContent = state.step === 0 ? "same work, kept inline" : `${ratio.toFixed(0)}× the context, same work`;
+  $("#stepc").textContent = state.step + " / " + BLOCKS.length;
+  $("#btn-step").disabled = state.step >= BLOCKS.length;
+  $("#btn-back").disabled = state.step === 0;
+  $("#btn-play").textContent = state.playing ? "Pause" : "Play";
+  $("#btn-play").disabled = state.step >= BLOCKS.length && !state.playing;
+}
+
+/* ---------------------------------------------------------------- chart */
+
+const PAD = { l: 36, r: 46, t: 10, b: 22 };
+
+function niceCeil(v) {
+  const mag = Math.pow(10, Math.floor(Math.log10(v)));
+  for (const m of [1, 2, 2.5, 5, 10]) if (v <= m * mag) return m * mag;
+  return 10 * mag;
+}
+
+function renderChart() {
+  const svg = $("#plot");
+  svg.removeAttribute("preserveAspectRatio");
+  const W = Math.max(240, svg.clientWidth || svg.parentNode.clientWidth - 26);
+  const H = 168;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+
+  const s = series();
+  const live = liveTokens();
+  const curated = s.curated.slice();
+  curated[state.step] = live;                       // pruning moves the live point
+
+  const yMax = niceCeil(s.running[s.running.length - 1]);
+  const n = BLOCKS.length;                          // last index
+  const x = (i) => PAD.l + (i / n) * (W - PAD.l - PAD.r);
+  const y = (v) => H - PAD.b - (v / yMax) * (H - PAD.t - PAD.b);
+
+  const ticks = [0, yMax / 4, yMax / 2, (yMax * 3) / 4, yMax];
+  let g = "";
+  for (const t of ticks) {
+    g += `<line x1="${PAD.l}" y1="${y(t).toFixed(1)}" x2="${(W - PAD.r).toFixed(1)}" y2="${y(t).toFixed(1)}"
+            stroke="var(--grid)" stroke-width="1" shape-rendering="crispEdges"/>`;
+    g += `<text x="${PAD.l - 7}" y="${(y(t) + 3.5).toFixed(1)}" text-anchor="end"
+            font-size="10" fill="var(--text-muted)" style="font-variant-numeric:tabular-nums">${t === 0 ? "0" : kfmt(t)}</text>`;
+  }
+  g += `<line x1="${PAD.l}" y1="${H - PAD.b}" x2="${(W - PAD.r).toFixed(1)}" y2="${H - PAD.b}"
+          stroke="var(--axis)" stroke-width="1" shape-rendering="crispEdges"/>`;
+  for (let i = 0; i <= n; i++) {
+    g += `<text x="${x(i).toFixed(1)}" y="${H - PAD.b + 13}" text-anchor="middle"
+            font-size="10" fill="var(--text-muted)" style="font-variant-numeric:tabular-nums">${i}</text>`;
+  }
+
+  const upto = state.step;
+  const path = (arr, color) => {
+    const pts = [];
+    for (let i = 0; i <= upto; i++) pts.push(`${x(i).toFixed(1)},${y(arr[i]).toFixed(1)}`);
+    if (pts.length === 1) {
+      return `<circle cx="${x(0).toFixed(1)}" cy="${y(arr[0]).toFixed(1)}" r="3" fill="${color}"/>`;
+    }
+    return `<polyline points="${pts.join(" ")}" fill="none" stroke="${color}"
+              stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+  };
+  g += path(s.running, "var(--series-2)");
+  g += path(curated, "var(--series-1)");
+
+  // Endpoint markers, with a surface ring so the two never merge visually.
+  const cap = (arr, color) => `<circle cx="${x(upto).toFixed(1)}" cy="${y(arr[upto]).toFixed(1)}" r="4"
+      fill="${color}" stroke="var(--surface-1)" stroke-width="2"/>`;
+  g += cap(s.running, "var(--series-2)");
+  g += cap(curated, "var(--series-1)");
+
+  // Direct labels once the two series have separated enough to read.
+  if (upto >= 2) {
+    const lab = (arr, color, dy) => `
+      <text x="${(x(upto) + 9).toFixed(1)}" y="${(y(arr[upto]) + dy).toFixed(1)}"
+        font-size="11" font-weight="600" fill="var(--text-primary)"
+        style="font-variant-numeric:tabular-nums">${kfmt(arr[upto])}</text>`;
+    g += lab(s.running, "var(--series-2)", 4);
+    g += lab(curated, "var(--series-1)", 4);
+  }
+
+  // Hover targets.
+  for (let i = 0; i <= upto; i++) {
+    const w = (W - PAD.l - PAD.r) / n;
+    g += `<rect x="${(x(i) - w / 2).toFixed(1)}" y="${PAD.t}" width="${w.toFixed(1)}" height="${H - PAD.t - PAD.b}"
+            fill="transparent" data-i="${i}" style="cursor:crosshair"/>`;
+  }
+  g += `<line id="cross" x1="0" y1="${PAD.t}" x2="0" y2="${H - PAD.b}" stroke="var(--axis)" stroke-width="1" opacity="0"/>`;
+  svg.innerHTML = g;
+
+  svg.querySelectorAll("rect[data-i]").forEach((r) => {
+    r.addEventListener("mouseenter", () => showTip(+r.dataset.i, x, y, s.running, curated));
+    r.addEventListener("mousemove", () => showTip(+r.dataset.i, x, y, s.running, curated));
+    r.addEventListener("mouseleave", hideTip);
+  });
+
+  renderSpark(curated, W);
+  renderTable(s.running, curated);
+}
+
+// The curated series is ~2% of the running series, so on the shared scale it is
+// a flat line on the axis. That comparison is the headline and stays; this small
+// multiple carries its shape, on its own scale, so hovering is not the only way
+// to read it.
+function renderSpark(curated, W) {
+  const svg = $("#spark");
+  const H = 46, pad = { l: 0, r: 46, t: 7, b: 7 };
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  const n = BLOCKS.length;
+  const hi = niceCeil(Math.max(...curated));
+  const x = (i) => pad.l + (i / n) * (W - pad.l - pad.r);
+  const y = (v) => H - pad.b - (v / hi) * (H - pad.t - pad.b);
+  const pts = [];
+  for (let i = 0; i <= state.step; i++) pts.push(`${x(i).toFixed(1)},${y(curated[i]).toFixed(1)}`);
+  let g = `<line x1="0" y1="${H - pad.b}" x2="${(W - pad.r).toFixed(1)}" y2="${H - pad.b}"
+             stroke="var(--grid)" stroke-width="1" shape-rendering="crispEdges"/>`;
+  g += pts.length > 1
+    ? `<polyline points="${pts.join(" ")}" fill="none" stroke="var(--series-1)" stroke-width="2"
+         stroke-linejoin="round" stroke-linecap="round"/>`
+    : "";
+  g += `<circle cx="${x(state.step).toFixed(1)}" cy="${y(curated[state.step]).toFixed(1)}" r="4"
+          fill="var(--series-1)" stroke="var(--surface-1)" stroke-width="2"/>`;
+  g += `<text x="${(x(state.step) + 9).toFixed(1)}" y="${(y(curated[state.step]) + 4).toFixed(1)}"
+          font-size="11" font-weight="600" fill="var(--text-primary)"
+          style="font-variant-numeric:tabular-nums">${fmt(curated[state.step])}</text>`;
+  svg.innerHTML = g;
+}
+
+function showTip(i, x, y, running, curated) {
+  const tip = $("#tip");
+  const cross = $("#cross");
+  const label = i === 0 ? "seeded from the corpus" : BLOCKS[i - 1].kind + " · " + BLOCKS[i - 1].id;
+  cross.setAttribute("x1", x(i)); cross.setAttribute("x2", x(i)); cross.setAttribute("opacity", "1");
+  tip.innerHTML = `<div class="tt">step ${i} — ${esc(label)}</div>
+    <div class="tr"><i class="swatch" style="background:var(--series-2)"></i>${fmt(running[i])} running</div>
+    <div class="tr"><i class="swatch" style="background:var(--series-1)"></i>${fmt(curated[i])} curated</div>`;
+  const wrap = $(".plot-wrap");
+
+  tip.style.left = (13 + x(i)) + "px";
+  tip.style.top = (Math.min(y(running[i]), y(curated[i])) - 6) + "px";
+  tip.classList.add("on");
+}
+function hideTip() {
+  $("#tip").classList.remove("on");
+  const c = $("#cross"); if (c) c.setAttribute("opacity", "0");
+}
+
+function renderTable(running, curated) {
+  const t = $("#dtable");
+  let rows = `<tr><th>Step</th><th>Running</th><th>Curated</th></tr>`;
+  for (let i = 0; i <= state.step; i++) {
+    const label = i === 0 ? "seed" : BLOCKS[i - 1].id;
+    rows += `<tr><td>${i} · ${esc(label)}</td><td>${fmt(running[i])}</td><td>${fmt(curated[i])}</td></tr>`;
+  }
+  t.innerHTML = rows;
+  t.classList.toggle("on", state.table);
+}
+
+/* ----------------------------------------------------------------- draw */
+
+function render() {
+  renderThread();
+  renderContext();
+  renderPreview();
+  renderStats();
+  renderChart();
+  wireThread();
+}
+
+/* --------------------------------------------------------- interactions */
+
+let workToken = 0;
+
+// Pressing Step while a block is still resolving skips its animation and
+// moves on, so the demo never makes you wait on a progress bar.
+function finishWork() {
+  workToken++;
+  state.working = false;
+  render();
+}
+
+function step() {
+  if (state.working) finishWork();
+  if (state.step >= BLOCKS.length) return;
+  state.step += 1;
+  state.working = true;
+  render();
+
+  const b = BLOCKS[state.step - 1];
+  const mine = ++workToken;
+  const el = $("#thread").lastElementChild;
+  const counter = el && el.querySelector("[data-count]");
+  const dur = 750, t0 = performance.now();
+
+  function tick(now) {
+    if (mine !== workToken) return;
+    const p = Math.min(1, (now - t0) / dur);
+    if (counter) counter.textContent = `working — ${fmt(Math.round(b.discarded.tokens * p))} tokens spent`;
+    if (p < 1) { requestAnimationFrame(tick); return; }
+    state.working = false;
+    render();
+    if (state.playing && state.step < BLOCKS.length) {
+      state.timer = setTimeout(step, 800);
+    } else if (state.playing) {
+      state.playing = false;
+      renderStats();
+    }
+  }
+  requestAnimationFrame(tick);
+}
+
+function back() {
+  if (state.working) finishWork();
+  if (state.step === 0) return;
+  stopPlay();
+  state.step -= 1;
+  render();
+}
+
+function stopPlay() {
+  state.playing = false;
+  if (state.timer) { clearTimeout(state.timer); state.timer = null; }
+}
+
+function wireThread() {
+  document.querySelectorAll("[data-toggle]").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      const id = btn.dataset.toggle;
+      if (state.openTranscripts.has(id)) state.openTranscripts.delete(id);
+      else state.openTranscripts.add(id);
+      renderThread();
+      wireThread();
+    });
+  });
+  // Two-way highlight between a block and its entries in the context panel.
+  document.querySelectorAll(".block").forEach((el) => {
+    el.addEventListener("mouseenter", () => link(el.dataset.ref, true));
+    el.addEventListener("mouseleave", () => link(el.dataset.ref, false));
+  });
+  document.querySelectorAll(".ctx-item").forEach((el) => {
+    el.addEventListener("mouseenter", () => link(el.dataset.ref, true));
+    el.addEventListener("mouseleave", () => link(el.dataset.ref, false));
+  });
+  document.querySelectorAll(".ctx-item input").forEach((cb) => {
+    cb.addEventListener("change", () => {
+      const id = cb.dataset.id;
+      if (cb.checked) state.off.delete(id); else state.off.add(id);
+      render();
+    });
+  });
+}
+
+function link(ref, on) {
+  if (!ref) return;
+  document.querySelectorAll(`.block[data-ref="${ref}"], .ctx-item[data-ref="${ref}"]`)
+    .forEach((n) => n.classList.toggle("linked", on));
+}
+
+$("#btn-step").addEventListener("click", () => { stopPlay(); step(); renderStats(); });
+$("#btn-back").addEventListener("click", back);
+$("#btn-reset").addEventListener("click", () => {
+  stopPlay();
+  workToken++;
+  state.step = 0; state.working = false;
+  state.off.clear(); state.openTranscripts.clear();
+  render();
+});
+$("#btn-play").addEventListener("click", () => {
+  if (state.playing) { stopPlay(); renderStats(); return; }
+  if (state.step >= BLOCKS.length) {
+    workToken++;
+    state.step = 0; state.working = false; state.off.clear(); state.openTranscripts.clear();
+  }
+  state.playing = true;
+  renderStats();
+  step();
+});
+$("#btn-table").addEventListener("click", () => {
+  state.table = !state.table;
+  $("#btn-table").textContent = state.table ? "Chart" : "Table";
+  renderChart();
+});
+$("#btn-theme").addEventListener("click", () => {
+  const cur = document.documentElement.getAttribute("data-theme");
+  const next = cur === "dark" ? "light" : cur === "light" ? null : "dark";
+  if (next) document.documentElement.setAttribute("data-theme", next);
+  else document.documentElement.removeAttribute("data-theme");
+  try { next ? localStorage.setItem("cb-theme", next) : localStorage.removeItem("cb-theme"); } catch (e) {}
+  renderChart();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.target.tagName === "INPUT") return;
+  if (e.key === "ArrowRight") { e.preventDefault(); stopPlay(); step(); renderStats(); }
+  if (e.key === "ArrowLeft") { e.preventDefault(); back(); }
+});
+let rt = null;
+window.addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(renderChart, 120); });
+
+try {
+  const saved = localStorage.getItem("cb-theme");
+  if (saved) document.documentElement.setAttribute("data-theme", saved);
+} catch (e) {}
+
+render();
+</script>
+</body>
+</html>
