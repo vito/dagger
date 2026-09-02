@@ -1,0 +1,177 @@
+# Pure-logic tests for the context module: everything that does not need a
+# live Workspace — front-matter parsing, the front-matter emitter and its
+# round-trip, id validation, assertion shape, and the small renderers.
+#
+# These do not run as part of the module (a directory module loads only the
+# .dang files beside it, and this one lives in testdata/). Run them offline,
+# with no engine, by assembling a scratch module:
+#
+#   tmp=tmp/ctx-logic
+#   mkdir -p $tmp
+#   cp modules/context/main.dang modules/context/dagger.json \
+#      modules/context/testdata/logic.dang $tmp/
+#   printf '[imports.Dagger]\nschema = "%s/docs/docs-graphql/schema.graphqls"\n' \
+#      "$PWD" > $tmp/dang.toml
+#   dang $tmp
+#
+# Silence is success; a failed assert names the expression and its parts.
+
+let ctx = Context(root: "context")
+
+# ---------------------------------------------------------------- parsing
+
+let sample = """
+---
+title: "A thing is true"
+kind: fact
+status: active
+tags: ["agents", "llm"]
+anchors: ["core/agents.go"]
+asserts: ['core/agents.go ~ func .*Compose\\(']
+tests: ["AgentsSuite/TestComposeToolset"]
+related: ["glossary/workspace"]
+verifiedAt: 5be6a6b6f70bf0269cf0b1a8593995a0f4543b61
+pin: true
+---
+
+The body.
+
+With two paragraphs.
+"""
+
+let parsed = ctx.parse("facts/a-thing", sample)
+
+assert { parsed.id == "facts/a-thing" }
+assert { parsed.meta.title == "A thing is true" }
+assert { parsed.meta.kind == "fact" }
+assert { parsed.meta.status == "active" }
+assert { parsed.meta.tags == ["agents", "llm"] }
+assert { parsed.meta.anchors == ["core/agents.go"] }
+assert { parsed.meta.asserts.length == 1 }
+assert { parsed.meta.tests == ["AgentsSuite/TestComposeToolset"] }
+assert { parsed.meta.related == ["glossary/workspace"] }
+assert { parsed.meta.verifiedAt == "5be6a6b6f70bf0269cf0b1a8593995a0f4543b61" }
+assert { parsed.meta.pin }
+assert { parsed.body == "The body.\n\nWith two paragraphs." }
+
+# Absent fields fall back to the declared defaults, so a minimal document is
+# still a valid one.
+let minimal = ctx.parse("notes/min", """
+---
+title: "Just a note"
+---
+
+Body.
+""")
+assert { minimal.meta.kind == "note" }
+assert { minimal.meta.status == "active" }
+assert { minimal.meta.tags == [] }
+assert { minimal.meta.verifiedAt == "" }
+assert { !minimal.meta.pin }
+
+# A file that is not a document says so, rather than decoding to junk.
+let noFrontMatter = (ctx.parse("x", "just prose\n").id) rescue { e: Error => e.message }
+assert { noFrontMatter.contains("no front matter") }
+
+let unterminated = (ctx.parse("x", "---\ntitle: \"a\"\nstill front matter\n").id) rescue { e: Error => e.message }
+assert { unterminated.contains("not closed") }
+
+let badYaml = (ctx.parse("x", "---\ntitle: [unclosed\n---\n\nbody\n").id) rescue { e: Error => e.message }
+assert { badYaml.contains("not valid YAML") }
+
+# ------------------------------------------------------------- emitting
+
+# What docWrite writes must be what parse reads back: the round trip is the
+# only thing keeping hand-edited and generated documents in one format.
+let meta = DocMeta(
+  title: "Quoted \"title\" with a backslash \\ in it",
+  kind: "decision",
+  status: "superseded",
+  tags: ["a", "b"],
+  anchors: ["core/agents.go", "core/schema/agents.go"],
+  asserts: ["core/agents.go ~ func .*Compose\\("],
+  tests: ["Suite/TestOne"],
+  related: ["glossary/workspace"],
+  supersedes: ["facts/old"],
+  verifiedAt: "deadbeef",
+  pin: true,
+)
+let rendered = ctx.render(meta, "Body text.\n")
+let round = ctx.parse("decisions/x", rendered)
+assert { round.meta.title == meta.title }
+assert { round.meta.kind == meta.kind }
+assert { round.meta.status == meta.status }
+assert { round.meta.tags == meta.tags }
+assert { round.meta.anchors == meta.anchors }
+assert { round.meta.asserts == meta.asserts }
+assert { round.meta.tests == meta.tests }
+assert { round.meta.related == meta.related }
+assert { round.meta.supersedes == meta.supersedes }
+assert { round.meta.verifiedAt == meta.verifiedAt }
+assert { round.meta.pin == meta.pin }
+assert { round.body == "Body text." }
+
+# Empty collections are left out of the file rather than written as [].
+let bare = ctx.render(DocMeta(title: "Bare", kind: "note"), "b")
+assert { !bare.contains("tags:") }
+assert { !bare.contains("verifiedAt:") }
+assert { !bare.contains("pin:") }
+assert { bare.hasPrefix("---\n") }
+assert { ctx.parse("notes/bare", bare).meta.title == "Bare" }
+
+# Re-stamping replaces only the commit.
+let stamped = ctx.stamp(meta, "cafebabe")
+assert { stamped.verifiedAt == "cafebabe" }
+assert { stamped.title == meta.title }
+assert { stamped.anchors == meta.anchors }
+
+# --------------------------------------------------------------- ids
+
+assert { ctx.idOf("facts/a-thing.md") == "facts/a-thing" }
+assert { ctx.docPath("facts/a-thing") == "/context/facts/a-thing.md" }
+assert { ctx.validateId("facts/a-thing") == "facts/a-thing" }
+
+let upper = ctx.validateId("Facts/Thing") rescue { e: Error => e.message }
+assert { upper.contains("not a usable document id") }
+
+let dotdot = ctx.validateId("facts/../escape") rescue { e: Error => e.message }
+assert { dotdot.contains("not a usable document id") }
+
+let suffixed = ctx.validateId("facts/thing.md") rescue { e: Error => e.message }
+assert { suffixed.contains(".md") }
+
+# ---------------------------------------------------------- assertions
+
+assert { ctx.assertShape("x", "core/agents.go ~ func Compose") == [] }
+assert { ctx.assertShape("x", "core/agents.go !~ TODO") == [] }
+assert { ctx.assertShape("x", "core/agents.go") == [] }
+assert { ctx.assertShape("x", "  ").length == 1 }
+assert { ctx.assertShape("x", " ~ pattern").length == 1 }
+assert { ctx.assertShape("x", "core/agents.go ~ ").length == 1 }
+
+# ----------------------------------------------------------- renderers
+
+assert { ctx.title(parsed) == "A thing is true" }
+assert { ctx.title(ctx.parse("notes/untitled", "---\nkind: note\n---\n\nbody\n")) == "notes/untitled" }
+
+assert { ctx.shortSha("5be6a6b6f70bf0269cf0b1a8593995a0f4543b61") == "5be6a6b" }
+assert { ctx.shortSha("") == "(never)" }
+assert { ctx.subject("first line\nsecond line") == "first line" }
+assert { ctx.plain("boom [traceparent:00-abc-def-01]") == "boom" }
+
+assert { ctx.kindName(DocKind.GLOSSARY) == "glossary" }
+assert { ctx.statusName(DocStatus.SUPERSEDED) == "superseded" }
+assert { ctx.stateName(DriftState.DRIFTED) == "drifted" }
+assert { ctx.stateTag(DriftState.DRIFTED) == "[!]" }
+assert { ctx.stateTag(DriftState.FRESH).trimSpace == "" }
+
+let block = ctx.composeBlock(parsed)
+assert { block.hasPrefix("## facts/a-thing — A thing is true") }
+assert { block.contains("anchors: core/agents.go") }
+assert { block.contains("verified at 5be6a6b") }
+assert { block.contains("The body.") }
+
+# The corpus root is configuration, not a constant.
+assert { Context(root: "docs/context").docPath("a") == "/docs/context/a.md" }
+
+print("context module: pure-logic tests passed")

@@ -1,0 +1,1335 @@
+# context: explicit context management for a Dagger coding agent.
+#
+# The premise is that a chat log is a bad place to keep what a project knows.
+# It is append-only, unreviewable, unshareable and it rots in silence: the
+# model happily "remembers" something that stopped being true three commits
+# ago, and the only cure is to start over and re-derive it. Worse, the log is
+# where the *thinking* went — the constraints that were weighed, the option
+# that was rejected and why — and all of it is discarded when the session ends.
+#
+# This module keeps that material instead, as ordinary files in the repository:
+#
+#   context/
+#     glossary/…    what the words mean here
+#     facts/…       small, checkable claims about the code
+#     decisions/…   what was decided and why, once
+#     designs/…     where something is going
+#
+# Four things make that more than a folder of notes an agent could already
+# read and write with the editor tools:
+#
+#   1. COMPOSITION. `docCompose` assembles a bundle from a selection plus the
+#      closure of everything it links to, ordered so definitions land before
+#      the things that use them, deduplicated, and clipped to a budget with an
+#      explicit manifest of what was left out. A session starts by composing
+#      the context it needs, rather than accumulating one by accident.
+#
+#   2. EVIDENCE. A document declares how it is tied to the implementation:
+#      `anchors` (the files it describes), `asserts` (literal claims about
+#      those files, checked mechanically) and `tests` (the tests that
+#      demonstrate it). `docWrite` REFUSES a document whose assertions do not
+#      hold, so a fact that does not check out cannot be recorded in the first
+#      place.
+#
+#   3. DRIFT. Each document records `verifiedAt`: the newest commit touching
+#      its anchors at the moment it was last reconciled. When the anchored code
+#      moves on, the document is drifted, `docStale` names the commits that
+#      moved it, and the `context:drift` check goes red until somebody re-reads
+#      and re-stamps it. That is the whole convergence loop: docs cannot
+#      quietly fall behind the code, because the code changing is what makes
+#      them visibly wrong.
+#
+#   4. COMPOSITION AGAIN, at session start. The @agent middleware folds the
+#      corpus index — and any document marked `pin` — into the system prompt,
+#      so the model opens every session already knowing what the project knows
+#      and what has drifted, without a single message of chat history.
+#
+# Persistence is the repository itself. Documents are markdown with YAML front
+# matter; `docWrite` returns a Workspace, so a write lands in the session's
+# changeset exactly like a source edit — it shows up in `status`/`diff`, gets
+# committed with the code that motivated it, and is reviewed in the same pull
+# request. There is no separate store to sync, and `git log context/` is the
+# history of what the project learned.
+
+"""
+The parsed front matter of a context document.
+
+Every field is optional in the file; the defaults here are what an absent
+field means.
+"""
+type DocMeta {
+  """One-line title. Falls back to the document id when absent."""
+  title: String! = ""
+  """glossary | fact | decision | design | note"""
+  kind: String! = "note"
+  """draft | active | superseded"""
+  status: String! = "active"
+  """Free-form labels, used to select documents for composition."""
+  tags: [String!]! = []
+  """Repository-relative files or directories this document describes."""
+  anchors: [String!]! = []
+  """
+  Mechanically checkable claims, one per entry:
+
+    "<path> ~ <regexp>"    the file must match
+    "<path> !~ <regexp>"   the file must not match
+    "<path>"               the path must exist
+  """
+  asserts: [String!]! = []
+  """Names of the tests that demonstrate this document, for a human to follow."""
+  tests: [String!]! = []
+  """Ids of documents that should be composed alongside this one."""
+  related: [String!]! = []
+  """Ids of documents this one replaces."""
+  supersedes: [String!]! = []
+  """
+  The newest commit touching `anchors` when this document was last reconciled
+  with the code. Empty means never reconciled.
+  """
+  verifiedAt: String! = ""
+  """Fold this document into the agent's system prompt at session start."""
+  pin: Boolean! = false
+}
+
+"""
+A loaded context document: its id, its front matter, and its markdown body.
+"""
+type Doc {
+  id: String!
+  meta: DocMeta!
+  body: String!
+}
+
+enum DocKind { GLOSSARY FACT DECISION DESIGN NOTE }
+enum DocStatus { DRAFT ACTIVE SUPERSEDED }
+
+# How a document stands relative to the code it anchors to.
+enum DriftState {
+  # Its anchors have not moved since it was last reconciled.
+  FRESH
+  # Commits have touched its anchors since it was last reconciled.
+  DRIFTED
+  # It has anchors but has never been reconciled with them.
+  UNVERIFIED
+  # Its anchors have no committed history yet.
+  UNCOMMITTED
+  # It declares no anchors, so nothing ties it to the code.
+  UNANCHORED
+  # Its recorded commit is not in the window, or git could not be read.
+  UNKNOWN
+}
+
+"""
+The project's knowledge as documents: facts, decisions, designs and a
+glossary, kept in the repository, composed into context on purpose, and
+checked against the code that they describe.
+"""
+type Context {
+  # Where the corpus lives, relative to the workspace root. A property of the
+  # project, so it belongs in dagger.toml rather than in a tool argument:
+  #
+  #     [env.dev.modules.context.settings]
+  #     root = "context"
+  let root: String! = "context"
+
+  # Whether `lint` insists that a `fact` carry evidence — an anchor, an
+  # assertion or a named test. On by default: a fact nobody can check is a
+  # rumour, and the point of the corpus is that it cannot fill up with those.
+  let requireEvidence: Boolean! = true
+
+  new(
+    """
+    Directory holding the corpus, relative to the workspace root.
+    """
+    root: String! = "context",
+    """
+    Require every `fact` document to declare an anchor, an assertion or a
+    test, so nothing unverifiable accumulates.
+    """
+    requireEvidence: Boolean! = true,
+  ) {
+    self.root = root
+    self.requireEvidence = requireEvidence
+    self
+  }
+
+  """
+  Compose the context-document tools onto a base LLM, and fold the corpus
+  index — plus any pinned document — into the system prompt.
+  """
+  agent(base: LLM!): LLM! @agent {
+    base
+      .withTools(currentNode)
+      .withSystemPrompt(systemPrompt(base.workspace))
+  }
+
+  # ---------------------------------------------------------------- reading
+
+  """
+  List the context documents: one line each, grouped by kind, with how each
+  one stands relative to the code it describes.
+
+  This is the cheap "what does this project already know?" view. Read it
+  before deriving anything from the source: a fact that is already written
+  down costs one `docRead` instead of a dozen greps. Documents marked
+  DRIFTED describe code that has changed since they were last reconciled —
+  `docStale` says which commits moved them.
+  """
+  docs(
+    ws: Workspace!,
+    """
+    Only list documents of this kind: glossary, fact, decision, design, note.
+    """
+    kind: String! = "",
+    """
+    Only list documents carrying this tag.
+    """
+    tag: String! = "",
+    """
+    Only list documents in this state: draft, active, superseded. Empty
+    lists everything except superseded documents.
+    """
+    status: String! = "",
+    """
+    Also print each document's anchors, tags and evidence.
+    """
+    detail: Boolean! = false,
+  ): String! {
+    let all = loadAll(ws)
+    if (all.isEmpty) {
+      return emptyCorpus
+    }
+    let selected = all.filter { d =>
+      (kind == "" or d.meta.kind == kind) and
+      (tag == "" or d.meta.tags.contains(tag)) and
+      (if (status == "") { d.meta.status != "superseded" } else { d.meta.status == status })
+    }
+    if (selected.isEmpty) {
+      return `No context document matches that filter. ${toString(all.length)} document(s) exist in ${root}/; call docs with no arguments to see them.`
+    }
+
+    let dirty = dirtyPaths(ws)
+    let sections: [String!]! = []
+    kindOrder.each { k =>
+      let group = selected.filter { d => d.meta.kind == k }
+      if (group.isEmpty) {
+        continue
+      }
+      let rows = group.map { d => row(ws, d, dirty, detail) }
+      sections += [k + "\n" + rows.join("\n")]
+    }
+    # Anything carrying a kind the corpus does not know about still has to be
+    # listed, or `lint` would be the only place it ever shows up.
+    let stray = selected.filter { d => !kindOrder.contains(d.meta.kind) }
+    if (!stray.isEmpty) {
+      sections += ["(unknown kind)\n" + stray.map { d => row(ws, d, dirty, detail) }.join("\n")]
+    }
+
+    banner(all) + "\n\n" + sections.join("\n\n") + "\n\n" + legend
+  }
+
+  """
+  Read one or more context documents in full — front matter, body, and how
+  the document stands relative to the code it anchors to.
+
+  Documents are plain markdown files under the corpus directory, so the
+  ordinary file tools work on them too; this renders the parsed form, with
+  the links and the drift state a raw read would not show.
+  """
+  docRead(
+    ws: Workspace!,
+    """
+    Document ids, as printed by `docs` — the path under the corpus
+    directory without the .md suffix, e.g. "facts/agent-composition".
+    """
+    ids: [String!]!,
+  ): String! {
+    if (ids.isEmpty) {
+      raise "docRead needs at least one document id; `docs` lists them"
+    }
+    let dirty = dirtyPaths(ws)
+    ids.map { id => renderDoc(ws, load(ws, id), dirty) }.join("\n\n" + separator + "\n\n")
+  }
+
+  """
+  Search the corpus for a regular expression, in both the front matter and
+  the prose, and report the matching documents with their matching lines.
+
+  Reach for it when you do not know which document holds something —
+  `docs` for the shape of the corpus, `docSearch` for a phrase, `docRead`
+  once you know the id.
+  """
+  docSearch(
+    ws: Workspace!,
+    """
+    Regular expression to look for, matched case-insensitively.
+    """
+    pattern: String!,
+    """
+    Maximum number of matching lines to print per document.
+    """
+    perDoc: Int! = 4,
+  ): String! {
+    let all = loadAll(ws)
+    if (all.isEmpty) {
+      return emptyCorpus
+    }
+    let rx = (("(?i)" + pattern) :: Regexp!) rescue { e: Error =>
+      raise `"${pattern}" is not a valid regular expression: ${plain(e.message)}`
+    }
+    let hits = all.map { d =>
+      let lines = (d.body + "\n" + d.meta.title + "\n" + d.meta.tags.join(" "))
+        .split("\n")
+        .filter { line => line.containsMatch(rx) }
+      {{doc: d, lines: lines}}
+    }.filter { h => !h.lines.isEmpty }
+    if (hits.isEmpty) {
+      return `No context document matches /${pattern}/. ${toString(all.length)} document(s) searched in ${root}/.`
+    }
+    let blocks = hits.map { h =>
+      let shown = h.lines.takeFirst(perDoc)
+      let omitted = h.lines.length - shown.length
+      let more = if (omitted > 0) { "\n    … " + toString(omitted) + " more matching line(s)" } else { "" }
+      `${h.doc.id}  —  ${title(h.doc)}` + "\n" +
+        shown.map { line => "    " + line.trimSpace }.join("\n") + more
+    }
+    `${toString(hits.length)} document(s) match /${pattern}/:` + "\n\n" + blocks.join("\n\n")
+  }
+
+  """
+  Assemble a context bundle: the documents you select, plus the closure of
+  everything they link to, ordered so definitions land before the things that
+  use them, deduplicated, and clipped to a line budget.
+
+  This is the deliberate alternative to letting a conversation accumulate:
+  instead of hoping the right material drifted into the window, name what
+  this task needs — by id, by tag, or by kind — and read the bundle. The
+  manifest at the top says exactly what went in, what was left out for
+  budget, and which of the included documents have drifted from the code, so
+  nothing in your context is there without you knowing why.
+
+  With no selection at all it composes every active document, which is the
+  right move at the start of a task in an unfamiliar area.
+  """
+  docCompose(
+    ws: Workspace!,
+    """
+    Document ids to include. Superseded documents are included only when
+    named here explicitly.
+    """
+    ids: [String!]! = [],
+    """
+    Include every active document carrying any of these tags.
+    """
+    tags: [String!]! = [],
+    """
+    Include every active document of any of these kinds: glossary, fact,
+    decision, design, note.
+    """
+    kinds: [String!]! = [],
+    """
+    How many times to follow `related` links out from the selection. 0 takes
+    the selection literally.
+    """
+    depth: Int! = 1,
+    """
+    Stop after roughly this many lines. Documents that do not fit are named
+    in the manifest instead of being silently dropped.
+    """
+    maxLines: Int! = 1200,
+  ): String! {
+    let all = loadAll(ws)
+    if (all.isEmpty) {
+      return emptyCorpus
+    }
+
+    let named = ids.filter { id => all.any { d => d.id == id } }
+    let missing = ids.filter { id => !all.any { d => d.id == id } }
+    if (!missing.isEmpty) {
+      raise `no such context document(s): ${missing.join(", ")} — call docs to see what exists`
+    }
+    let matched = all.filter { d =>
+      d.meta.status != "superseded" and
+      (tags.any { t => d.meta.tags.contains(t) } or kinds.contains(d.meta.kind))
+    }.map { d => d.id }
+    let seeds = if (named.isEmpty and matched.isEmpty and tags.isEmpty and kinds.isEmpty) {
+      all.filter { d => d.meta.status == "active" }.map { d => d.id }
+    } else {
+      (named + matched).uniq
+    }
+    if (seeds.isEmpty) {
+      return "That selection matches no context document. Call docs to see what the corpus holds."
+    }
+
+    # Follow `related` outward. Links are the corpus's own opinion about what
+    # belongs together — a fact naming the design it came from, a design
+    # naming the glossary entry its vocabulary depends on — so expanding them
+    # is what turns a list of ids into a bundle that reads on its own.
+    let selected = seeds
+    let rounds = 0
+    loop {
+      if (rounds >= depth) {
+        break
+      }
+      let links = all
+        .filter { d => selected.contains(d.id) }
+        .reduce([] :: [String!]!) { acc, d => acc + d.meta.related }
+      let next = (selected + links.filter { r => all.any { c => c.id == r } }).uniq
+      if (next.length == selected.length) {
+        break
+      }
+      selected = next
+      rounds += 1
+    }
+    # A superseded document reached through a link is noise, unless it was
+    # asked for by name.
+    let chosen = all.filter { d =>
+      selected.contains(d.id) and (d.meta.status != "superseded" or ids.contains(d.id))
+    }
+
+    let ordered: [Doc!]! = []
+    kindOrder.each { k =>
+      ordered += chosen.filter { d => d.meta.kind == k }
+    }
+    ordered += chosen.filter { d => !kindOrder.contains(d.meta.kind) }
+
+    let dirty = dirtyPaths(ws)
+    let used = 0
+    let included: [String!]! = []
+    let omitted: [String!]! = []
+    let warned: [String!]! = []
+    let blocks: [String!]! = []
+    ordered.each { d =>
+      let block = composeBlock(d)
+      let lines = block.split("\n").length
+      # Always admit the first document, whatever the budget: a bundle that
+      # is empty because one document is long is worse than one over budget.
+      if (used + lines > maxLines and !included.isEmpty) {
+        omitted += [d.id]
+        continue
+      }
+      let state = driftOf(ws, d, dirty)
+      if (state.state == DriftState.DRIFTED) {
+        warned += [`${d.id} (${state.detail})`]
+      }
+      used += lines
+      included += [d.id]
+      blocks += [block]
+    }
+
+    let manifest: [String!]! = [
+      `# Composed context — ${toString(included.length)} document(s), ~${toString(used)} lines, from ${root}/`,
+      `# included: ${included.join(", ")}`,
+    ]
+    if (!omitted.isEmpty) {
+      manifest += [`# omitted (line budget ${toString(maxLines)}): ${omitted.join(", ")} — raise maxLines or narrow the selection`]
+    }
+    if (!warned.isEmpty) {
+      manifest += ["# DRIFTED — these describe code that has changed since they were verified; trust the code over them, and reconcile:"]
+      manifest += warned.map { w => "#   " + w }
+    }
+    manifest.join("\n") + "\n\n" + blocks.join("\n\n" + separator + "\n\n")
+  }
+
+  # ---------------------------------------------------------------- writing
+
+  """
+  Create or update a context document, and refuse to record one whose
+  assertions do not hold.
+
+  This is how a session leaves something behind. When you work out how a
+  subsystem behaves, why an approach was rejected, or what a word means in
+  this codebase, write it down here instead of leaving it in the
+  conversation: the next session starts from the document, and the
+  conversation is thrown away.
+
+  Give the document evidence. `anchors` are the files it describes — they
+  are what makes drift detectable later. `asserts` are claims about those
+  files that a machine can re-check ("core/agents.go ~ func .*Compose"), and
+  they are verified BEFORE the document is written, so a fact that is
+  already wrong cannot be recorded. `tests` names the tests a human should
+  read to believe it.
+
+  Updating an existing document merges: arguments you leave empty keep
+  whatever the document already had, so a small correction does not have to
+  restate the whole front matter. The write lands in the workspace like any
+  other edit — it shows up in `status`, and it is committed with the code it
+  describes.
+  """
+  docWrite(
+    ws: Workspace!,
+    """
+    Document id: the path under the corpus directory, without the .md
+    suffix, e.g. "facts/agent-composition". Use the conventional folders —
+    glossary/, facts/, decisions/, designs/.
+    """
+    id: String!,
+    """
+    One-line title, in the present tense, stating the point of the document
+    rather than its topic: "@agent middlewares fold alphabetically onto one
+    LLM", not "Agent composition".
+    """
+    title: String! = "",
+    """
+    What sort of document this is.
+    """
+    kind: DocKind = null,
+    """
+    The document's prose, as markdown, without front matter and without
+    repeating the title as a heading.
+    """
+    body: String! = "",
+    """
+    Labels used to select this document for composition, e.g. ["agents",
+    "llm"].
+    """
+    tags: [String!]! = [],
+    """
+    Repository-relative files or directories this document describes.
+    Changes to them are what makes it drift.
+    """
+    anchors: [String!]! = [],
+    """
+    Mechanically checkable claims: "<path> ~ <regexp>" to require a match,
+    "<path> !~ <regexp>" to forbid one, or a bare "<path>" to require the
+    path to exist. Checked before the write, and by the context:assertions
+    check thereafter.
+    """
+    asserts: [String!]! = [],
+    """
+    Names of the tests that demonstrate this, e.g.
+    ["AgentsSuite/TestComposeToolset"].
+    """
+    tests: [String!]! = [],
+    """
+    Ids of documents that should be composed alongside this one.
+    """
+    related: [String!]! = [],
+    """
+    Ids of documents this one replaces. Mark those superseded as well.
+    """
+    supersedes: [String!]! = [],
+    """
+    Lifecycle state. Defaults to active for a new document, and to whatever
+    it already was for an existing one.
+    """
+    status: DocStatus = null,
+    """
+    Fold this document into every session's system prompt. Reserve it for
+    the few documents that everything else assumes.
+    """
+    pin: Boolean = null,
+  ): Workspace! {
+    validateId(id)
+    let priorText = ws.file(docPath(id)).contents rescue { e: Error => "" }
+    let isNew = priorText == ""
+    let prior = if (isNew) { DocMeta(title: "") } else { parse(id, priorText).meta }
+
+    let meta = DocMeta(
+      title: if (title == "") { prior.title } else { title },
+      kind: if (kind == null) { if (isNew) { "note" } else { prior.kind } } else { kindName(kind ?? DocKind.NOTE) },
+      status: if (status == null) { if (isNew) { "active" } else { prior.status } } else { statusName(status ?? DocStatus.ACTIVE) },
+      tags: if (tags.isEmpty) { prior.tags } else { tags },
+      anchors: if (anchors.isEmpty) { prior.anchors } else { anchors },
+      asserts: if (asserts.isEmpty) { prior.asserts } else { asserts },
+      tests: if (tests.isEmpty) { prior.tests } else { tests },
+      related: if (related.isEmpty) { prior.related } else { related },
+      supersedes: if (supersedes.isEmpty) { prior.supersedes } else { supersedes },
+      pin: pin ?? prior.pin,
+    )
+    let text = if (body == "") {
+      if (isNew) {
+        raise `${id} is a new document, so it needs a body`
+      }
+      parse(id, priorText).body
+    } else {
+      body.trimSpace + "\n"
+    }
+
+    let missingAnchors = meta.anchors.filter { a => !ws.directory("/").exists(a.trimPrefix("/")) }
+    if (!missingAnchors.isEmpty) {
+      raise `${id}: anchor(s) do not exist in the workspace: ${missingAnchors.join(", ")}`
+    }
+    let failures = meta.asserts.map { a => runAssert(ws, a) }.filter { f => f != "" }
+    if (!failures.isEmpty) {
+      raise `${id}: refusing to write — ${toString(failures.length)} assertion(s) do not hold:` + "\n" +
+        failures.map { f => "  - " + f }.join("\n") +
+        "\n\nEither the document is wrong, or the assertion is. Read the anchored code before insisting."
+    }
+
+    let stamped = stamp(meta, newestAnchorCommit(ws, meta.anchors))
+    let verb = if (isNew) { "Wrote" } else { "Updated" }
+    # Writing a document re-stamps it, because writing it IS reconciling it
+    # with the code as it stands. Say so out loud when that clears a drift:
+    # laundering a drifted document with a cosmetic edit should be visible in
+    # the trace, not silent.
+    let moved = !isNew and prior.verifiedAt != "" and prior.verifiedAt != stamped.verifiedAt
+    let note = if (moved) {
+      ` — re-verified ${shortSha(prior.verifiedAt)} -> ${shortSha(stamped.verifiedAt)}`
+    } else {
+      stampNote(stamped)
+    }
+    print(`${verb} ${docPath(id)} — ${stamped.kind}/${stamped.status}` + note)
+    ws.withNewFile(docPath(id), render(stamped, text))
+  }
+
+  """
+  Re-stamp documents as reconciled with the code they anchor to.
+
+  Do this after reading a drifted document against the code that moved and
+  either correcting it or confirming it still holds. Assertions are re-run
+  first, so re-stamping is a claim you have to be able to back: a document
+  whose assertions fail cannot be verified, only fixed.
+  """
+  docVerify(
+    ws: Workspace!,
+    """
+    Document ids to re-stamp. Empty re-stamps every drifted document, which
+    is only honest if you have just read all of them.
+    """
+    ids: [String!]! = [],
+  ): Workspace! {
+    let dirty = dirtyPaths(ws)
+    let targets = if (ids.isEmpty) {
+      loadAll(ws).filter { d => driftOf(ws, d, dirty).state == DriftState.DRIFTED }.map { d => d.id }
+    } else {
+      ids
+    }
+    if (targets.isEmpty) {
+      print("Nothing to verify: no document has drifted.")
+      return ws
+    }
+    let out = ws
+    targets.each { id =>
+      let doc = load(out, id)
+      let failures = doc.meta.asserts.map { a => runAssert(out, a) }.filter { f => f != "" }
+      if (!failures.isEmpty) {
+        raise `${id}: cannot verify — ${toString(failures.length)} assertion(s) do not hold:` + "\n" +
+          failures.map { f => "  - " + f }.join("\n")
+      }
+      let was = doc.meta.verifiedAt
+      let meta = stamp(doc.meta, newestAnchorCommit(out, doc.meta.anchors))
+      if (meta.verifiedAt == was) {
+        print(`${id}: already verified at ${shortSha(was)}; unchanged`)
+        continue
+      }
+      print(`${id}: verified ${shortSha(was)} -> ${shortSha(meta.verifiedAt)}`)
+      out = out.withNewFile(docPath(id), render(meta, doc.body))
+    }
+    out
+  }
+
+  """
+  Report how the corpus stands relative to the code: which documents are
+  still in step with their anchors, and for the ones that are not, exactly
+  which commits moved underneath them.
+
+  This is the reconciliation worklist. For each drifted document, read the
+  named commits, then correct the document with `docWrite` — or, if it still
+  holds as written, confirm it with `docVerify`.
+  """
+  docStale(
+    ws: Workspace!,
+    """
+    Document ids to report on. Empty reports the whole corpus.
+    """
+    ids: [String!]! = [],
+  ): String! {
+    let all = loadAll(ws)
+    if (all.isEmpty) {
+      return emptyCorpus
+    }
+    let selected = if (ids.isEmpty) { all } else { ids.map { id => load(ws, id) } }
+    let dirty = dirtyPaths(ws)
+    # One drift computation per document: each one walks git history, so the
+    # listing and the count below share the result rather than asking twice.
+    let states = selected.map { d => {{doc: d, state: driftOf(ws, d, dirty)}} }
+    let rows = states.map { s =>
+      `${stateTag(s.state.state)}  ${s.doc.id}` + "\n    " + s.state.detail
+    }
+    let drifted = states.filter { s => s.state.state == DriftState.DRIFTED }
+    let footer = if (drifted.isEmpty) {
+      "Nothing has drifted."
+    } else {
+      `${toString(drifted.length)} document(s) have drifted. Read the commits named above, then correct them ` +
+        "with docWrite, or confirm and re-stamp them with docVerify."
+    }
+    rows.join("\n") + "\n\n" + footer
+  }
+
+  # ----------------------------------------------------------------- checks
+
+  """
+  Check that every context document is well formed: front matter that
+  parses, a known kind and status, links that resolve, anchors that exist,
+  and — for facts — evidence that somebody could check.
+  """
+  lint(ws: Workspace!): Void @check {
+    let files = paths(ws)
+    if (files.isEmpty) {
+      print(`No context documents in ${root}/ yet.`)
+      return null
+    }
+    let ids = files.map { p => idOf(p) }
+    let errors: [String!]! = []
+    files.each { p =>
+      errors += lintOne(ws, p, ids)
+    }
+    # The supersession cross-check needs every document parsed, so it only
+    # runs once the per-document pass came back clean.
+    if (errors.isEmpty) {
+      let all = loadAll(ws)
+      all.each { d =>
+        errors += all
+          .filter { x => d.meta.supersedes.contains(x.id) and x.meta.status != "superseded" }
+          .map { x => `${d.id} supersedes ${x.id}, but ${x.id} is still marked "${x.meta.status}"` }
+      }
+    }
+    if (!errors.isEmpty) {
+      raise `${toString(errors.length)} problem(s) in ${root}/:` + "\n" + errors.map { e => "  - " + e }.join("\n")
+    }
+    print(`${toString(files.length)} context document(s) in ${root}/ are well formed.`)
+    null
+  }
+
+  """
+  Check that every assertion recorded in the corpus still holds against the
+  code as it stands.
+
+  This is the half of convergence that needs no judgement: a document said
+  the code says something, and either it still does or it does not.
+  """
+  assertions(ws: Workspace!): Void @check {
+    let all = loadAll(ws)
+    let checked = 0
+    let failures: [String!]! = []
+    all.each { d =>
+      checked += d.meta.asserts.length
+      failures += d.meta.asserts
+        .map { a =>
+          let why = runAssert(ws, a)
+          if (why == "") { "" } else { `${d.id}: ${why}` }
+        }
+        .filter { f => f != "" }
+    }
+    if (!failures.isEmpty) {
+      raise `${toString(failures.length)} of ${toString(checked)} assertion(s) no longer hold:` + "\n" +
+        failures.map { f => "  - " + f }.join("\n") +
+        "\n\nRead the anchored code, correct the document with docWrite, then re-stamp it with docVerify."
+    }
+    print(`${toString(checked)} assertion(s) across ${toString(all.length)} document(s) still hold.`)
+    null
+  }
+
+  """
+  Check that no active document describes code that has moved since the
+  document was last reconciled with it.
+
+  This is the loop that keeps the corpus converging: changing anchored code
+  is what turns a document red, and the only way back to green is to read
+  the document against the change and either fix it or confirm it. Drafts
+  are exempt — they are work in progress by definition.
+  """
+  drifted(ws: Workspace!): Void @check {
+    let all = loadAll(ws).filter { d => d.meta.status == "active" }
+    if (all.isEmpty) {
+      print(`No active context documents in ${root}/.`)
+      return null
+    }
+    let dirty = dirtyPaths(ws)
+    let bad: [String!]! = []
+    let notes: [String!]! = []
+    let fresh = 0
+    all.each { d =>
+      let state = driftOf(ws, d, dirty)
+      # Every arm ends in null so the case stays one type: it is used for its
+      # effect on the accumulators, not for a value.
+      case (state.state) {
+        DriftState.DRIFTED => {
+          bad += [`${d.id}: ${state.detail}`]
+          null
+        }
+
+        DriftState.UNVERIFIED => {
+          bad += [`${d.id}: ${state.detail} — run docVerify after reading it against ${d.meta.anchors.join(", ")}`]
+          null
+        }
+
+        DriftState.FRESH => {
+          fresh += 1
+          null
+        }
+
+        else => {
+          notes += [`${d.id}: ${stateName(state.state)} — ${state.detail}`]
+          null
+        }
+      }
+    }
+    if (!notes.isEmpty) {
+      print("Not checked:\n" + notes.map { n => "  - " + n }.join("\n"))
+    }
+    if (!bad.isEmpty) {
+      raise `${toString(bad.length)} document(s) have drifted from the code they describe:` + "\n" +
+        bad.map { b => "  - " + b }.join("\n") +
+        "\n\nRead the named commits, then correct the document with docWrite, or confirm and re-stamp it with docVerify."
+    }
+    print(`${toString(fresh)} active document(s) are in step with the code they describe.`)
+    null
+  }
+
+  # ---------------------------------------------------------------- corpus
+
+  # The order documents are composed in: what words mean, then what is true,
+  # then what was decided, then where it is going. A design that leans on a
+  # fact reads correctly only if the fact came first.
+  let kindOrder: [String!]! = ["glossary", "fact", "decision", "design", "note"]
+
+  let statusNames: [String!]! = ["draft", "active", "superseded"]
+
+  # How far back to look for the commit a document was verified at. Past
+  # this, drift can still be seen but not attributed, and the document is
+  # reported UNKNOWN rather than guessed at.
+  let driftWindow: Int! = 200
+
+  let separator: String! = "---"
+
+  let emptyCorpus: String! =
+    "This project has no context documents yet. Start one with docWrite — a glossary entry for a " +
+    "word this codebase uses in its own way, or a fact you had to dig for and would rather not dig " +
+    "for again."
+
+  let legend: String! =
+    "Legend: [!] drifted from the code it describes · [?] unverified · [~] not anchored to any code. " +
+    "docStale explains a marked document; docRead reads one; docCompose assembles a bundle."
+
+  let docPath(id: String!): String! {
+    "/" + root + "/" + id + ".md"
+  }
+
+  let idOf(relative: String!): String! {
+    relative.trimSuffix(".md")
+  }
+
+  # Two globs, because a "**/" prefix is not guaranteed to match at depth
+  # zero: the corpus keeps its conventional folders, but a document sitting
+  # directly in the root has to be found too.
+  let paths(ws: Workspace!): [String!]! {
+    let dir = ws.directory("/" + root)
+    (dir.glob("*.md") + dir.glob("**/*.md")).uniq rescue { e: Error => [] :: [String!]! }
+  }
+
+  let readRaw(ws: Workspace!, relative: String!): String! {
+    ws.file("/" + root + "/" + relative).contents
+  }
+
+  let load(ws: Workspace!, id: String!): Doc! {
+    let raw = ws.file(docPath(id)).contents rescue { e: Error =>
+      raise `no context document "${id}" (looked for ${docPath(id)}) — call docs to see what exists`
+    }
+    parse(id, raw)
+  }
+
+  let loadAll(ws: Workspace!): [Doc!]! {
+    paths(ws).map { p => parse(idOf(p), readRaw(ws, p)) }
+  }
+
+  # A document is a YAML front-matter block, a "---" line, and markdown. The
+  # format is deliberately the one every static site generator already uses:
+  # the files stay readable and editable by hand, which is the whole point of
+  # keeping them in the repository rather than in a database.
+  let parse(id: String!, raw: String!): Doc! {
+    if (!raw.hasPrefix("---\n")) {
+      raise `${id}: no front matter — the file must begin with a "---" line`
+    }
+    let parts = raw.trimPrefix("---\n").split("\n---\n", 2)
+    if (parts.length < 2) {
+      raise `${id}: front matter is not closed by a "---" line`
+    }
+    let meta = decodeMeta(parts[0] ?? "") rescue { e: Error =>
+      raise `${id}: front matter is not valid YAML: ${plain(e.message)}`
+    }
+    Doc(id: id, meta: meta, body: (parts[1] ?? "").trim("\n"))
+  }
+
+  # Type-directed: the declared return type is what tells YAML.decode what to
+  # build, so this stays a bare one-liner.
+  let decodeMeta(front: String!): DocMeta! {
+    YAML.decode(front)
+  }
+
+  let title(doc: Doc!): String! {
+    if (doc.meta.title.trimSpace == "") { doc.id } else { doc.meta.title.trimSpace }
+  }
+
+  let validateId(id: String!): String! {
+    if (!id.containsMatch(`^[a-z0-9][a-z0-9._/-]*$`)) {
+      raise `"${id}" is not a usable document id: lowercase letters, digits, "." "-" "_" and "/" only, e.g. "facts/agent-composition"`
+    }
+    if (id.contains("..") or id.hasSuffix("/") or id.hasSuffix(".md")) {
+      raise `"${id}" is not a usable document id: no "..", no trailing "/", and no ".md" suffix`
+    }
+    id
+  }
+
+  # --------------------------------------------------------------- evidence
+
+  let dirtyPaths(ws: Workspace!): [String!]! {
+    ws.git.uncommitted.diffStats.{{path}}.map { s => s.path } rescue { e: Error => [] :: [String!]! }
+  }
+
+  # The newest commit touching these anchors, which is what "verified at"
+  # records. Comparing one sha is all drift detection needs: if the newest
+  # commit touching the anchors is still the one the document was reconciled
+  # against, nothing has moved underneath it.
+  let newestAnchorCommit(ws: Workspace!, anchors: [String!]!): String! {
+    if (anchors.isEmpty) {
+      return ""
+    }
+    let shas = ws.git.head.log(limit: 1, paths: anchors).{{sha}}.map { c => c.sha } rescue { e: Error => [] :: [String!]! }
+    shas.takeFirst.join("")
+  }
+
+  let driftOf(ws: Workspace!, doc: Doc!, dirty: [String!]!): {{state: DriftState!, detail: String!}}! {
+    let anchors = doc.meta.anchors
+    if (anchors.isEmpty) {
+      return {{state: DriftState.UNANCHORED, detail: "declares no anchors, so nothing ties it to the code"}}
+    }
+    let touched = dirty.filter { p => anchors.any { a => Path(a).contains(Path(p)) } }
+    let note = if (touched.isEmpty) {
+      ""
+    } else {
+      ` — and there are uncommitted edits to ${touched.takeFirst(4).join(", ")}`
+    }
+    let recent = ws.git.head.log(limit: driftWindow, paths: anchors).{{sha, shortSha, message}} rescue { e: Error =>
+      return {{state: DriftState.UNKNOWN, detail: `cannot read git history: ${plain(e.message)}`}}
+    }
+    if (recent.isEmpty) {
+      return {{state: DriftState.UNCOMMITTED, detail: "its anchors have no committed history yet" + note}}
+    }
+    if (doc.meta.verifiedAt == "") {
+      return {{state: DriftState.UNVERIFIED, detail: `never reconciled with ${anchors.join(", ")}`}}
+    }
+    let since = recent.takeWhile { c => !c.sha.hasPrefix(doc.meta.verifiedAt) }
+    if (since.length == recent.length) {
+      return {{
+        state: DriftState.UNKNOWN,
+        detail: `its verifiedAt ${shortSha(doc.meta.verifiedAt)} is not among the last ` +
+          `${toString(driftWindow)} commit(s) touching its anchors — re-read it and re-verify`,
+      }}
+    }
+    if (since.isEmpty) {
+      return {{state: DriftState.FRESH, detail: `in step with ${anchors.join(", ")}` + note}}
+    }
+    {{
+      state: DriftState.DRIFTED,
+      detail: `${toString(since.length)} commit(s) touched ${anchors.join(", ")} since it was verified: ` +
+        since.takeFirst(5).map { c => `${c.shortSha} ${subject(c.message)}` }.join("; ") + note,
+    }}
+  }
+
+  # Returns "" when the assertion holds, or a one-line reason when it does not.
+  let runAssert(ws: Workspace!, spec: String!): String! {
+    let text = spec.trimSpace
+    if (text == "") {
+      return ""
+    }
+    let negated = text.contains(" !~ ")
+    let sep = if (negated) { " !~ " } else if (text.contains(" ~ ")) { " ~ " } else { "" }
+    if (sep == "") {
+      # A bare path is an existence claim, which is the weakest useful
+      # assertion: the thing this document is about is still there. Anything
+      # with a space or a stray tilde in it is a mistyped operator, not a
+      # path, and saying so beats reporting a missing file.
+      if (text.containsMatch(`[\s~]`)) {
+        return malformedAssert(text)
+      }
+      let there = ws.directory("/").exists(text.trimPrefix("/")) rescue { e: Error => false }
+      return if (there) { "" } else { `${text} does not exist` }
+    }
+    let parts = text.split(sep, 2)
+    let path = (parts[0] ?? "").trimSpace
+    let pattern = (parts[1] ?? "").trimSpace
+    let contents = ws.file("/" + path.trimPrefix("/")).contents rescue { e: Error =>
+      return `${path} cannot be read (${plain(e.message)})`
+    }
+    let hit = contents.containsMatch((pattern :: Regexp!)) rescue { e: Error =>
+      return `"${text}" is not a valid assertion: ${plain(e.message)}`
+    }
+    if (negated and hit) {
+      return `${path} matches /${pattern}/, which this document says it must not`
+    }
+    if (!negated and !hit) {
+      return `${path} no longer matches /${pattern}/`
+    }
+    ""
+  }
+
+  let assertShape(id: String!, spec: String!): [String!]! {
+    let text = spec.trimSpace
+    if (text == "") {
+      return [`${id}: empty assertion`]
+    }
+    let sep = if (text.contains(" !~ ")) { " !~ " } else if (text.contains(" ~ ")) { " ~ " } else { "" }
+    if (sep == "") {
+      if (text.containsMatch(`[\s~]`)) {
+        return [`${id}: ` + malformedAssert(text)]
+      }
+      return [] :: [String!]!
+    }
+    let parts = text.split(sep, 2)
+    if ((parts[0] ?? "").trimSpace == "" or (parts[1] ?? "").trimSpace == "") {
+      return [`${id}: ` + malformedAssert(text)]
+    }
+    [] :: [String!]!
+  }
+
+  let malformedAssert(text: String!): String! {
+    `malformed assertion "${text}" — expected "<path>", "<path> ~ <regexp>" or "<path> !~ <regexp>"`
+  }
+
+  let lintOne(ws: Workspace!, relative: String!, ids: [String!]!): [String!]! {
+    let id = idOf(relative)
+    let doc = parse(id, readRaw(ws, relative)) rescue { e: Error =>
+      return [plain(e.message)]
+    }
+    let meta = doc.meta
+    let errs: [String!]! = []
+    if (meta.title.trimSpace == "") {
+      errs += [`${id}: no title`]
+    }
+    if (!kindOrder.contains(meta.kind)) {
+      errs += [`${id}: unknown kind "${meta.kind}" (expected one of: ${kindOrder.join(", ")})`]
+    }
+    if (!statusNames.contains(meta.status)) {
+      errs += [`${id}: unknown status "${meta.status}" (expected one of: ${statusNames.join(", ")})`]
+    }
+    if (doc.body.trimSpace == "") {
+      errs += [`${id}: empty body`]
+    }
+    meta.related.each { r =>
+      if (!ids.contains(r)) {
+        errs += [`${id}: related document "${r}" does not exist`]
+      }
+    }
+    meta.supersedes.each { s =>
+      if (!ids.contains(s)) {
+        errs += [`${id}: superseded document "${s}" does not exist`]
+      }
+    }
+    meta.anchors.each { a =>
+      let there = ws.directory("/").exists(a.trimPrefix("/")) rescue { e: Error => false }
+      if (!there) {
+        errs += [`${id}: anchor "${a}" does not exist`]
+      }
+    }
+    meta.asserts.each { a =>
+      errs += assertShape(id, a)
+    }
+    if (meta.pin and meta.status != "active") {
+      errs += [`${id}: pinned, but its status is "${meta.status}" — only active documents belong in every session's prompt`]
+    }
+    if (requireEvidence and meta.kind == "fact" and meta.anchors.isEmpty and meta.asserts.isEmpty and meta.tests.isEmpty) {
+      errs += [`${id}: a fact needs evidence — an anchor, an assertion, or a named test`]
+    }
+    errs
+  }
+
+  # -------------------------------------------------------------- rendering
+
+  let banner(all: [Doc!]!): String! {
+    let active = all.filter { d => d.meta.status == "active" }.length
+    let draft = all.filter { d => d.meta.status == "draft" }.length
+    let superseded = all.filter { d => d.meta.status == "superseded" }.length
+    `${root}/ — ${toString(all.length)} document(s): ${toString(active)} active, ` +
+      `${toString(draft)} draft, ${toString(superseded)} superseded`
+  }
+
+  let row(ws: Workspace!, doc: Doc!, dirty: [String!]!, detail: Boolean!): String! {
+    let state = driftOf(ws, doc, dirty)
+    let head = "  " + stateTag(state.state) + " " + doc.id.padRight(38) + " " +
+      doc.meta.status.padRight(11) + " " + title(doc)
+    if (!detail) {
+      return head
+    }
+    let bits: [String!]! = []
+    if (!doc.meta.tags.isEmpty) {
+      bits += ["tags: " + doc.meta.tags.join(", ")]
+    }
+    if (!doc.meta.anchors.isEmpty) {
+      bits += ["anchors: " + doc.meta.anchors.join(", ")]
+    }
+    if (!doc.meta.asserts.isEmpty) {
+      bits += [toString(doc.meta.asserts.length) + " assertion(s)"]
+    }
+    if (!doc.meta.tests.isEmpty) {
+      bits += ["tests: " + doc.meta.tests.join(", ")]
+    }
+    if (!doc.meta.related.isEmpty) {
+      bits += ["related: " + doc.meta.related.join(", ")]
+    }
+    if (bits.isEmpty) {
+      head
+    } else {
+      head + "\n      " + bits.join(" · ")
+    }
+  }
+
+  let renderDoc(ws: Workspace!, doc: Doc!, dirty: [String!]!): String! {
+    let state = driftOf(ws, doc, dirty)
+    let meta = doc.meta
+    let bits: [String!]! = [`kind: ${meta.kind}`, `status: ${meta.status}`]
+    if (!meta.tags.isEmpty) {
+      bits += [`tags: ${meta.tags.join(", ")}`]
+    }
+    if (!meta.anchors.isEmpty) {
+      bits += [`anchors: ${meta.anchors.join(", ")}`]
+    }
+    if (!meta.tests.isEmpty) {
+      bits += [`tests: ${meta.tests.join(", ")}`]
+    }
+    if (!meta.related.isEmpty) {
+      bits += [`related: ${meta.related.join(", ")}`]
+    }
+    if (!meta.supersedes.isEmpty) {
+      bits += [`supersedes: ${meta.supersedes.join(", ")}`]
+    }
+    let assertBlock = if (meta.asserts.isEmpty) {
+      ""
+    } else {
+      "\nassertions:\n" + meta.asserts.map { a => "  " + a }.join("\n")
+    }
+    `# ${doc.id} — ${title(doc)}` + "\n" +
+      bits.join("\n") + assertBlock + "\n" +
+      `drift: ${stateName(state.state)} — ${state.detail}` + "\n\n" +
+      doc.body
+  }
+
+  let composeBlock(doc: Doc!): String! {
+    let bits: [String!]! = [`kind: ${doc.meta.kind}`]
+    if (!doc.meta.anchors.isEmpty) {
+      bits += [`anchors: ${doc.meta.anchors.join(", ")}`]
+    }
+    if (!doc.meta.tests.isEmpty) {
+      bits += [`tests: ${doc.meta.tests.join(", ")}`]
+    }
+    if (doc.meta.verifiedAt != "") {
+      bits += [`verified at ${shortSha(doc.meta.verifiedAt)}`]
+    }
+    `## ${doc.id} — ${title(doc)}` + "\n" +
+      `<!-- ${bits.join(" · ")} -->` + "\n\n" +
+      doc.body.trimSpace
+  }
+
+  # A document on disk: front matter, a closing rule, then the prose. Fields
+  # that carry nothing are omitted rather than written empty, so a
+  # hand-written document and a generated one look the same.
+  let render(meta: DocMeta!, body: String!): String! {
+    "---\n" + frontMatter(meta) + "---\n\n" + body.trimSpace + "\n"
+  }
+
+  let frontMatter(meta: DocMeta!): String! {
+    let out = "title: " + yamlString(meta.title) + "\n"
+    out += "kind: " + meta.kind + "\n"
+    out += "status: " + meta.status + "\n"
+    if (!meta.tags.isEmpty) {
+      out += "tags: " + yamlList(meta.tags) + "\n"
+    }
+    if (!meta.anchors.isEmpty) {
+      out += "anchors: " + yamlList(meta.anchors) + "\n"
+    }
+    if (!meta.asserts.isEmpty) {
+      out += "asserts: " + yamlList(meta.asserts) + "\n"
+    }
+    if (!meta.tests.isEmpty) {
+      out += "tests: " + yamlList(meta.tests) + "\n"
+    }
+    if (!meta.related.isEmpty) {
+      out += "related: " + yamlList(meta.related) + "\n"
+    }
+    if (!meta.supersedes.isEmpty) {
+      out += "supersedes: " + yamlList(meta.supersedes) + "\n"
+    }
+    if (meta.verifiedAt != "") {
+      out += "verifiedAt: " + meta.verifiedAt + "\n"
+    }
+    if (meta.pin) {
+      out += "pin: true\n"
+    }
+    out
+  }
+
+  let yamlString(s: String!): String! {
+    "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\t", "\\t") + "\""
+  }
+
+  let yamlList(xs: [String!]!): String! {
+    "[" + xs.map { x => yamlString(x) }.join(", ") + "]"
+  }
+
+  # DocMeta is a value; re-stamping builds a new one rather than mutating the
+  # loaded document.
+  let stamp(meta: DocMeta!, sha: String!): DocMeta! {
+    DocMeta(
+      title: meta.title,
+      kind: meta.kind,
+      status: meta.status,
+      tags: meta.tags,
+      anchors: meta.anchors,
+      asserts: meta.asserts,
+      tests: meta.tests,
+      related: meta.related,
+      supersedes: meta.supersedes,
+      verifiedAt: sha,
+      pin: meta.pin,
+    )
+  }
+
+  let stampNote(meta: DocMeta!): String! {
+    if (meta.anchors.isEmpty) {
+      " — no anchors, so nothing will tell you when this stops being true"
+    } else if (meta.verifiedAt == "") {
+      " — its anchors have no committed history yet"
+    } else {
+      ` — verified at ${shortSha(meta.verifiedAt)}`
+    }
+  }
+
+  let kindName(kind: DocKind!): String! {
+    case (kind) {
+      DocKind.GLOSSARY => "glossary"
+      DocKind.FACT => "fact"
+      DocKind.DECISION => "decision"
+      DocKind.DESIGN => "design"
+      DocKind.NOTE => "note"
+      # An exhaustive case still infers a nullable result, so every one of
+      # these needs a total fallback to stay String!.
+      else => "note"
+    }
+  }
+
+  let statusName(status: DocStatus!): String! {
+    case (status) {
+      DocStatus.DRAFT => "draft"
+      DocStatus.ACTIVE => "active"
+      DocStatus.SUPERSEDED => "superseded"
+      else => "active"
+    }
+  }
+
+  let stateName(state: DriftState!): String! {
+    case (state) {
+      DriftState.FRESH => "fresh"
+      DriftState.DRIFTED => "drifted"
+      DriftState.UNVERIFIED => "unverified"
+      DriftState.UNCOMMITTED => "uncommitted"
+      DriftState.UNANCHORED => "unanchored"
+      DriftState.UNKNOWN => "unknown"
+      else => "unknown"
+    }
+  }
+
+  let stateTag(state: DriftState!): String! {
+    case (state) {
+      DriftState.FRESH => "   "
+      DriftState.DRIFTED => "[!]"
+      DriftState.UNVERIFIED => "[?]"
+      DriftState.UNCOMMITTED => "[?]"
+      DriftState.UNANCHORED => "[~]"
+      DriftState.UNKNOWN => "[?]"
+      else => "[?]"
+    }
+  }
+
+  let subject(message: String!): String! {
+    message.split("\n", 2).takeFirst.join("")
+  }
+
+  let shortSha(sha: String!): String! {
+    if (sha == "") { "(never)" } else { sha.split("", 8).takeFirst(7).join("") }
+  }
+
+  # Engine errors carry a "[traceparent:...]" marker, which is an invitation
+  # to go read a span over what is almost always a typo in a document.
+  let plain(message: String!): String! {
+    message.replaceMatches(`\s*\[traceparent:[^\]]*\]`, with: "").trimSpace
+  }
+
+  # ---------------------------------------------------------- system prompt
+
+  let systemPrompt(ws: Workspace!): String! {
+    # A corpus that will not parse must never break agent composition: say so
+    # in the prompt and let context:lint be the place that explains why.
+    let all = loadAll(ws) rescue { e: Error =>
+      return corpusPrompt + "\n\nThe corpus in " + root + "/ could not be read (" +
+        plain(e.message) + "). Fix it before relying on it; context:lint says what is wrong."
+    }
+    if (all.isEmpty) {
+      return noCorpusPrompt
+    }
+    let listed = all.filter { d => d.meta.status != "superseded" }
+    let index = listed.map { d => `- ${d.id} (${d.meta.kind}) — ${title(d)}` }
+    let pinned = all.filter { d => d.meta.pin and d.meta.status == "active" }
+    let pinnedBlock = if (pinned.isEmpty) {
+      ""
+    } else {
+      "\n\nThese documents are pinned — they are standing context for this project, " +
+        "and they are reproduced here in full so you do not have to fetch them:\n\n" +
+        pinned.map { d => composeBlock(d) }.join("\n\n")
+    }
+    corpusPrompt + "\n\n" +
+      `The corpus in ${root}/ holds ${toString(listed.length)} document(s):` + "\n\n" +
+      index.join("\n") + pinnedBlock
+  }
+
+  let corpusPrompt: String! = """
+    ## Context documents
+
+    This project keeps what it knows in documents, not in conversation
+    history. They live in the repository, they are composed into context on
+    purpose, and they are checked against the code they describe. Your tools
+    for them are `docs`, `docRead`, `docSearch`, `docCompose`, `docWrite`,
+    `docStale` and `docVerify`.
+
+    Read before you derive. When a task touches an area with documents,
+    `docCompose` the relevant ones first — that is cheaper and more reliable
+    than re-deriving from the source, and it is how you inherit reasoning
+    nobody wrote down twice. A document marked DRIFTED describes code that
+    has changed since it was last reconciled: trust the code over it, and say
+    so.
+
+    Write before you finish. A session that worked something out and left it
+    in the chat has thrown it away. When you have established how a subsystem
+    behaves, why an approach was rejected, or what a word means here,
+    `docWrite` it: a `fact` for something small and checkable, a `decision`
+    for a choice and the reasons against the alternatives, a `design` for
+    where something is going, a `glossary` entry for a word this codebase
+    uses in its own way. Keep documents short and separate — one claim per
+    document, linked with `related` — because composition is per-document.
+
+    Give every document evidence. `anchors` are the files it describes, and
+    they are what makes drift detectable; `asserts` are claims a machine can
+    re-check, and they are verified before the write goes through; `tests`
+    names the tests that demonstrate it. A fact with no evidence is a rumour,
+    and `context:lint` will reject it.
+
+    Reconcile what you break. If you change code that documents anchor to,
+    those documents drift, and `context:drifted` fails until somebody has
+    read them against the change. Do it in the same session, not later: fix
+    the document with `docWrite`, or confirm and re-stamp it with
+    `docVerify`. Never re-stamp a document you have not just read against the
+    code that moved.
+  """
+
+  let noCorpusPrompt: String! = """
+    ## Context documents
+
+    This project keeps what it knows in documents under the corpus directory,
+    rather than in conversation history — but there are none yet. When this
+    session establishes something worth keeping (how a subsystem behaves, why
+    an approach was rejected, what a word means here), write it down with
+    `docWrite` instead of leaving it in the chat: give it `anchors` (the files
+    it describes) and `asserts` (claims a machine can re-check), so the next
+    session can trust it and the checks can tell you when it stops being true.
+  """
+}

@@ -158,6 +158,9 @@ remote = "dagger/dagger"
 [env.codex.modules.librarian]
 source = "modules/librarian"
 
+[env.codex.modules.context]
+source = "modules/context"
+
 [env.dev.modules.engine-lab]
 source = ".dagger/modules/engine-lab"
 
@@ -216,6 +219,17 @@ remote = "dagger/dagger"
 
 [env.dev.modules.librarian]
 source = "modules/librarian"
+
+[env.dev.modules.context]
+source = "modules/context"
+
+[env.dev.modules.context.settings]
+
+# Where the context-document corpus lives, relative to the workspace root.
+root = "context"
+
+# Reject a `fact` document that carries no anchor, assertion or named test.
+requireEvidence = true
 
 [modules.history]
 source = "modules/history"
