@@ -75,7 +75,9 @@ would force *every* tool of *both* modules into namespaced form (see
 | `context:drifted` | No active document describes code that has moved since it was last reconciled. |
 
 These run in the ordinary `dagger check`, which is what makes the corpus converge
-with the implementation rather than drift away from it in comfort.
+with the implementation rather than drift away from it in comfort. They are
+excluded from the agent toolset: a bare `lint` tool is the kind of name that
+collides with another module and drags every tool of both into namespaced form.
 
 ## Evidence, and the convergence loop
 

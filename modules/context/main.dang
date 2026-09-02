@@ -159,7 +159,12 @@ type Context {
   """
   agent(base: LLM!): LLM! @agent {
     base
-      .withTools(currentNode)
+      # The three @check functions are excluded from the toolset on purpose.
+      # They are already reachable the way every other check is, and a bare
+      # `lint` tool is exactly the sort of general-purpose name that collides
+      # with another module and forces EVERY tool of BOTH modules into
+      # namespaced form (see context/facts/colliding-tool-names-...).
+      .withTools(currentNode, except: ["lint", "assertions", "drifted"])
       .withSystemPrompt(systemPrompt(base.workspace))
   }
 
