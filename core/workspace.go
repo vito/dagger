@@ -138,6 +138,10 @@ type Workspace struct {
 	// workspace selection.
 	selectedEnv string
 
+	// Git identity captured at workspace load, not at commit or recipe replay.
+	GitAuthorName  string
+	GitAuthorEmail string
+
 	Address    string `field:"true" doc:"Canonical Dagger address of the workspace location, or an opaque identity for synthetic workspaces."`
 	Cwd        string
 	ConfigFile string
@@ -630,6 +634,8 @@ type persistedWorkspacePayload struct {
 	ClientID        string                        `json:"clientID,omitempty"`
 	HostPath        string                        `json:"hostPath,omitempty"`
 	SelectedEnv     string                        `json:"selectedEnv,omitempty"`
+	GitAuthorName   string                        `json:"gitAuthorName,omitempty"`
+	GitAuthorEmail  string                        `json:"gitAuthorEmail,omitempty"`
 
 	StagedGeneration []string `json:"stagedGeneration,omitempty"`
 
@@ -782,6 +788,8 @@ func (ws *Workspace) EncodePersistedObject(ctx context.Context, cache dagql.Pers
 		ClientID:         ws.ClientID,
 		HostPath:         ws.hostPath,
 		SelectedEnv:      ws.selectedEnv,
+		GitAuthorName:    ws.GitAuthorName,
+		GitAuthorEmail:   ws.GitAuthorEmail,
 		StagedGeneration: ws.StagedGeneration,
 	}
 	if ws.rootfs.Self() != nil {
@@ -870,6 +878,8 @@ func (*Workspace) DecodePersistedObject(
 		ClientID:         persisted.ClientID,
 		hostPath:         persisted.HostPath,
 		selectedEnv:      persisted.SelectedEnv,
+		GitAuthorName:    persisted.GitAuthorName,
+		GitAuthorEmail:   persisted.GitAuthorEmail,
 		StagedGeneration: persisted.StagedGeneration,
 	}
 	if persisted.Source != nil {
