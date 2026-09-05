@@ -30,6 +30,7 @@ var _ SchemaResolvers = &workspaceSchema{}
 
 func (s *workspaceSchema) Install(srv *dagql.Server) {
 	currentWorkspaceField := dagql.NodeFunc("currentWorkspace", s.currentWorkspace).
+		NotReplayable("Requires the originating workspace client").
 		WithInput(dagql.PerCallInput).
 		Doc("Detect and return the current workspace.").
 		Experimental("Highly experimental API extracted from a more ambitious workspace implementation.").
@@ -47,6 +48,29 @@ func (s *workspaceSchema) Install(srv *dagql.Server) {
 	}.Install(srv)
 
 	dagql.Fields[*core.Workspace]{
+		dagql.NodeFunc("checkpoint", s.checkpoint).
+			View(AfterVersion("v1.0.0-0")).
+			DoNotCache("Captures the client's current Git state after approval").
+			Doc("Return this workspace as a frozen value.",
+				"Tracked changes are captured automatically; untracked paths require approval. Git refs are pinned. The recipe is portable when a remote can serve its base, otherwise the checkpoint is frozen for this session only.").
+			Args(
+				dagql.Arg("include").Doc("Include and approve matching nonignored untracked paths, relative to the workspace root."),
+				dagql.Arg("exclude").Doc("Exclude matching paths from capture."),
+				dagql.Arg("maxUntrackedFileBytes").Doc("Maximum size of an untracked file, in bytes."),
+				dagql.Arg("maxUntrackedTotalBytes").Doc("Maximum total size of untracked files, in bytes."),
+				dagql.Arg("maxUntrackedFiles").Doc("Maximum number of untracked files."),
+			),
+		dagql.NodeFunc("portable", s.portable).
+			View(AfterVersion("v1.0.0-0")).
+			Doc("Whether this workspace's recipe can be replayed without its originating client."),
+		dagql.NodeFunc("withConfigPaths", s.withConfigPaths).
+			View(AfterVersion("v1.0.0-0")).
+			Doc("Select workspace-root-relative config and lockfile paths. Empty paths clear the selection.").
+			Args(dagql.Arg("configFile").Doc("Config file path."), dagql.Arg("lockFile").Doc("Lockfile path.")),
+		dagql.NodeFunc("withConfigEnvironment", s.withConfigEnvironment).
+			View(AfterVersion("v1.0.0-0")).
+			Doc("Select the config environment carried by this workspace.").
+			Args(dagql.Arg("name").Doc("Environment name, or empty to clear the selection.")),
 		dagql.Func("__workspaceModule", s.workspaceModule).
 			View(AfterVersion("v1.0.0-0")),
 		dagql.Func("__workspaceSDK", s.workspaceSDK).
@@ -1061,10 +1085,6 @@ func requireLocalWorkspace(ws *core.Workspace, operation string) error {
 		return fmt.Errorf("%s is local-only", operation)
 	}
 	return nil
-}
-
-func isSyntheticWorkspace(ws *core.Workspace) bool {
-	return ws != nil && ws.IsValueWorkspace()
 }
 
 func workspaceFilterWithDirectoryArgs(dirID *call.ID, filter core.CopyFilter, gitignore bool) []dagql.NamedInput {
@@ -3299,9 +3319,6 @@ func (s *workspaceSchema) checks(
 	},
 ) (*core.CheckGroup, error) {
 	parent := parentResult.Self()
-	if isSyntheticWorkspace(parent) {
-		return &core.CheckGroup{}, nil
-	}
 
 	include := workspaceIncludePatterns(args.Include)
 	skip := workspaceIncludePatterns(args.Skip)
@@ -3324,10 +3341,7 @@ func (s *workspaceSchema) checks(
 	}
 
 	// check is strict: a module that can't load is a failure, by design.
-	if _, err := ensureWorkspaceModulesLoaded(ctx, include, false); err != nil {
-		return nil, err
-	}
-	mods, err := currentWorkspacePrimaryModules(ctx)
+	mods, _, err := s.workspacePrimaryModules(ctx, parentResult, include, false)
 	if err != nil {
 		return nil, err
 	}
@@ -3426,9 +3440,6 @@ func (s *workspaceSchema) generators(
 	},
 ) (*core.GeneratorGroup, error) {
 	parent := parentResult.Self()
-	if isSyntheticWorkspace(parent) {
-		return &core.GeneratorGroup{}, nil
-	}
 
 	include := workspaceIncludePatterns(args.Include)
 
@@ -3443,11 +3454,7 @@ func (s *workspaceSchema) generators(
 	// is skipped with a warning instead of failing the whole run, and its
 	// failure message is carried on loadFailures so the CLI can honor
 	// --require-load.
-	loadFailures, err := ensureWorkspaceModulesLoaded(ctx, include, true)
-	if err != nil {
-		return nil, err
-	}
-	mods, err := currentWorkspacePrimaryModules(ctx)
+	mods, loadFailures, err := s.workspacePrimaryModules(ctx, parentResult, include, true)
 	if err != nil {
 		return nil, err
 	}
@@ -3559,9 +3566,6 @@ func (s *workspaceSchema) services(
 	},
 ) (*core.UpGroup, error) {
 	parent := parentResult.Self()
-	if isSyntheticWorkspace(parent) {
-		return &core.UpGroup{}, nil
-	}
 
 	include := workspaceIncludePatterns(args.Include)
 
@@ -3571,10 +3575,7 @@ func (s *workspaceSchema) services(
 	}
 
 	// up is strict: a module that can't load is a failure, by design.
-	if _, err := ensureWorkspaceModulesLoaded(ctx, include, false); err != nil {
-		return nil, err
-	}
-	mods, err := currentWorkspacePrimaryModules(ctx)
+	mods, _, err := s.workspacePrimaryModules(ctx, parentResult, include, false)
 	if err != nil {
 		return nil, err
 	}
@@ -3653,10 +3654,6 @@ func (s *workspaceSchema) terminals(
 		Include dagql.Optional[dagql.ArrayInput[dagql.String]]
 	},
 ) (*core.TerminalGroup, error) {
-	if isSyntheticWorkspace(parentResult.Self()) {
-		return &core.TerminalGroup{}, nil
-	}
-
 	allTerminals, err := collectWorkspaceModuleTargets(
 		ctx,
 		s,
@@ -3681,10 +3678,6 @@ func (s *workspaceSchema) agents(
 		Include dagql.Optional[dagql.ArrayInput[dagql.String]]
 	},
 ) (*core.AgentGroup, error) {
-	if isSyntheticWorkspace(parentResult.Self()) {
-		return &core.AgentGroup{}, nil
-	}
-
 	allAgents, err := collectWorkspaceModuleTargets(
 		ctx,
 		s,
@@ -3709,12 +3702,12 @@ func (s *workspaceSchema) workspaceTargetModules(
 	parentResult dagql.ObjectResult[*core.Workspace],
 	include []string,
 ) ([]dagql.ObjectResult[*core.Module], error) {
-	if _, err := ensureWorkspaceModulesLoaded(ctx, include, false); err != nil {
-		return nil, err
-	}
-	mods, err := currentWorkspacePrimaryModules(ctx)
+	mods, _, err := s.workspacePrimaryModules(ctx, parentResult, include, false)
 	if err != nil {
 		return nil, err
+	}
+	if parentResult.Self().IsValueWorkspace() {
+		return mods, nil
 	}
 
 	// The served modules above are the workspace as it was on disk when the
@@ -4089,6 +4082,9 @@ func (s *workspaceSchema) withWorkspaceHostReadContext(ctx context.Context, ws *
 // workspace's owning client ID. This ensures host filesystem operations route
 // through the correct client session, even when called from a module context.
 func withWorkspaceClientContext(ctx context.Context, ws *core.Workspace) (context.Context, error) {
+	if ws.IsValueWorkspace() {
+		return ctx, nil
+	}
 	if ws.ClientID == "" {
 		return nil, fmt.Errorf("workspace has no client ID")
 	}

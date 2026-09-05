@@ -22,6 +22,33 @@ type overlayModule struct {
 	mod  dagql.ObjectResult[*core.Module]
 }
 
+// workspacePrimaryModules loads frozen workspaces from their own tree. A
+// value has no client module registry and must not borrow the caller's modules.
+func (s *workspaceSchema) workspacePrimaryModules(
+	ctx context.Context,
+	parent dagql.ObjectResult[*core.Workspace],
+	include []string,
+	bestEffort bool,
+) ([]dagql.ObjectResult[*core.Module], []core.ModuleLoadFailure, error) {
+	if parent.Self().IsValueWorkspace() {
+		loaded, err := s.workspaceOverlayModules(ctx, parent, include)
+		if err != nil {
+			return nil, nil, err
+		}
+		mods := make([]dagql.ObjectResult[*core.Module], len(loaded))
+		for i, mod := range loaded {
+			mods[i] = mod.mod
+		}
+		return mods, nil, nil
+	}
+	failures, err := ensureWorkspaceModulesLoaded(ctx, include, bestEffort)
+	if err != nil {
+		return nil, nil, err
+	}
+	mods, err := currentWorkspacePrimaryModules(ctx)
+	return mods, failures, err
+}
+
 // workspaceOverlayModules loads the workspace modules that the workspace's
 // pending overlay affects, resolving their source through the overlay instead
 // of the host checkout.
@@ -40,8 +67,10 @@ type overlayModule struct {
 // Only entries the overlay actually touches are re-resolved; everything else
 // keeps using the served module, so a clean workspace (or one whose edits are
 // unrelated to any module) behaves exactly as before.
+// Frozen value workspaces have no served modules: all their entries are loaded
+// from their own tree, even without an overlay.
 //
-// Known limitations, deliberate for now:
+// Known limitations of the live overlay path, deliberate for now:
 //   - an entry REMOVED from dagger.toml in the overlay still resolves through
 //     the served module: this only ever adds or replaces.
 //   - legacy +defaultPath entries (entry.LegacyDefaultPath) are left to the
@@ -56,7 +85,7 @@ func (s *workspaceSchema) workspaceOverlayModules(
 	if ws == nil || ws.ConfigFile == "" {
 		return nil, nil
 	}
-	if _, ok := ws.OverlayChanges(); !ok {
+	if _, ok := ws.OverlayChanges(); !ok && !ws.IsValueWorkspace() {
 		return nil, nil
 	}
 
@@ -70,7 +99,7 @@ func (s *workspaceSchema) workspaceOverlayModules(
 	}
 	// A config edit can add, remove or repoint any entry, so every entry is
 	// suspect; otherwise only the entries whose source tree was edited are.
-	configTouched := ws.OverlayPathTouched(configFile)
+	configTouched := ws.IsValueWorkspace() || ws.OverlayPathTouched(configFile)
 
 	cfg, err := readWorkspaceConfig(ctx, ws)
 	if err != nil {
@@ -181,6 +210,9 @@ func (s *workspaceSchema) workspaceOverlayModuleSource(
 		}
 		if !configTouched {
 			return src, false, nil
+		}
+		if ws.IsValueWorkspace() {
+			return src, false, fmt.Errorf("module source %q is outside the frozen workspace", resolved)
 		}
 		return s.rootModuleSource(ctx, srv, resolved)
 	}
