@@ -313,3 +313,18 @@ name = "go"
 [sdks.dang.scopes.".dagger/modules/go-cli"]
 is-module = true
 name = "go-cli"
+
+[sdks.dang.scopes.".dagger/modules/engine-lab"]
+clients = ["./.dagger/modules/cli-dev", "./.dagger/modules/engine-dev", "./.dagger/modules/go-cli"]
+is-module = true
+name = "engine-lab"
+
+[sdks.dang.scopes.".dagger/modules/mcp-lab"]
+clients = ["./.dagger/modules/cli-dev", "./.dagger/modules/engine-dev", "./.dagger/modules/go-cli"]
+is-module = true
+name = "mcp-lab"
+
+[sdks.dang.scopes.".dagger/modules/tui-qa"]
+clients = ["./.dagger/modules/cli-dev"]
+is-module = true
+name = "tui-qa"

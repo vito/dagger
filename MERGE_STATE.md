@@ -80,3 +80,63 @@ Counts below are the runner's reported entries; suite entries include selected n
 The first engine-dev build caught the duplicate mount accessor before tests ran ([trace](https://dagger.cloud/dagger/traces/249b30644d98b810561255acf8c1b962)); the corrected build and all listed checks pass. The previously failing `TestAgentDebugServerContextCancellation` passes in this rebuild without a test exclusion or unrelated debug-server fix.
 
 An initial broader integration selection also passed ([trace](https://dagger.cloud/dagger/traces/e742c698849633c4414effa42de85b5d)); the final anchored selection additionally covers `TestWorkspace/TestExportCLI`. All pinned source ancestry checks, module configuration comparisons, TOML/lock parsing, and diff whitespace checks pass. The full repository and race suites were not run.
+
+## September 11 migration follow-up
+
+The installed rebuild exposed an SDK provider mismatch in `dagger ws migrate`:
+a native module's `dang` runtime was resolved through the registry to an
+unversioned URL, then rejected because its existing scope belonged to the
+workspace's versioned SDK provider. The initial rebuild validation did not
+exercise workspace migration.
+
+- Merged [#14119](https://github.com/dagger/dagger/pull/14119) at
+  `43b1e88d7fbed73f079f268bec097ebec936de72` in `8719676afe`. This brings the
+  beta.12 release follow-up, SDK scope configuration, vanity SDK sources,
+  updated SDK locks, and rolling documentation into the integration.
+- #14119 alone does not fix the engine's provider mismatch; migration also
+  rejected its `dagger.io/sdk/dang@v1` provider. Checked the open migration
+  PRs, including #14127 at `2edc41d0728defd995c636d74b5ecf29ace1a88a`, whose
+  fixes address different migration issues.
+- Created [#14129](https://github.com/dagger/dagger/pull/14129) from
+  `vito:fix/migrate-installed-sdk`, based directly on fresh `upstream/main`
+  (`ff626243dc`, reverified remotely). Its source commit `26a952eafb` resolves
+  unversioned runtime names through the installed SDK first, preserving the
+  provider and pin while enforcing explicit-version and ownership conflicts.
+  Integrated it in `0a7ad2d901`.
+- Only `vito:fix/migrate-installed-sdk` was pushed. No colleague's PR branch
+  was changed. `vitoland` remains local with no remote tracking branch.
+- Preserved all 32 installed modules, their settings, and the existing agent
+  and editor pins. The two SDK sources now use `dagger.io/sdk/{dang,go}@v1`.
+  Added the local `go-cli` SDK scope and regenerated the current and rolling
+  API references and the rolling CLI reference for the integrated API.
+- The pre-follow-up integration is retained as
+  `backup/vitoland-before-14119-20260911` at `3ff1a31325`.
+
+Source fix validation used `api call engine-dev test`, building the tested
+engine and CLI from the isolated source branch:
+
+- [Regression before fix](https://dagger.cloud/dagger/traces/2b430f426de5b4156e28fe95d72f8bb3)
+  reproduced the provider mismatch for both native and legacy module configs.
+- [Focused schema tests](https://dagger.cloud/dagger/traces/d6161c81bc0923f711bffdb138a0f273)
+  passed (13 runner entries), covering versioned, vanity, pinned, and custom
+  providers, plus explicit version and conflicting ownership rejection.
+- [CLI migration tests](https://dagger.cloud/dagger/traces/6c9e417074fc6f4e597119bb605aa3cf)
+  passed, covering preview without mutation, apply, idempotence, and the
+  existing native-config cases (one suite entry).
+- The merged workspace's `check -l` completed without SDK migration warnings
+  (`/tmp/vitoland-14119-check-list.log`). API stub and CLI generation completed
+  (`/tmp/vitoland-14119-stubs.log`, `/tmp/vitoland-14119-cli-docs.log`).
+- [Full workspace migration](https://dagger.cloud/dagger/traces/a97f1daa22598dd82c04483ef2402fda)
+  passed in an ephemeral engine built from the merged integration. Applied its
+  generated SDK scopes for `engine-lab`, `mcp-lab`, and `tui-qa` to `dagger.toml`.
+- [Repeat migration preview](https://dagger.cloud/dagger/traces/d7238ebaf99ea3f2d85055827d17de56)
+  passed and reported `No migration needed.` Optional legacy examples remain
+  listed for explicit migration, as intended. Logs are in
+  `/tmp/vitoland-14119-migration-{smoke,noop}.log`.
+- Configuration comparison confirms all 32 module entries and settings are
+  preserved, with only the two intended SDK source substitutions. Discarded
+  incidental build dependency lock entries and normalized the generated
+  rolling CLI reference's trailing blank line. Diff whitespace checks pass.
+
+The installed persistent development engine and CLI were not replaced by this
+follow-up. Reinstall them from the updated branch to use the migration fix.
