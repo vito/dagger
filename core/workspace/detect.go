@@ -80,6 +80,28 @@ func Detect(
 	return ws, nil
 }
 
+// FindConfigUpward reports the nearest dagger.toml walking up from cwd with
+// no workspace-root boundary, returning its full path. It is a diagnostic
+// companion to Detect, which deliberately never looks for dagger.toml when no
+// git root exists: callers use it to tell "no workspace anywhere" apart from
+// "a dagger.toml exists but detection ignored it for lack of a git root", so
+// the latter can be surfaced instead of silently composing an empty session.
+// It does not change detection semantics.
+func FindConfigUpward(
+	ctx context.Context,
+	pathExists PathExistsFunc,
+	cwd string,
+) (string, bool, error) {
+	configDir, found, err := findUp(ctx, pathExists, cwd, "", ConfigFileName)
+	if err != nil {
+		return "", false, fmt.Errorf("workspace config detection: %w", err)
+	}
+	if !found {
+		return "", false, nil
+	}
+	return filepath.Join(configDir, ConfigFileName), true, nil
+}
+
 // DetectInRoot detects the workspace cwd and selected files within an already
 // known workspace root. This is used for remote workspaces, where the cloned git
 // tree root is already the boundary even when .git is not present in the tree.
