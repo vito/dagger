@@ -1,0 +1,6 @@
+kind: Added
+body: Ask the owning client before an agent tool writes to the host through Workspace, Changeset, Directory, File, or Container exports, once per session for each destination — the same per-session approval that gates agent-initiated Git pushes. Direct user API calls, including saving from the CLI, never prompt.
+time: 2026-09-12T16:00:00.000000000Z
+custom:
+  Author: vito
+  PR: ""

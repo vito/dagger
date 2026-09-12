@@ -3,8 +3,6 @@ package server
 import (
 	"context"
 	"fmt"
-	"strconv"
-	"sync"
 
 	"github.com/dagger/dagger/core"
 	"github.com/dagger/dagger/engine"
@@ -14,47 +12,6 @@ import (
 type gitPushApprovalKey struct {
 	owner, remote, ref string
 	force              bool
-}
-
-type gitPushApproval struct {
-	done    chan struct{}
-	allowed bool
-	err     error
-}
-
-// Lives only in daggerSession, never in a result, recipe, or client prompt key.
-// Remember denials too, so a tool retry cannot badger the user into approving.
-type gitPushApprovals struct {
-	mu        sync.Mutex
-	decisions map[gitPushApprovalKey]*gitPushApproval
-}
-
-func (a *gitPushApprovals) check(ctx context.Context, key gitPushApprovalKey, ask func(context.Context) (bool, error)) (bool, error) {
-	a.mu.Lock()
-	if decision, ok := a.decisions[key]; ok {
-		a.mu.Unlock()
-		select {
-		case <-ctx.Done():
-			return false, ctx.Err()
-		case <-decision.done:
-			return decision.allowed, decision.err
-		}
-	}
-	decision := &gitPushApproval{done: make(chan struct{})}
-	if a.decisions == nil {
-		a.decisions = make(map[gitPushApprovalKey]*gitPushApproval)
-	}
-	a.decisions[key] = decision
-	a.mu.Unlock()
-	decision.allowed, decision.err = ask(ctx)
-	a.mu.Lock()
-	// A canceled or unavailable prompt is not a user decision.
-	if decision.err != nil {
-		delete(a.decisions, key)
-	}
-	close(decision.done)
-	a.mu.Unlock()
-	return decision.allowed, decision.err
 }
 
 func (srv *Server) AuthorizeGitPush(ctx context.Context, remote, ref string, force bool) (*engine.ClientMetadata, error) {
@@ -84,14 +41,8 @@ func (srv *Server) AuthorizeGitPush(ctx context.Context, remote, ref string, for
 		if force {
 			action = "force pushing"
 		}
-		// Literal text, escaped for terminals (including bidi/control characters),
-		// not Markdown. Neither credentials nor module-supplied prose belong here.
-		literal := func(s string) string {
-			quoted := strconv.QuoteToASCII(s)
-			return quoted[1 : len(quoted)-1]
-		}
 		response, err := prompt.NewPromptClient(conn).PromptBool(ctx, &prompt.BoolRequest{
-			Prompt: fmt.Sprintf("Allow %s to %s @ %s?", action, literal(remote), literal(ref)),
+			Prompt: fmt.Sprintf("Allow %s to %s @ %s?", action, promptLiteral(remote), promptLiteral(ref)),
 		})
 		if err != nil {
 			return false, err

@@ -1381,6 +1381,9 @@ type changesetExportArgs struct {
 }
 
 func (s *directorySchema) changesetExport(ctx context.Context, parent dagql.ObjectResult[*core.Changeset], args changesetExportArgs) (dagql.String, error) {
+	if err := authorizeHostWrite(ctx, "applying changes", args.Path); err != nil {
+		return "", err
+	}
 	err := parent.Self().Export(ctx, args.Path)
 	if err != nil {
 		return "", err
@@ -1476,7 +1479,21 @@ type dirExportArgs struct {
 	Wipe bool `default:"false"`
 }
 
+// authorizeHostWrite gates exports reaching the calling client's host: agent
+// tool calls run in the owner's context and need the owner's per-session
+// approval, while direct user API calls pass through untouched.
+func authorizeHostWrite(ctx context.Context, action, dest string) error {
+	query, err := core.CurrentQuery(ctx)
+	if err != nil {
+		return err
+	}
+	return query.AuthorizeHostWrite(ctx, action, dest)
+}
+
 func (s *directorySchema) export(ctx context.Context, parent dagql.ObjectResult[*core.Directory], args dirExportArgs) (dagql.String, error) {
+	if err := authorizeHostWrite(ctx, "exporting a directory", args.Path); err != nil {
+		return "", err
+	}
 	err := parent.Self().Export(ctx, parent, args.Path, !args.Wipe)
 	if err != nil {
 		return "", err
