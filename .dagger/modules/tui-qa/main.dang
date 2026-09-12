@@ -198,6 +198,40 @@ type TuiQa {
   }
 
   """
+  Block until the TUI reaches a state, then return the screen like `screen`
+  does — instead of polling `screen` in a loop while spans finish. With
+  `match`, returns as soon as the rendered (ANSI-stripped) screen matches
+  that RE2 regex; without it, returns once the screen has stopped changing
+  for `quietSeconds`. Either way it gives up after `timeoutSeconds` (capped
+  server-side at 300) and returns the screen as it stands, without erroring —
+  inspect the result rather than assuming the condition was reached.
+  """
+  wait(
+    """
+    RE2 regex to wait for on the screen, e.g. "DONE|ERROR" or a prompt
+    marker. Empty waits for the screen to go quiet instead.
+    """
+    match: String! = "",
+    """
+    How long the screen must stay unchanged to count as settled (only used
+    when `match` is empty). Note: a screen with running spans keeps
+    re-rendering elapsed times, so it only goes quiet once they finish.
+    """
+    quietSeconds: Int! = 2,
+    """
+    Give up after this many seconds and return the screen anyway.
+    """
+    timeoutSeconds: Int! = 60,
+  ): String! @cache(policy: FunctionCachePolicy.Never) {
+    post(
+      "/wait?quiet=" + toString(quietSeconds) + "s&timeout=" + toString(timeoutSeconds) + "s",
+      match,
+      # let curl outlive the server-side wait instead of cutting it off
+      maxTime: timeoutSeconds + 30,
+    )
+  }
+
+  """
   Apply a key script to the TUI and return the resulting screen. Keys are
   whitespace/comma separated tuist key names: named keys ("enter", "esc",
   "tab", "space", "up", "down", "left", "right", "pgup", "pgdown", ...),
@@ -287,7 +321,7 @@ type TuiQa {
 
   # ---- helpers ------------------------------------------------------------
 
-  let get(path: String!): String! {
+  let get(path: String!, maxTime: Int! = 60): String! {
     if (url == "") {
       return "No active TUI session. Call the tui-qa start tool first."
     }
@@ -298,13 +332,13 @@ type TuiQa {
       .withExec([
         "curl", "-s",
         "--retry", "15", "--retry-delay", "2", "--retry-connrefused",
-        "--max-time", "60",
+        "--max-time", toString(maxTime),
         url + path,
       ])
       .stdout
   }
 
-  let post(path: String!, body: String!): String! {
+  let post(path: String!, body: String!, maxTime: Int! = 60): String! {
     if (url == "") {
       return "No active TUI session. Call the tui-qa start tool first."
     }
@@ -313,7 +347,7 @@ type TuiQa {
       .withExec([
         "curl", "-s",
         "--retry", "15", "--retry-delay", "2", "--retry-connrefused",
-        "--max-time", "60",
+        "--max-time", toString(maxTime),
         "--data-binary", body,
         url + path,
       ])

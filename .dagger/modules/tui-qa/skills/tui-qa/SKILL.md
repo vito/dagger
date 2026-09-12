@@ -17,6 +17,9 @@ Workflow:
 - `screen` reads the current rendered terminal. Poll it to watch progress;
   startup takes a little while (build + engine connect), and the tools retry
   the connection for you.
+- `wait` blocks until the screen matches a regex — or, without one, until it
+  stops changing — then returns it. Prefer it over polling `screen` in a loop
+  while a command or span finishes.
 - `key`, `typeText`, `resize`, `zoom`, `spans` drive and inspect the TUI,
   exactly like the endpoints in the `tui-console` skill. Key tokens are tuist
   names — "enter", "esc", single characters, "ctrl+s" style modifier combos

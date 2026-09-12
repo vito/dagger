@@ -37,6 +37,14 @@ const (
 	// consoleSettleTimeout bounds how long a request keeps draining background
 	// fetches (lazy span/log loads land on other goroutines) before responding.
 	consoleSettleTimeout = 2 * time.Second
+	// consoleWaitQuietDefault is how long the screen must stay unchanged for
+	// /wait (without a regex) to consider it settled.
+	consoleWaitQuietDefault = 2 * time.Second
+	// consoleWaitTimeoutDefault/-Max bound how long a /wait request may block.
+	consoleWaitTimeoutDefault = 60 * time.Second
+	consoleWaitTimeoutMax     = 5 * time.Minute
+	// consoleWaitPoll is how often /wait re-renders the screen while waiting.
+	consoleWaitPoll = 100 * time.Millisecond
 )
 
 // runWithConsole runs the command's work in the background and serves the TUI
@@ -207,6 +215,78 @@ func (fe *frontendPretty) serveConsole(ctx context.Context) error {
 		// height-dependent renders on ScreenHeight, so the next Step reflows to
 		// the new size on its own -- no manual generation bump needed.
 		fe.consoleTerm.Resize(cols, rows)
+		writeScreen(w, r, fe.consoleSettle())
+	})
+	mux.HandleFunc("/wait", func(w http.ResponseWriter, r *http.Request) {
+		// Block until the screen reaches a state, then respond like /screen —
+		// so QA scripts wait for a span to finish (or a prompt to appear) in
+		// one request instead of polling /screen in a loop. The regex rides in
+		// the body (like /key and /type take theirs) so it needs no URL
+		// encoding; the durations are simple enough for query params.
+		//
+		// With a regex: return as soon as the ANSI-stripped screen matches it.
+		// Without one: return once the screen has been unchanged for the quiet
+		// duration (?quiet=, default 2s). Quiet is not an exit condition while
+		// a regex is pending — an already-idle screen would end the wait
+		// immediately and defeat the match. Either way the wait gives up at
+		// ?timeout= (default 60s, capped) and returns the screen as it stands:
+		// inspect the result, don't assume the condition was reached.
+		var matchRe *regexp.Regexp
+		if pattern := reqBody(r); pattern != "" {
+			var err error
+			matchRe, err = regexp.Compile(pattern)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("bad match regexp %q: %v", pattern, err), http.StatusBadRequest)
+				return
+			}
+		}
+		quiet, err := consoleDuration(r.URL.Query().Get("quiet"), consoleWaitQuietDefault)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("bad quiet param: %v", err), http.StatusBadRequest)
+			return
+		}
+		timeout, err := consoleDuration(r.URL.Query().Get("timeout"), consoleWaitTimeoutDefault)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("bad timeout param: %v", err), http.StatusBadRequest)
+			return
+		}
+		timeout = min(timeout, consoleWaitTimeoutMax)
+
+		// Poll with single Steps, holding consoleMu only per render so the
+		// other endpoints (and the background pump) stay responsive for the
+		// whole — potentially minutes-long — wait.
+		render := func() string {
+			fe.consoleMu.Lock()
+			defer fe.consoleMu.Unlock()
+			return ansi.Strip(strings.Join(fe.consoleViewport(fe.tui.Step()), "\n"))
+		}
+		deadline := time.Now().Add(timeout)
+		frame := render()
+		quietSince := time.Now()
+		for {
+			if matchRe != nil {
+				if matchRe.MatchString(frame) {
+					break
+				}
+			} else if time.Since(quietSince) >= quiet {
+				break
+			}
+			if time.Now().After(deadline) {
+				break
+			}
+			select {
+			case <-r.Context().Done():
+				return
+			case <-time.After(consoleWaitPoll):
+			}
+			next := render()
+			if next != frame {
+				frame = next
+				quietSince = time.Now()
+			}
+		}
+		fe.consoleMu.Lock()
+		defer fe.consoleMu.Unlock()
 		writeScreen(w, r, fe.consoleSettle())
 	})
 	mux.HandleFunc("/spans", func(w http.ResponseWriter, r *http.Request) {
@@ -463,6 +543,9 @@ func (fe *frontendPretty) consoleHelp(w http.ResponseWriter, _ *http.Request) {
 		"  POST /type  <text>   type a literal string (e.g. into / search)\n"+
 		"  POST /zoom  <hex>    zoom to a span, return frame\n"+
 		"  POST /resize <CxR>   resize the terminal (e.g. 120x12), return frame\n"+
+		"  POST /wait [regex]   block until the screen matches the body regex, or\n"+
+		"                       (with no body) has been unchanged for ?quiet= (default 2s);\n"+
+		"                       either way return the frame at ?timeout= (default 60s) at the latest\n"+
 		"  GET  /spans[?q=sub]  loaded-span id/status/name listing\n"+
 		"  GET  /span?id=<hex>  span detail: status, timing, flags, parent chain\n"+
 		"  GET  /help           this list\n"+
@@ -545,4 +628,24 @@ func validateConsoleKey(spec string) error {
 		}
 	}
 	return nil
+}
+
+// consoleDuration parses a /wait duration param: a Go duration string ("2s",
+// "1500ms") or a bare number of seconds ("30", "2.5"). Empty means def.
+func consoleDuration(s string, def time.Duration) (time.Duration, error) {
+	if s == "" {
+		return def, nil
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		secs, ferr := strconv.ParseFloat(s, 64)
+		if ferr != nil {
+			return 0, fmt.Errorf("bad duration %q: want a Go duration (e.g. \"2s\") or seconds (e.g. \"30\")", s)
+		}
+		d = time.Duration(secs * float64(time.Second))
+	}
+	if d < 0 {
+		return 0, fmt.Errorf("bad duration %q: must not be negative", s)
+	}
+	return d, nil
 }

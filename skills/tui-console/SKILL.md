@@ -55,8 +55,17 @@ curl -s --data 'TestFoo'   localhost:7777/type # type a literal string (e.g. int
 curl -s 'localhost:7777/spans?q=TestFoo'       # list loaded spans matching a name
 curl -s --data '<spanHex>' localhost:7777/zoom # jump straight to a span
 curl -s --data '120x12'    localhost:7777/resize # resize the terminal (cols x rows)
+curl -s --data 'DONE|ERROR' localhost:7777/wait  # block until the screen matches (body = regex)
+curl -s -X POST 'localhost:7777/wait?quiet=2s&timeout=60s' # ... or until it stops changing
 curl -s localhost:7777/help                    # endpoints + keymap
 ```
+
+`/wait` replaces polling `/screen` in a loop: with a body it returns as soon as
+the (ANSI-stripped) screen matches that regex; without one it returns once the
+screen has been unchanged for `?quiet=` (default 2s — note running spans keep
+re-rendering elapsed times, so the screen only goes quiet once they finish).
+Either way it returns the screen at `?timeout=` (default 60s, capped at 5m) at
+the latest, without erroring — inspect the result.
 
 State accumulates across requests like a real session. Each request settles
 briefly so background lazy fetches land; if a screen still looks mid-load, just

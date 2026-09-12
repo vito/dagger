@@ -75,6 +75,39 @@ func TestValidateConsoleKey(t *testing.T) {
 	}
 }
 
+func TestConsoleDuration(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		def  time.Duration
+		want time.Duration
+		err  bool
+	}{
+		{in: "", def: 2 * time.Second, want: 2 * time.Second},
+		{in: "5s", want: 5 * time.Second},
+		{in: "1500ms", want: 1500 * time.Millisecond},
+		{in: "30", want: 30 * time.Second},
+		{in: "2.5", want: 2500 * time.Millisecond},
+		{in: "bogus", err: true},
+		{in: "-5s", err: true},
+		{in: "-3", err: true},
+	} {
+		got, err := consoleDuration(tc.in, tc.def)
+		if tc.err {
+			if err == nil {
+				t.Errorf("consoleDuration(%q) = %v, want error", tc.in, got)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("consoleDuration(%q) = %v, want %v", tc.in, err, tc.want)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("consoleDuration(%q) = %v, want %v", tc.in, got, tc.want)
+		}
+	}
+}
+
 func TestConsoleSpanDetail(t *testing.T) {
 	db := dagui.NewDB()
 	rootID := prettyTestSpanID(1)
