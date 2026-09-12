@@ -7,10 +7,12 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/dagger/dagger/dagql/dagui"
@@ -124,9 +126,20 @@ func (fe *frontendPretty) serveConsole(ctx context.Context) error {
 		writeScreen(w, r, fe.consoleSettle())
 	})
 	mux.HandleFunc("/key", func(w http.ResponseWriter, r *http.Request) {
+		keys := parseConsoleKeys(reqBody(r))
+		// Validate the whole script before injecting any of it: an unknown
+		// token must not leave the TUI half-driven, and must not fall through
+		// tuist.ParseKey's extended-key fallback, which would *type the token
+		// as literal text* into whatever is focused (e.g. an agent prompt).
+		for _, k := range keys {
+			if err := validateConsoleKey(k); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
 		fe.consoleMu.Lock()
 		defer fe.consoleMu.Unlock()
-		for _, k := range parseConsoleKeys(reqBody(r)) {
+		for _, k := range keys {
 			fe.tui.Inject(tuist.ParseKey(k))
 		}
 		writeScreen(w, r, fe.consoleSettle())
@@ -454,7 +467,8 @@ func (fe *frontendPretty) consoleHelp(w http.ResponseWriter, _ *http.Request) {
 		"  GET  /span?id=<hex>  span detail: status, timing, flags, parent chain\n"+
 		"  GET  /help           this list\n"+
 		"keys: ←↑↓→ move · right/l expand · left/h collapse · enter zoom · "+
-		"r error origin · L logs · +/- verbosity · / search\n")
+		"r error origin · L logs · +/- verbosity · / search\n"+
+		"key format: "+consoleKeyFormat+"\n")
 }
 
 // parseConsoleKeys splits a key script into individual key specs (tuist.ParseKey
@@ -476,4 +490,59 @@ func parseConsoleKeys(script string) []string {
 		}
 	}
 	return keys
+}
+
+// consoleKeyNames mirrors the (unexported) named-key table tuist.ParseKey
+// accepts, so /key can reject a token ParseKey would not recognize instead of
+// letting it degrade into literal text.
+var consoleKeyNames = map[string]bool{
+	"enter": true, "tab": true, "backspace": true,
+	"escape": true, "esc": true, "space": true,
+	"up": true, "down": true, "left": true, "right": true,
+	"home": true, "end": true, "pgup": true, "pgdown": true,
+	"insert": true, "delete": true, "begin": true, "find": true, "select": true,
+}
+
+// consoleKeyMods mirrors tuist.ParseKey's modifier-prefix table.
+var consoleKeyMods = map[string]bool{
+	"ctrl": true, "alt": true, "shift": true,
+	"meta": true, "super": true, "hyper": true,
+}
+
+// consoleFKey matches the function keys f1..f20, which tuist routes through
+// its extended-key fallback: uv matches extended keys by their text, so they
+// behave as real keys even though they're not in the named-key table.
+var consoleFKey = regexp.MustCompile(`^f([1-9]|1[0-9]|20)$`)
+
+// consoleKeyFormat describes the accepted /key token format, for error
+// messages and /help.
+const consoleKeyFormat = "named keys (enter, tab, backspace, esc/escape, space, " +
+	"up, down, left, right, home, end, pgup, pgdown, insert, delete, begin, " +
+	"find, select), f1-f20, any single character, or a '+'-joined modifier " +
+	"combo of ctrl/alt/shift/meta/super/hyper (e.g. ctrl+s, alt+enter); " +
+	"'<key>*N' repeats a token"
+
+// validateConsoleKey reports whether tuist.ParseKey would treat spec as a real
+// key. ParseKey itself never fails: an unknown multi-rune name falls back to
+// an extended key carrying the name as literal text, which a focused text
+// input happily inserts — so an unsupported token like "C-s" would be typed
+// verbatim into the TUI (corrupting e.g. an agent prompt) rather than erroring.
+func validateConsoleKey(spec string) error {
+	parts := strings.Split(spec, "+")
+	for i, part := range parts {
+		switch {
+		case part == "":
+			// An empty part comes from a "+" in the spec ("+" splits to
+			// ["",""], "ctrl++" to ["ctrl","",""]) — the plus key itself.
+		case i < len(parts)-1 && consoleKeyMods[part]:
+			// A modifier prefix ("ctrl+...", "alt+...").
+		case consoleKeyNames[part],
+			consoleFKey.MatchString(part),
+			utf8.RuneCountInString(part) == 1:
+			// A named key, an f-key, or a bare character.
+		default:
+			return fmt.Errorf("unknown key %q in token %q: want %s", part, spec, consoleKeyFormat)
+		}
+	}
+	return nil
 }

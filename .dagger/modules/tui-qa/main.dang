@@ -199,8 +199,11 @@ type TuiQa {
 
   """
   Apply a key script to the TUI and return the resulting screen. Keys are
-  whitespace/comma separated tuist key names (e.g. "down down right", "enter",
-  "esc", "C-c"); a "key*N" token repeats it. Movement/keymap:
+  whitespace/comma separated tuist key names: named keys ("enter", "esc",
+  "tab", "space", "up", "down", "left", "right", "pgup", "pgdown", ...),
+  single characters, or "+"-joined modifier combos ("ctrl+s", "ctrl+c",
+  "alt+enter", "shift+tab" — NOT "C-s"); a "key*N" token repeats it. Unknown
+  tokens are rejected before any key is applied. Movement/keymap:
   ←↑↓→ / h j k l move · right/l expand · left/h collapse · enter zoom · esc back ·
   r error origin · L logs · +/- verbosity · / search · T tests.
   """

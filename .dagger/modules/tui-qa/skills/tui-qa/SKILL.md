@@ -18,7 +18,9 @@ Workflow:
   startup takes a little while (build + engine connect), and the tools retry
   the connection for you.
 - `key`, `typeText`, `resize`, `zoom`, `spans` drive and inspect the TUI,
-  exactly like the endpoints in the `tui-console` skill.
+  exactly like the endpoints in the `tui-console` skill. Key tokens are tuist
+  names — "enter", "esc", single characters, "ctrl+s" style modifier combos
+  (not "C-s") — and unknown tokens are rejected rather than typed literally.
 - `span(spanHex)` inspects one span in depth (status, timing, dagui flags like
   internal/passthrough/roll-up, and the parent chain with each ancestor's
   flags) — use it to answer "why is this span hidden / why didn't its logs roll

@@ -77,6 +77,12 @@ zoom · `esc` back out · `r` jump to error origin · `L` logs · `+`/`-` verbos
 `/` search · `T` tests view. A `down*3` token repeats a key; commas or spaces
 separate keys (`"down,down,right"`).
 
+Key tokens are tuist names: named keys (`enter`, `esc`, `tab`, `space`,
+arrows, `pgup`/`pgdown`, ...), single characters, or `+`-joined modifier
+combos (`ctrl+s`, `alt+enter` — not emacs-style `C-s`). Unknown tokens get a
+400 before any key in the script is applied, instead of being typed into the
+TUI as literal text.
+
 To type into the search field, open it with `/` then POST the query to `/type`
 (which is *not* tokenized — spaces are typed verbatim), then submit with `enter`:
 
