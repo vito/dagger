@@ -91,8 +91,11 @@ func (c *Client) CaptureGit(
 			switch chunk.GetKind() {
 			case git.CAPTURE_CHUNK_BUNDLE:
 				bundleBytes += int64(len(chunk.Data))
-				if bundleBytes > MaxFileContentsSize || bundleBytes > metadata.BundleBytes {
-					return nil, errors.New("git capture bundle exceeds declared size")
+				if bundleBytes > MaxFileContentsSize {
+					return nil, fmt.Errorf("git capture bundle exceeds the maximum transferable size of %d bytes", MaxFileContentsSize)
+				}
+				if bundleBytes > metadata.BundleBytes {
+					return nil, fmt.Errorf("git capture bundle exceeds its declared size of %d bytes", metadata.BundleBytes)
 				}
 				_, _ = bundleHash.Write(chunk.Data)
 			default:

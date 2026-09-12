@@ -20,6 +20,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/dagger/dagger/dagql"
+	"github.com/dagger/dagger/dagql/call"
 	"github.com/dagger/dagger/dagql/call/callpbv1"
 	"github.com/dagger/dagger/engine/telemetryattrs"
 )
@@ -361,4 +362,53 @@ func TestRecordCallPayloadsRequiresSeenKeyStore(t *testing.T) {
 
 	recordCallPayloads(ctx, nil, rootDigest.String(), agent, false)
 	require.Equal(t, 0, rec.len())
+}
+
+// A large Bytes argument — e.g. a workspace snapshot's git bundle passed to
+// Query.blob — must never cross the telemetry channel verbatim: the log
+// records fan out to OTLP exporters and per-client DBs, a consent and size
+// boundary the engine-local recipe never crosses. The frame is still
+// published, keyed by its original digest, with the bytes replaced by their
+// digest+size placeholder.
+func TestRecordCallPayloadsScrubsLargeBytesLiterals(t *testing.T) {
+	rec, ctx := payloadRecorderCtx(t)
+	const canary = "PAYLOAD-CANARY-must-not-leak"
+	contents := make([]byte, call.MaxTelemetryBytesLiteral+1)
+	copy(contents, canary)
+
+	blob := testResultCall("blob", &Void{}, nil)
+	blob.Args = []*dagql.ResultCallArg{{
+		Name: "contents",
+		Value: &dagql.ResultCallLiteral{
+			Kind:       dagql.ResultCallLiteralKindBytes,
+			BytesValue: contents,
+		},
+	}}
+	bundle := testResultCall("asGitBundle", &Void{}, blob)
+
+	rootDigest, err := bundle.RecipeDigest(ctx)
+	require.NoError(t, err)
+	blobDigest, err := blob.RecipeDigest(ctx)
+	require.NoError(t, err)
+
+	recordCallPayloads(ctx, &testSeenKeys{}, rootDigest.String(), bundle, false)
+
+	records := rec.snapshot()
+	require.NotEmpty(t, records)
+	for _, record := range records {
+		require.NoError(t, record.err)
+		require.NotContains(t, string(record.body), canary,
+			"raw bytes must not ride the telemetry log channel")
+	}
+
+	blobCall := rec.get(blobDigest.String())
+	require.NotNil(t, blobCall, "the byte-carrying frame must still be published under its original digest")
+	lit := blobCall.GetArgs()[0].GetValue()
+	require.IsType(t, &callpbv1.Literal_String_{}, lit.GetValue(),
+		"the oversized bytes literal must be replaced by a placeholder")
+	require.Equal(t, call.DisplayBytes(contents), lit.GetString_())
+
+	// The scrub is telemetry-only: the live frame keeps its raw bytes, so the
+	// recipe still round-trips for evaluation and cache persistence.
+	require.Equal(t, contents, bundle.Receiver.Call.Args[0].Value.BytesValue)
 }

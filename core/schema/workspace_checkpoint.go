@@ -164,7 +164,10 @@ func (s *workspaceSchema) checkpointClientLocal(
 
 	// Zero limits use the capture service defaults (16 MiB per untracked file,
 	// 64 MiB total, 4096 files). Untracked paths are approved interactively.
-	policy := &gitsession.CaptureGitPolicy{MaxTotalBytes: 256 << 20}
+	// The total rides a Bytes argument to Query.blob, so it must stay within
+	// the transport's MaxFileContentsSize: a policy that permitted more would
+	// let a capture do all its client-side work only to fail at transfer.
+	policy := &gitsession.CaptureGitPolicy{MaxTotalBytes: engineutil.MaxFileContentsSize}
 
 	var chunks []capturedCheckpointChunk
 	capture := func() (*gitsession.CaptureGitMetadata, error) {
@@ -203,7 +206,7 @@ func (s *workspaceSchema) checkpointClientLocal(
 		return inst, fmt.Errorf("client included untracked files despite Drop; upgrade the dagger CLI")
 	}
 
-	bundle := slices.Concat(checkpointBundleChunks(chunks)...)
+	bundle := checkpointBundle(chunks)
 	if int64(len(bundle)) != metadata.BundleBytes {
 		return inst, fmt.Errorf("workspace snapshot bundle is %d bytes, capture reported %d", len(bundle), metadata.BundleBytes)
 	}
@@ -607,17 +610,18 @@ func checkpointOverlayDirectories(ctx context.Context, srv *dagql.Server, after 
 	return after, nil
 }
 
-func checkpointBundleChunks(chunks []capturedCheckpointChunk) (bundle [][]byte) {
-	const traceChunkBytes = 256 << 10
+// checkpointBundle concatenates the capture stream's bundle chunks in order.
+func checkpointBundle(chunks []capturedCheckpointChunk) []byte {
+	var size int
 	for _, chunk := range chunks {
-		if chunk.kind != gitsession.CAPTURE_CHUNK_BUNDLE {
-			continue
+		if chunk.kind == gitsession.CAPTURE_CHUNK_BUNDLE {
+			size += len(chunk.data)
 		}
-		data := chunk.data
-		for len(data) > 0 {
-			n := min(len(data), traceChunkBytes)
-			bundle = append(bundle, slices.Clone(data[:n]))
-			data = data[n:]
+	}
+	bundle := make([]byte, 0, size)
+	for _, chunk := range chunks {
+		if chunk.kind == gitsession.CAPTURE_CHUNK_BUNDLE {
+			bundle = append(bundle, chunk.data...)
 		}
 	}
 	return bundle

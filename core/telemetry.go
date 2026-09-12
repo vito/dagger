@@ -108,9 +108,11 @@ func AroundFunc(
 	// only read DagCallAttr and, without it, fall back to walking creator
 	// spans -- which self-reference for object results and recurse forever.
 	// Keep the legacy attribute until those CLIs are out of circulation.
+	// Like the log-channel payloads, the telemetry-emitted copy is scrubbed
+	// of large raw-byte literals; the recipe itself is untouched.
 	if callPB, err := req.ResultCall.CallPB(ctx); err != nil {
 		slog.WarnContext(ctx, "failed to build call payload", "field", spanName, "err", err)
-	} else if callAttr, err := callPB.Encode(); err != nil {
+	} else if callAttr, err := call.ScrubbedCallForTelemetry(callPB).Encode(); err != nil {
 		slog.WarnContext(ctx, "failed to encode call", "field", spanName, "err", err)
 	} else {
 		attrs = append(attrs, attribute.String(telemetry.DagCallAttr, callAttr))
