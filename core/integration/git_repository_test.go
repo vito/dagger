@@ -115,3 +115,26 @@ func (GitSuite) TestGitRepositoryWithDirectoryRejectsExternalStorage(ctx context
 	_, err = repo.WithDirectory(source.Directory("/src/.git")).Head().CommitSHA(ctx)
 	require.ErrorContains(t, err, "self-contained")
 }
+
+func (GitSuite) TestDirectoryAsGitRejectsExternalStorage(ctx context.Context, t *testctx.T) {
+	c := connect(ctx, t)
+	daemon, url := gitService(ctx, t, c, c.Directory().WithNewFile("file.txt", "base"))
+	repo := c.Git(url, dagger.GitOpts{ExperimentalServiceHost: daemon})
+	// The alternate escapes the selected Directory but stays inside the larger
+	// container snapshot, so git itself would happily follow it.
+	source := gitCheckoutContainer(c, repo.Head().Tree()).
+		WithExec([]string{"sh", "-ec", "mkdir -p /external; cp -a .git /external/repo.git; printf '../../../external/repo.git/objects\\n' > .git/objects/info/alternates"})
+	// Directory.asGit builds the same local backend as
+	// GitRepository.withDirectory; the self-containment boundary must hold for
+	// every entry point, or one becomes a trivial bypass of the other.
+	_, err := source.Directory("/src/.git").AsGit().Head().CommitSHA(ctx)
+	require.ErrorContains(t, err, "self-contained")
+	_, err = source.Directory("/src").AsGit().Head().CommitSHA(ctx)
+	require.ErrorContains(t, err, "self-contained")
+	// A gitdir pointer whose target lives outside the supplied directory is
+	// rejected too (the worktree checkout references the original container).
+	linked := gitCheckoutContainer(c, repo.Head().Tree()).
+		WithExec([]string{"git", "worktree", "add", "-b", "linked", "/linked"})
+	_, err = linked.Directory("/linked").AsGit().Head().CommitSHA(ctx)
+	require.Error(t, err)
+}
