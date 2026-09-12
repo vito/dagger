@@ -9,7 +9,6 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/dagger/dagger/dagql"
-	"github.com/dagger/dagger/dagql/call"
 	"github.com/dagger/dagger/dagql/call/callpbv1"
 	"github.com/dagger/dagger/engine/slog"
 	"github.com/dagger/dagger/engine/telemetryattrs"
@@ -131,12 +130,12 @@ func recordCallPayloads(
 		// references), so consumers use it verbatim rather than re-deriving it
 		// and coupling themselves to this engine version's digest scheme.
 		//
-		// Scrub large raw-byte literals before emission: telemetry crosses a
-		// consent and size boundary the recipe itself never does (OTLP
-		// exporters, per-client telemetry DBs), and a workspace snapshot's
-		// git bundle rides a Bytes argument that would otherwise be re-sent
-		// verbatim to every delivery domain.
-		payload, err := (proto.MarshalOptions{Deterministic: true}).Marshal(call.ScrubbedCallForTelemetry(callPB))
+		// The body is the frame VERBATIM, large Bytes arguments included:
+		// call payloads are the material for rebuilding — and resuming from —
+		// a trace, so the recipe must arrive intact. Byte-heavy frames stay
+		// off the legacy span attribute instead (AroundFunc), which routes
+		// them through here.
+		payload, err := (proto.MarshalOptions{Deterministic: true}).Marshal(callPB)
 		if err != nil {
 			slog.WarnContext(ctx, "failed to marshal call payload", "digest", dgst, "err", err)
 			return
