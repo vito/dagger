@@ -116,16 +116,16 @@ type TuiQa {
     let runner = base
       .withFile("/usr/local/bin/dagger", cli)
       .withDirectory(workdir, srcDir)
+      # The workspace snapshot carries no usable .git of its own — at best a
+      # worktree pointer file whose target only exists on the real host — but
+      # the CLI under test needs a real checkout: without one,
+      # Workspace.snapshot can't freeze (ctrl+s fails with "pulling requires
+      # a frozen source workspace") and `dagger agent` composes with no
+      # tools. Workspace.git.directory is the documented complement: "mount
+      # at .git alongside workspace.directory(\"/\") to form a usable
+      # checkout".
+      .withDirectory(workdir + "/.git", source.git.directory)
       .withWorkdir(workdir)
-      # The workspace snapshot carries no usable .git — at best a worktree
-      # pointer file whose target only exists on the real host — but agent
-      # workspace tools (commit, git.uncommitted, ctrl+s) need an actual
-      # repository. Re-initialize one from the snapshot so `dagger agent`
-      # sessions can stage commits.
-      .withExec([
-        "sh", "-c",
-        "rm -rf .git && git init -q -b main && git add -A && git " + "-c user.email=tui-qa@localhost -c user.name=tui-qa " + "commit -qm 'workspace snapshot'",
-      ])
       .withEnvVariable("DAGGER_TUI_CONSOLE", ":" + toString(port))
       .withEnvVariable("DAGGER_PROGRESS", "tty")
       .withExposedPort(port)
