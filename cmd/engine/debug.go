@@ -83,6 +83,24 @@ func setupDebugHandlers(addr string, eng *server.Server) error {
 			logrus.WithError(err).Warn("failed streaming dagql cache debug snapshot")
 		}
 	}))
+	// Per-client workspace state: source kind, host path, cwd, config/lock
+	// files, selected env, and pending/served/failed module names. Answers
+	// "why does my session have no workspace modules or agents" — e.g. a
+	// rootless workspace (dagger.toml with no git root above it) shows up
+	// here with a rootless source kind, no configFile, and zero modules.
+	m.Handle("/debug/client/workspace", http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		if eng == nil {
+			http.Error(rw, "engine server not available", http.StatusServiceUnavailable)
+			return
+		}
+		rw.Header().Set("Content-Type", "application/json")
+		enc := json.NewEncoder(rw)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(eng.ClientWorkspaceDebugStates()); err != nil {
+			http.Error(rw, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}))
 	// Engine-global profiling toggle: GET reports state, POST "on"/"off"
 	// (or any strconv.ParseBool value) flips it. Disabling keeps buffered
 	// events dumpable and does not stop sessions that opted in via --profile.
