@@ -298,6 +298,17 @@ type TuiQa {
   }
 
   """
+  List the tools the model in an interactive LLM session (`dagger agent`, the
+  shell's prompt mode) currently sees — names, descriptions and schemas,
+  verbatim from the live session — so you can verify what the model would see
+  without spending an LLM turn asking the agent itself. Errors with 404 until
+  such a session is up in the TUI under test.
+  """
+  toolset: String! @cache(policy: FunctionCachePolicy.Never) {
+    get("/toolset")
+  }
+
+  """
   Show the console's own endpoint + keymap help.
   """
   help: String! {

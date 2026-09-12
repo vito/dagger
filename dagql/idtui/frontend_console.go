@@ -295,6 +295,33 @@ func (fe *frontendPretty) serveConsole(ctx context.Context) error {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		io.WriteString(w, fe.consoleSpans(r.URL.Query().Get("q")))
 	})
+	mux.HandleFunc("/toolset", func(w http.ResponseWriter, r *http.Request) {
+		// The rendered docs of the tools the model in an interactive LLM
+		// session (`dagger agent`, shell prompt mode) currently sees — so QA
+		// can verify the composed toolset without spending an LLM turn asking
+		// the agent itself. The CLI registers the provider when a session
+		// starts (SetLLMToolsProvider); a Step first drains the dispatch
+		// queue so a just-registered provider is visible.
+		fe.consoleMu.Lock()
+		fe.tui.Step()
+		provider := fe.llmToolsFn
+		fe.consoleMu.Unlock()
+		if provider == nil {
+			http.Error(w, "no interactive LLM session (the toolset is only "+
+				"available once a `dagger agent`/shell prompt session is up)",
+				http.StatusNotFound)
+			return
+		}
+		// The provider queries the engine (LLM.tools); run it without
+		// consoleMu so a slow round-trip can't wedge the other endpoints.
+		doc, err := provider(r.Context())
+		if err != nil {
+			http.Error(w, fmt.Sprintf("toolset: %v", err), http.StatusBadGateway)
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		io.WriteString(w, doc)
+	})
 	mux.HandleFunc("/span", func(w http.ResponseWriter, r *http.Request) {
 		hex := r.URL.Query().Get("id")
 		if hex == "" {
@@ -548,6 +575,7 @@ func (fe *frontendPretty) consoleHelp(w http.ResponseWriter, _ *http.Request) {
 		"                       either way return the frame at ?timeout= (default 60s) at the latest\n"+
 		"  GET  /spans[?q=sub]  loaded-span id/status/name listing\n"+
 		"  GET  /span?id=<hex>  span detail: status, timing, flags, parent chain\n"+
+		"  GET  /toolset        the interactive LLM session's tool docs, when one is live\n"+
 		"  GET  /help           this list\n"+
 		"keys: ←↑↓→ move · right/l expand · left/h collapse · enter zoom · "+
 		"r error origin · L logs · +/- verbosity · / search\n"+
@@ -648,4 +676,18 @@ func consoleDuration(s string, def time.Duration) (time.Duration, error) {
 		return 0, fmt.Errorf("bad duration %q: must not be negative", s)
 	}
 	return d, nil
+}
+
+// LLMToolsProvider renders the documentation of the tools currently exposed to
+// an interactive LLM session's model (LLM.tools). The CLI registers one when
+// an agent/shell session starts so the console can serve /toolset.
+type LLMToolsProvider func(context.Context) (string, error)
+
+// SetLLMToolsProvider registers the toolset provider backing the console's
+// /toolset endpoint. The CLI re-registers it on every LLM swap (prompt turns,
+// .clear, .model, resume, ...) so it always reflects the current composition.
+func (fe *frontendPretty) SetLLMToolsProvider(fn LLMToolsProvider) {
+	fe.dispatch(func() {
+		fe.llmToolsFn = fn
+	})
 }

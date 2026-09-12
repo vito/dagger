@@ -57,6 +57,7 @@ curl -s --data '<spanHex>' localhost:7777/zoom # jump straight to a span
 curl -s --data '120x12'    localhost:7777/resize # resize the terminal (cols x rows)
 curl -s --data 'DONE|ERROR' localhost:7777/wait  # block until the screen matches (body = regex)
 curl -s -X POST 'localhost:7777/wait?quiet=2s&timeout=60s' # ... or until it stops changing
+curl -s localhost:7777/toolset                 # a live agent/shell session's tool docs
 curl -s localhost:7777/help                    # endpoints + keymap
 ```
 

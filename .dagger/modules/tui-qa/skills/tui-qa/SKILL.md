@@ -35,7 +35,9 @@ Interactive prompt mode works too: starting with args: ["agent"] brings up the
 live `dagger agent` prompt. Drive it by `typeText`-ing a line into the editline
 and `key enter` to submit; `key esc` toggles nav/input mode. The runner uses
 experimentalPrivilegedNesting so it inherits the outer session's LLM auth (no
-credential setup needed).
+credential setup needed). Once the session is up, `toolset` lists the tools
+the model actually sees (names, descriptions, schemas) without spending an
+LLM turn asking the agent itself.
 
 If engine-lab tools are available, their start tool prints a tcp://<host>:1234
 endpoint — pass it as `start(engine: ...)` to run the TUI against THAT engine
