@@ -430,6 +430,21 @@ func (GitSuite) TestCheckoutOrigin(ctx context.Context, t *testctx.T) {
 			WithExec([]string{"git", "clone", "https://github.com/dagger/dagger", ".", "--depth=1"}).
 			Directory(".")
 		checkout := clone.AsGit().Head().Tree()
+		// The source repository's own origin carries over; the ephemeral
+		// engine-local clone path never does.
+		require.Equal(t, "https://github.com/dagger/dagger", getOrigin(ctx, t, checkout))
+	})
+
+	t.Run("local without origin", func(ctx context.Context, t *testctx.T) {
+		repo := c.Container().From(alpineImage).
+			WithExec([]string{"apk", "add", "git"}).
+			WithWorkdir("/src").
+			WithExec([]string{"git", "init"}).
+			WithNewFile("base.txt", "base").
+			WithExec([]string{"git", "add", "."}).
+			WithExec([]string{"git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "initial"}).
+			Directory(".")
+		checkout := repo.AsGit().Head().Tree()
 		require.Equal(t, "", getOrigin(ctx, t, checkout))
 	})
 }

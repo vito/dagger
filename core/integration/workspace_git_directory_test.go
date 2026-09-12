@@ -23,6 +23,9 @@ func (WorkspaceSuite) TestWorkspaceGitDirectory(ctx context.Context, t *testctx.
 	out, err := clean.WithExec([]string{"git", "rev-parse", "HEAD"}).Stdout(ctx)
 	require.NoError(t, err)
 	require.Equal(t, baseSHA, strings.TrimSpace(out))
+	out, err = clean.WithExec([]string{"git", "remote", "get-url", "origin"}).Stdout(ctx)
+	require.NoError(t, err)
+	require.Equal(t, url, strings.TrimSpace(out))
 
 	ws := base.WithNewFile("committed.txt", "agent commit").
 		WithCommit("agent commit", workspaceCommitDate).
@@ -47,6 +50,10 @@ func (WorkspaceSuite) TestWorkspaceGitDirectory(ctx context.Context, t *testctx.
 	out, err = ctr.WithExec([]string{"git", "log", "--format=%H"}).Stdout(ctx)
 	require.NoError(t, err)
 	require.Equal(t, []string{head, baseSHA}, strings.Fields(out))
+	// Commits rebuild the repository engine-side; the origin remote survives.
+	out, err = ctr.WithExec([]string{"git", "remote", "get-url", "origin"}).Stdout(ctx)
+	require.NoError(t, err)
+	require.Equal(t, url, strings.TrimSpace(out))
 	out, err = ctr.WithExec([]string{"git", "rev-parse", "--is-shallow-repository"}).Stdout(ctx)
 	require.NoError(t, err)
 	require.Equal(t, "false\n", out)
@@ -79,6 +86,8 @@ func workspaceGitDirectoryContainer(c *dagger.Client, ws *dagger.Workspace) *dag
 
 func (WorkspaceSuite) TestWorkspaceGitDirectoryWorktree(ctx context.Context, t *testctx.T) {
 	_, git := workspaceExportCheckout(ctx, t)
+	const originURL = "https://example.com/origin/repo.git"
+	git("remote", "add", "origin", originURL)
 	linked := filepath.Join(t.TempDir(), "linked")
 	git("worktree", "add", "-b", "feature", linked)
 	require.NoError(t, os.WriteFile(filepath.Join(linked, "feature.txt"), []byte("feature"), 0o644))
@@ -106,6 +115,12 @@ func (WorkspaceSuite) TestWorkspaceGitDirectoryWorktree(ctx context.Context, t *
 		out, err = ctr.WithExec([]string{"git", "status", "--porcelain"}).Stdout(ctx)
 		require.NoError(t, err)
 		require.Equal(t, " M base.txt\n", out)
+		// The host checkout's origin remote survives the canonical
+		// reconstruction, so remote-aware tooling (gh, git fetch) can still
+		// resolve the repository from the mounted metadata.
+		out, err = ctr.WithExec([]string{"git", "remote", "get-url", "origin"}).Stdout(ctx)
+		require.NoError(t, err)
+		require.Equal(t, originURL, strings.TrimSpace(out))
 		// This is the nested CLI flow needed by tui-qa: capture a real Git
 		// workspace, with no pointer back to the original host checkout.
 		out, err = ctr.WithMountedFile(testCLIBinPath, daggerCliFile(t, c)).

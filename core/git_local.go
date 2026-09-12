@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 
 	"github.com/containerd/containerd/v2/core/mount"
 	"github.com/containerd/continuity/fs"
@@ -280,6 +281,16 @@ func (ref *LocalGitRef) Tree(ctx context.Context, srv *dagql.Server, discardGitD
 			return fmt.Errorf("could not find git url: %w", err)
 		}
 
+		// The checkout is rebuilt from scratch, which would drop the source
+		// repository's remotes. Carry its origin over so remote-aware tooling
+		// (gh, git fetch) keeps resolving the repository from the result; the
+		// checkout itself still fetches from the local mount.
+		out, err := git.New(gitutil.WithIgnoreError()).Run(ctx, "remote", "get-url", "origin")
+		if err != nil {
+			return fmt.Errorf("could not read origin remote: %w", err)
+		}
+		originURL := strings.TrimSpace(string(out))
+
 		return MountRef(ctx, bkref, func(checkoutDir string, _ *mount.Mount) error {
 			checkoutDirGit := filepath.Join(checkoutDir, ".git")
 			if err := os.MkdirAll(checkoutDir, 0711); err != nil {
@@ -290,7 +301,7 @@ func (ref *LocalGitRef) Tree(ctx context.Context, srv *dagql.Server, discardGitD
 				gitutil.WithWorkTree(checkoutDir),
 				gitutil.WithGitDir(checkoutDirGit),
 			)
-			return doGitCheckout(ctx, checkoutGit, "", gitURL, ref.Ref, depth, discardGitDir)
+			return doGitCheckout(ctx, checkoutGit, originURL, gitURL, ref.Ref, depth, discardGitDir)
 		})
 	})
 	if err != nil {
