@@ -755,6 +755,15 @@ func (srv *Server) detectAndLoadWorkspaceWithRootfs(
 	// No native workspace and no eligible legacy module: keep a rootless local
 	// workspace for context-only APIs, but do not load modules.
 	if ws == nil {
+		// Detection requires a git root, so a dagger.toml sitting above cwd
+		// with no .git anywhere above it is ignored — historically without any
+		// message, leaving the session with zero workspace modules and no
+		// explanation. Warn (visibly, via the client's console) when that is
+		// what just happened; detection semantics stay unchanged.
+		if msg, ok := ignoredWorkspaceConfigWarning(ctx, pathExists, cwd, isLocal); ok {
+			console(ctx, "%s", msg)
+			slog.Warn(msg)
+		}
 		clientMetadata, err := engine.ClientMetadataFromContext(ctx)
 		if err != nil {
 			return fmt.Errorf("building rootless workspace: client metadata: %w", err)
@@ -887,6 +896,27 @@ func legacyWorkspaceCompatMessage(cwd, cfgPath string) string {
 		relPath = rel
 	}
 	return fmt.Sprintf("No workspace config found, inferring from %s.\nRun 'dagger workspace migrate' when ready. More info: https://docs.dagger.io/reference/upgrade-to-workspaces", relPath)
+}
+
+// ignoredWorkspaceConfigWarning returns the user-facing warning for a local
+// detection run that yielded no workspace even though a dagger.toml find-up
+// from cwd would have matched: workspace detection walks up to .git first and
+// treats "no git root" as "no workspace", never looking at the config. The
+// warning is diagnostic only — the rootless session is built regardless.
+func ignoredWorkspaceConfigWarning(
+	ctx context.Context,
+	pathExists workspace.PathExistsFunc,
+	cwd string,
+	isLocal bool,
+) (string, bool) {
+	if !isLocal {
+		return "", false
+	}
+	configPath, found, err := workspace.FindConfigUpward(ctx, pathExists, cwd)
+	if err != nil || !found {
+		return "", false
+	}
+	return fmt.Sprintf("dagger.toml found at %s, but it is not inside a git repository; no workspace loaded (workspace detection requires a git root)", configPath), true
 }
 
 // buildCoreWorkspace converts the internal workspace detection result into

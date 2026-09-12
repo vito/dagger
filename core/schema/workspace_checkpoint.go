@@ -17,7 +17,10 @@ import (
 	"github.com/dagger/dagger/engine/engineutil"
 	gitsession "github.com/dagger/dagger/engine/session/git"
 	"github.com/dagger/dagger/engine/session/prompt"
+	"github.com/dagger/dagger/engine/slog"
 	"github.com/dagger/dagger/util/gitutil"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -37,7 +40,14 @@ func (s *workspaceSchema) snapshot(ctx context.Context, parent dagql.ObjectResul
 	if ws := parent.Self(); ws != nil {
 		_, rootless = ws.BaseSource().(*core.WorkspaceSourceRootlessLocal)
 	}
-	if !rootless {
+	if rootless {
+		// A rootless workspace (detection found no git checkout) has no
+		// baseline to freeze against, so snapshot returns the live value
+		// unchanged. Say so: this short-circuit is otherwise invisible (a
+		// 0-duration span) and is the first half of "pulling requires a frozen
+		// source workspace" failures in sessions started outside any git repo.
+		snapshotBreadcrumb(ctx, "skipping freeze: rootless workspace (no git checkout)", nil)
+	} else {
 		frozen, err = s.freeze(ctx, parent)
 	}
 	if errors.Is(err, gitutil.ErrGitNoRepo) || errors.Is(err, engineutil.ErrGitCaptureUnsupported) {
@@ -45,9 +55,26 @@ func (s *workspaceSchema) snapshot(ctx context.Context, parent dagql.ObjectResul
 		// workspace. Keep the original value, including any overlays and client
 		// context, when there is no capturable Git baseline. Git mutations call
 		// freeze directly and still require capture to succeed.
+		// Leave a breadcrumb: downstream consumers of the live value (pull,
+		// freeze-dependent APIs) fail with errors that never mention this
+		// rescue happened.
+		snapshotBreadcrumb(ctx, "no capturable git baseline; returning live workspace", err)
 		frozen, err = parent, nil
 	}
 	return frozen, err
+}
+
+// snapshotBreadcrumb makes a silent snapshot fallback visible in session
+// telemetry, as both a span event on the snapshot span and a warning log.
+func snapshotBreadcrumb(ctx context.Context, msg string, cause error) {
+	span := trace.SpanFromContext(ctx)
+	if cause != nil {
+		span.AddEvent(msg, trace.WithAttributes(attribute.String("cause", cause.Error())))
+		slog.WarnContext(ctx, msg, "cause", cause)
+		return
+	}
+	span.AddEvent(msg)
+	slog.WarnContext(ctx, msg)
 }
 
 func (s *workspaceSchema) freeze(
