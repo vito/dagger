@@ -1753,9 +1753,7 @@ func (s *gitSchema) withDirectory(ctx context.Context, parent dagql.ObjectResult
 		return inst, err
 	}
 	backend := &core.LocalGitRepository{Directory: dir}
-	if err := backend.ValidateSelfContained(ctx); err != nil {
-		return inst, err
-	}
+	// NewGitRepository enforces ValidateSelfContained on local backends.
 	repo, err := core.NewGitRepository(ctx, backend)
 	if err != nil {
 		return inst, err

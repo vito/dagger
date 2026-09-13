@@ -266,6 +266,19 @@ func NewGitRepository(ctx context.Context, backend GitRepositoryBackend) (*GitRe
 		return repo, nil
 	}
 
+	// Local storage may come straight from a module (Directory.asGit,
+	// GitRepository.withDirectory). Every construction funnels through here,
+	// so enforcing self-containment at this seam guarantees no entry point —
+	// present or future — hands engine-process git storage whose metadata
+	// (gitdir pointers, core.worktree, symlinks, object alternates) escapes
+	// the supplied directory. LoadRemote below already runs git against the
+	// storage, so validation must happen first.
+	if localBackend, ok := backend.(*LocalGitRepository); ok {
+		if err := localBackend.ValidateSelfContained(ctx); err != nil {
+			return nil, err
+		}
+	}
+
 	_, err := repo.LoadRemote(ctx)
 	if err != nil {
 		return nil, err
@@ -609,6 +622,10 @@ func (*GitRepository) DecodePersistedObject(ctx context.Context, dag *dagql.Serv
 		if err != nil {
 			return nil, err
 		}
+		// Deliberately not re-running ValidateSelfContained: decode restores a
+		// repository that NewGitRepository already validated when it was first
+		// constructed, and re-validating here would force materializing the
+		// directory snapshot on every decode.
 		repo.Backend = &LocalGitRepository{Directory: dir}
 	case persistedGitRepositoryFormRemote:
 		if persisted.Remote == nil {
