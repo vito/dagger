@@ -206,7 +206,7 @@ func (s *workspaceSchema) workspaceGitDirectory(ctx context.Context, parent dagq
 	// Bypass the repository's keepGitDir option and the default shallow depth.
 	// Tree returns a newly owned, materialized snapshot rooted at /; expose its
 	// metadata directly without an intermediate private GraphQL field.
-	dir, err := head.Self().Backend.Tree(ctx, srv, false, 0, false)
+	dir, err := head.Self().Backend.Tree(ctx, srv, false, 0, false, head.Self().Repo.Self().Remotes)
 	if err != nil {
 		return inst, err
 	}
