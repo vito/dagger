@@ -1,6 +1,6 @@
 # Integration merge state
 
-`vitoland` is a local dogfooding branch. Do not push or ship it. Source changes belong on their source branches; integration resolutions and this record belong here.
+`vitoland` is a dogfooding integration branch. Push it only when explicitly requested; do not ship it. Source changes belong on their source branches; integration resolutions and this record belong here.
 
 ## September 11 rebuild
 
@@ -223,3 +223,24 @@ the engine and CLI from each cleaned source worktree. Suites run sequentially.
 Tree identity, source ancestry, commit sign-offs, message formatting, and diff
 whitespace checks pass. Full repository and race suites were not run. Test
 logs are retained under `/tmp/dagger-redistribute-e6qvq2va/`.
+
+## September 12 publication follow-up
+
+After cleanup, the user explicitly requested pushing all three branches,
+including vitoland. Remote inspection found `origin/workspace-git` had advanced
+to `4ad953a484` (abbreviated Git SHA resolution, vito/dagger#419). Preserved those
+remote commits in signed merge `10d6f65646` on workspace-git and integrated that
+source tip here. The added code is patch-identical to the remote feature; the
+cleanup's code-identity check above describes the state before this follow-up.
+The separate credential lease commit `62026681d8` remains intact.
+
+Publication destinations are `origin/workspace-git` at `10d6f65646`,
+`upstream/extract/agent-runtime` at `faad9367a5`, and `origin/vitoland` at this
+follow-up. The rewritten runtime and integration histories use explicit leases
+against the inspected remote tips `b64b9cf70c` and `9693b12255`. Workspace-git
+preserves its remote ancestry. Backup branches remain local.
+
+The combined integration passed `TestGit/TestGitRefWithCommit` and
+`TestGit/TestShortSHAResolution` through `engine-dev test` (1 suite entry;
+[trace](https://dagger.cloud/dagger/traces/4c925f4fecf78d28c5adc19f0390911e)).
+Discarded incidental test-build lock resolutions. Whitespace checks pass.
