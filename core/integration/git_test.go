@@ -449,6 +449,87 @@ func (GitSuite) TestCheckoutOrigin(ctx context.Context, t *testctx.T) {
 	})
 }
 
+func (GitSuite) TestWithRemote(ctx context.Context, t *testctx.T) {
+	c := connect(ctx, t)
+	gitDaemon, repoURL := gitService(ctx, t, c, c.Directory().WithNewFile("base.txt", "base"))
+	serviceID, err := gitDaemon.ID(ctx)
+	require.NoError(t, err)
+
+	const upstreamURL = "https://example.com/upstream/repo.git"
+	const upstreamPushURL = "ssh://git@example.com/upstream/repo.git"
+	var result struct {
+		Git struct {
+			WithRemote struct {
+				Head struct {
+					Tree struct{ ID dagger.ID }
+				}
+			}
+		}
+	}
+	require.NoError(t, c.Do(ctx, &dagger.Request{
+		Query: `query($url: String!, $service: ID!, $upstream: String!, $push: String!) {
+			git(url: $url, experimentalServiceHost: $service) {
+				withRemote(name: "upstream", url: $upstream, pushUrls: [$push]) {
+					head { tree { id } }
+				}
+			}
+		}`,
+		Variables: map[string]any{
+			"url": repoURL, "service": serviceID,
+			"upstream": upstreamURL, "push": upstreamPushURL,
+		},
+	}, &dagger.Response{Data: &result}))
+	checkout := dagger.Ref[*dagger.Directory](c, result.Git.WithRemote.Head.Tree.ID)
+
+	remoteURLs := func(ctx context.Context, t *testctx.T, checkout *dagger.Directory, args ...string) string {
+		out, err := c.Container().From(alpineImage).
+			WithExec([]string{"apk", "add", "git"}).
+			WithWorkdir("/src").
+			WithMountedDirectory(".", checkout).
+			WithExec(append([]string{"git", "remote", "get-url"}, args...)).
+			Stdout(ctx)
+		require.NoError(t, err)
+		return strings.TrimSpace(out)
+	}
+
+	// The registered remote lands in the materialized checkout beside the
+	// clone URL's origin.
+	require.Equal(t, repoURL, remoteURLs(ctx, t, checkout, "origin"))
+	require.Equal(t, upstreamURL, remoteURLs(ctx, t, checkout, "upstream"))
+	require.Equal(t, upstreamPushURL, remoteURLs(ctx, t, checkout, "--push", "upstream"))
+
+	// Rebuilding the repository engine-side keeps the whole remote
+	// configuration, not just origin.
+	rebuilt := checkout.AsGit().Head().Tree()
+	require.Equal(t, repoURL, remoteURLs(ctx, t, rebuilt, "origin"))
+	require.Equal(t, upstreamURL, remoteURLs(ctx, t, rebuilt, "upstream"))
+	require.Equal(t, upstreamPushURL, remoteURLs(ctx, t, rebuilt, "--push", "upstream"))
+
+	// Registration validates its inputs: no passwords in recorded URLs, and
+	// no option-injection through names.
+	for name, variables := range map[string]map[string]any{
+		"password URL": {"name": "origin", "remoteUrl": "https://user:secret@example.com/repo.git"},
+		"option name":  {"name": "--mirror", "remoteUrl": upstreamURL},
+	} {
+		t.Run(name, func(ctx context.Context, t *testctx.T) {
+			var rejected any
+			err := c.Do(ctx, &dagger.Request{
+				Query: `query($url: String!, $service: ID!, $name: String!, $remoteUrl: String!) {
+					git(url: $url, experimentalServiceHost: $service) {
+						withRemote(name: $name, url: $remoteUrl) { id }
+					}
+				}`,
+				Variables: map[string]any{
+					"url": repoURL, "service": serviceID,
+					"name": variables["name"], "remoteUrl": variables["remoteUrl"],
+				},
+			}, &dagger.Response{Data: &rejected})
+			require.Error(t, err)
+			require.NotContains(t, err.Error(), "secret")
+		})
+	}
+}
+
 func (GitSuite) TestGitDepth(ctx context.Context, t *testctx.T) {
 	c := connect(ctx, t)
 

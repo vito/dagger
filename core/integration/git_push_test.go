@@ -190,14 +190,14 @@ func (GitSuite) TestPushHTTPAuth(ctx context.Context, t *testctx.T) {
 	_, err = pushGitRef(ctx, c, base, anonymous, "anonymous", nil)
 	require.Error(t, err)
 	// Routing metadata must not transfer source credentials, even when the
-	// recorded push URL happens to be the source's own authenticated remote.
+	// registered push URL happens to be the source's own authenticated remote.
 	repoID, err := repo.ID(ctx)
 	require.NoError(t, err)
 	var routed any
 	err = c.Do(ctx, &dagger.Request{
 		Query: `query($repo: ID!, $url: String!) {
 			node(id: $repo) { ... on GitRepository {
-				__withPushURLs(urls: [$url]) { branch(name: "main") {
+				withRemote(name: "origin", url: $url, pushUrls: [$url]) { branch(name: "main") {
 					push(branch: "routing-is-not-auth") { disposition }
 				} }
 			} }

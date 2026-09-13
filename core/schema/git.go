@@ -172,10 +172,21 @@ func (s *gitSchema) Install(srv *dagql.Server) {
 				dagql.Arg("bundle"),
 				dagql.Arg("prerequisiteRef"),
 			),
+		dagql.Func("withRemote", s.withRemote).
+			View(AfterVersion("v1.0.0-0")).
+			IsPersistable().
+			Doc("Register a named remote on this repository, replacing any registered remote of the same name.",
+				"Registered remotes are recorded in checkouts materialized from this repository (GitRef.tree, Workspace.git.directory), so remote-aware tooling like gh can resolve and fetch from them. The origin remote also routes push when no explicit destination is passed: its push URLs, or its URL, become the default destination.",
+				"Routing metadata only, never a credential grant: pushes still authenticate with the caller's own credentials and require approval as usual.").
+			Args(
+				dagql.Arg("name").Doc(`The remote's name, e.g. "origin" or "upstream".`),
+				dagql.Arg("url").Doc(`The remote's fetch URL.`),
+				dagql.Arg("pushUrls").Doc(`Push destinations, when pushes go somewhere other than url. Registering more than one makes push require an explicit destination.`),
+			),
 		dagql.Func("__withPushURLs", s.withPushURLs).
 			View(AfterVersion("v1.0.0-0")).
 			IsPersistable().
-			Doc("(Internal-only) Record push routing metadata. Does not grant credential access."),
+			Doc("(Internal-only) Legacy alias of withRemote for origin push routing, kept so persisted checkpoints replay."),
 		dagql.NodeFunc("__cleaned", s.cleaned).
 			IsPersistable().
 			Doc(`(Internal-only) Cleans the git repository by removing untracked files and resetting modifications.`),
@@ -1484,10 +1495,10 @@ func (s *gitSchema) gitRefResult(ctx context.Context, parent dagql.ObjectResult[
 		string(ref.Digest()),
 		strconv.FormatBool(repo.DiscardGitDir),
 	}
-	if len(repo.PushURLs) > 0 {
-		// The same commit with different push routing is a different GitRef:
+	if len(repo.Remotes) > 0 {
+		// The same commit with different remote routing is a different GitRef:
 		// merging these results could send a push to the wrong destination.
-		dgstInputs = append(dgstInputs, "pushURLs", hashutil.HashStrings(repo.PushURLs...).String())
+		dgstInputs = append(dgstInputs, "remotes", hashutil.HashStrings(gitRemoteDigestInputs(repo.Remotes)...).String())
 	}
 	if localRepo, ok := repo.Backend.(*core.LocalGitRepository); ok {
 		// URL is empty for local repos, and a SHA alone doesn't identify the
@@ -1760,7 +1771,7 @@ func (s *gitSchema) withDirectory(ctx context.Context, parent dagql.ObjectResult
 		return inst, err
 	}
 	repo.URL = parent.Self().URL
-	repo.PushURLs = slices.Clone(parent.Self().PushURLs)
+	repo.Remotes = core.CloneGitRemotes(parent.Self().Remotes)
 	repo.DiscardGitDir = parent.Self().DiscardGitDir
 	return dagql.NewObjectResultForCurrentCall(ctx, srv, repo)
 }
@@ -1931,9 +1942,9 @@ func (s *gitSchema) gitCommitResult(ctx context.Context, parent dagql.ObjectResu
 		ref.SHA,
 		strconv.FormatBool(repo.DiscardGitDir),
 	}
-	if len(repo.PushURLs) > 0 {
-		// GitCommit retains its repository, including its push routing.
-		dgstInputs = append(dgstInputs, "pushURLs", hashutil.HashStrings(repo.PushURLs...).String())
+	if len(repo.Remotes) > 0 {
+		// GitCommit retains its repository, including its remote routing.
+		dgstInputs = append(dgstInputs, "remotes", hashutil.HashStrings(gitRemoteDigestInputs(repo.Remotes)...).String())
 	}
 	if localRepo, ok := repo.Backend.(*core.LocalGitRepository); ok {
 		// URL is empty for local repos, and a SHA alone doesn't identify the
