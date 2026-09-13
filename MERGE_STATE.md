@@ -140,3 +140,86 @@ engine and CLI from the isolated source branch:
 
 The installed persistent development engine and CLI were not replaced by this
 follow-up. Reinstall them from the updated branch to use the migration fix.
+
+## September 12 fix redistribution
+
+Cleaned up the seven direct fixes after `8ad5663849` and moved their source
+changes back to the owning branches. All new commits have descriptive bodies
+and Alex Suraci's DCO sign-off. No branches were pushed.
+
+| Source | Commit | Purpose | Previous integration commits |
+| --- | --- | --- | --- |
+| `extract/agent-runtime` | `b2e04dcc73` | Portable OAuth rejection refresh | `9a865cb443` (source copy `b64b9cf70c`) |
+| `extract/agent-runtime` | `faad9367a5` | Cold module recipe restoration with unit and restored-tool regressions | `734d39e62b`, `9693b12255` |
+| `workspace-git` | `19c149fa33` | Author sign-off API, identity tests, and generated schema/SDK bindings | `0e31820398`, `95f3c6bf98`, `29169fba45` |
+| `workspace-git` | `d01ecf62e3` | Uncommitted-edit preview and regressions | `c197af6047` |
+| `vitoland` only | `62026681d8` | Client-lifecycle credential leases and regression | Lease-dependent portion of `9a865cb443` |
+
+The existing unsigned `workspace-git` test commit `51b63b299b` was included in
+`19c149fa33`; its tests match the integration's `0e31820398`.
+
+Source validation exposed an existing problem in agent-runtime's OAuth commit
+`b64b9cf70c`: it referenced client lease APIs that exist only after merging
+`client-lifecycle` ([initial build failure](https://dagger.cloud/dagger/traces/f875eab5928bf1d77a80c17d786e1065)). The source commit is now `b2e04dcc73`, which retains the
+session-bound resolver and explicitly carries the active request's rejection
+fingerprint. The lease implementation and its lease-specific regression have
+been extracted into the separate signed integration commit `62026681d8`.
+
+**Preserve `62026681d8` when rebuilding vitoland with client-lifecycle.** It
+acquires a temporary shared-work lease from the active request or agent turn,
+checks that it belongs to the routing session, and bounds the lookup by session
+cancellation and a timeout. The endpoint must not reuse its routing call's
+released lease. `TestLLMEndpointCredentialOutlivesRoutingScope` checks this
+behavior and verifies that lookup releases the temporary lease. This delta
+belongs on agent-runtime only once that branch includes the client-lifecycle
+APIs; until then, keep both implementation and regression on vitoland.
+
+The preview fix uses `LLMSession` on workspace-git, where the preview code
+originates. Its integration continues to use `sessionAgent`. The cold recipe
+fix does not add the lifecycle branch's `dagql/recipe_classification.go` to
+agent-runtime; the classifier's adjusted helper call remains an integration
+merge resolution.
+
+Replaced the seven direct integration commits with merge `164b0a3df2`
+(agent-runtime at `faad9367a5`), the lease adaptation `62026681d8`, and merge
+`96c9ecc84e` (workspace-git at `d01ecf62e3`). The tree at `96c9ecc84e` is
+byte-for-byte identical to the previous integration tip `9693b12255`; only this
+record changes afterward. Both updated source tips are ancestors of vitoland.
+
+Original tips are retained as `backup/vitoland-before-redistribute-20260912`
+(`9693b12255`), `backup/workspace-git-before-redistribute-20260912`
+(`51b63b299b`), and `backup/agent-runtime-before-redistribute-20260912`
+(`b64b9cf70c`). The untracked `workspace-git/refactor.md` is preserved unchanged.
+The rewritten OAuth source commit changes agent-runtime's local history;
+updating its remote will require a coordinated history rewrite. No remote refs
+were changed by this cleanup.
+
+Validation uses `/tmp/vitoland-dagger` with `api call engine-dev test`, building
+the engine and CLI from each cleaned source worktree. Suites run sequentially.
+
+- Workspace-git: `TestGit/TestGitRefWithCommit` and
+  `TestWorkspace/TestWorkspaceWithCommitSignoff` passed (2 runner entries;
+  [trace](https://dagger.cloud/dagger/traces/fb128ffa7f4c39489557aab713832805)).
+- Workspace-git: `TestWorkspaceChangesRendering` and
+  `TestDaggerCMD/TestAgentWorkspaceChanges` passed (2 runner entries;
+  [trace](https://dagger.cloud/dagger/traces/444cb45c73b444bff8fcb4c4c994c6c5)).
+- Agent-runtime: cold recipe provenance, cross-module lazy arguments, warm
+  cache hits, and lazy-ref replay regressions passed (4 runner entries;
+  [trace](https://dagger.cloud/dagger/traces/5ba7794c3b4585a4c402c1af9ccac213)).
+  This ran before extracting the lease-specific core test; the tested dagql
+  source and tests are unchanged at the final tip.
+- Agent-runtime: credential source/transport, cancellation, and LLM endpoint
+  tests passed (18 runner entries;
+  [trace](https://dagger.cloud/dagger/traces/45030a36768701b16ae2c5d220e49866)).
+- Agent-runtime: credential reload through the installed secret schema after
+  the routing call ends passed (1 runner entry;
+  [trace](https://dagger.cloud/dagger/traces/ae2d6d9296e96bc8d7dac7bf7992e00c)).
+- Agent-runtime: restored cold module tool dispatch passed (1 runner entry;
+  [trace](https://dagger.cloud/dagger/traces/02ed016312c33c02c569f8741a57973d)).
+- Vitoland: routing-lease lifetime, detached resolver cancellation, and
+  rejection-fingerprint propagation passed (3 runner entries;
+  [trace](https://dagger.cloud/dagger/traces/1587ec35038aeebd5ea7be654a157eed)).
+
+Tree identity, source ancestry, commit sign-offs, message formatting, and diff
+whitespace checks pass. Full repository and race suites were not run. Test
+logs are retained under `/tmp/dagger-redistribute-e6qvq2va/`.
