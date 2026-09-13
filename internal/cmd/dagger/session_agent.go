@@ -1040,11 +1040,11 @@ func (a *sessionAgent) updateStatusLine(llm *dagger.LLM) error {
 }
 
 // updateChangesPreview refreshes the "Changes" notification bubble with a
-// summary of the workspace's pending overlay edits (Workspace.changes),
-// measured against the last-synced baseline so edits that were already present
-// when the session started are not reported as its own. Pressing ctrl+s exports
-// them to the local Git workspace (see ExportChanges). When there are no
-// pending edits the bubble is cleared (an empty body renders nothing).
+// summary of uncommitted edits above the workspace's HEAD and commits since
+// the last-synced checkpoint. With unchanged history, edits are measured against
+// the checkpoint so pre-existing or already-saved dirt is not reported as new
+// work. Pressing ctrl+s exports edits and commits to the local Git workspace
+// (see ExportChanges). When neither remains, the bubble is cleared.
 func (a *sessionAgent) updateChangesPreview(llm *dagger.LLM) error {
 	if !a.uiActive() || llm == nil {
 		return nil
