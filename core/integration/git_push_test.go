@@ -298,4 +298,27 @@ func (GitSuite) TestPushCapturedDestination(ctx context.Context, t *testctx.T) {
 	require.Empty(t, pushRemoteSHA(ctx, t, c, pushService, pushURL, "refs/heads/multiple"))
 	_, err = pushGitRef(ctx, c, multi.Git().Head(), fetchRepo, "multiple-explicit", nil)
 	require.NoError(t, err)
+
+	// A registered remote can be pushed to by name, without an explicit to.
+	pushByName := func(source *dagger.GitRef, remote, branch string) (gitPushReceipt, error) {
+		var response struct{ Node struct{ Push gitPushReceipt } }
+		id, err := source.ID(ctx)
+		require.NoError(t, err)
+		err = c.Do(ctx, &dagger.Request{
+			Query:     `query($id: ID!, $remote: String!, $branch: String!) { node(id:$id) { ... on GitRef { push(remote:$remote, branch:$branch) { id ref previousSHA sha disposition } } } }`,
+			Variables: map[string]any{"id": id, "remote": remote, "branch": branch},
+		}, &dagger.Response{Data: &response})
+		return response.Node.Push, err
+	}
+	mirror := fetchRepo.WithRemote("mirror", fetchURL, dagger.GitRepositoryWithRemoteOpts{PushUrls: []string{pushURL}}).Branch("main")
+	named, err := pushByName(mirror, "mirror", "named-remote")
+	require.NoError(t, err)
+	require.Equal(t, "CREATED", named.Disposition)
+	require.Equal(t, fetchSHA, pushRemoteSHA(ctx, t, c, pushService, pushURL, "refs/heads/named-remote"))
+	require.Empty(t, pushRemoteSHA(ctx, t, c, fetchService, fetchURL, "refs/heads/named-remote"))
+	// Unregistered names fail closed rather than guessing a destination.
+	_, err = pushByName(mirror, "unknown", "named-unknown")
+	require.ErrorContains(t, err, "no remote named")
+	require.Empty(t, pushRemoteSHA(ctx, t, c, fetchService, fetchURL, "refs/heads/named-unknown"))
+	require.Empty(t, pushRemoteSHA(ctx, t, c, pushService, pushURL, "refs/heads/named-unknown"))
 }

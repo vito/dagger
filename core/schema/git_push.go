@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/url"
-	"slices"
 	"strconv"
 	"strings"
 
@@ -15,6 +14,7 @@ import (
 
 type gitPushArgs struct {
 	To                dagql.Optional[dagql.ID[*core.GitRepository]]
+	Remote            string `default:""`
 	Branch            string `default:""`
 	ExpectedRemoteSHA string `name:"expectedRemoteSHA" default:""`
 }
@@ -24,6 +24,9 @@ func (s *gitSchema) push(ctx context.Context, parent dagql.ObjectResult[*core.Gi
 	opts := core.GitPushOpts{Branch: args.Branch, ExpectedRemoteSHA: args.ExpectedRemoteSHA}
 	if _, err := opts.Ref(parent.Self().Ref); err != nil {
 		return inst, err
+	}
+	if args.To.Valid && args.Remote != "" {
+		return inst, fmt.Errorf("pass either to or remote, not both")
 	}
 	srv, err := core.CurrentDagqlServer(ctx)
 	if err != nil {
@@ -35,6 +38,22 @@ func (s *gitSchema) push(ctx context.Context, parent dagql.ObjectResult[*core.Gi
 		repo, err = args.To.Value.Load(ctx, srv)
 		if err != nil {
 			return inst, err
+		}
+	} else if args.Remote != "" && args.Remote != "origin" {
+		// A named remote must be registered; origin is the implicit default
+		// below, resolvable even when it was never registered explicitly.
+		named := repo.Self().RemoteConfig(args.Remote)
+		switch {
+		case named == nil:
+			return inst, fmt.Errorf("no remote named %q is registered on the source; register it with withRemote or pass an explicit destination with to", args.Remote)
+		case len(named.PushURLs) > 1:
+			return inst, fmt.Errorf("remote %q has multiple push URLs; pass an explicit destination repository with to", args.Remote)
+		case len(named.PushURLs) == 1:
+			destinationURL = named.PushURLs[0]
+		case named.URL != "":
+			destinationURL = named.URL
+		default:
+			return inst, fmt.Errorf("remote %q has no URL; pass an explicit destination repository with to", args.Remote)
 		}
 	} else if origin := repo.Self().RemoteConfig("origin"); origin != nil && len(origin.PushURLs) > 1 {
 		return inst, fmt.Errorf("origin has multiple push URLs; pass an explicit destination repository with to")
@@ -102,25 +121,6 @@ func (s *gitSchema) withRemote(_ context.Context, parent *core.GitRepository, ar
 		Name:     args.Name,
 		URL:      args.URL,
 		PushURLs: args.PushURLs,
-	})
-	return repo, nil
-}
-
-// withPushURLs is the legacy spelling of origin push routing, superseded by
-// withRemote. The resolver stays installed so checkpoint recipes persisted
-// before the replacement keep replaying.
-func (s *gitSchema) withPushURLs(_ context.Context, parent *core.GitRepository, args struct {
-	URLs []string `name:"urls"`
-}) (*core.GitRepository, error) {
-	originURL := ""
-	if parent.URL.Valid {
-		originURL = parent.URL.Value.String()
-	}
-	repo := parent.CloneWithBackend(parent.Backend)
-	repo.Remotes = core.WithGitRemote(repo.Remotes, core.GitRemote{
-		Name:     "origin",
-		URL:      originURL,
-		PushURLs: slices.Clone(args.URLs),
 	})
 	return repo, nil
 }

@@ -596,14 +596,11 @@ const (
 )
 
 type persistedGitRepositoryPayload struct {
-	Form    string                      `json:"form"`
-	URL     string                      `json:"url,omitempty"`
-	Remotes []persistedGitRemotePayload `json:"remotes,omitempty"`
-	// PushURLs is the legacy encoding of push routing, read for
-	// checkpoints persisted before remotes became named registrations.
-	PushURLs      []string        `json:"pushURLs,omitempty"`
-	DiscardGitDir bool            `json:"discardGitDir,omitempty"`
-	RemoteJSON    json.RawMessage `json:"remoteJson,omitempty"`
+	Form          string                      `json:"form"`
+	URL           string                      `json:"url,omitempty"`
+	Remotes       []persistedGitRemotePayload `json:"remotes,omitempty"`
+	DiscardGitDir bool                        `json:"discardGitDir,omitempty"`
+	RemoteJSON    json.RawMessage             `json:"remoteJson,omitempty"`
 
 	Local  *persistedLocalGitRepositoryPayload  `json:"local,omitempty"`
 	Remote *persistedRemoteGitRepositoryPayload `json:"remote,omitempty"`
@@ -701,14 +698,6 @@ func (*GitRepository) DecodePersistedObject(ctx context.Context, dag *dagql.Serv
 			URL:      persistedRemote.URL,
 			PushURLs: slices.Clone(persistedRemote.PushURLs),
 		})
-	}
-	if len(repo.Remotes) == 0 && len(persisted.PushURLs) > 0 {
-		// Legacy push routing encoded only origin's push URLs.
-		repo.Remotes = []GitRemote{{
-			Name:     "origin",
-			URL:      persisted.URL,
-			PushURLs: slices.Clone(persisted.PushURLs),
-		}}
 	}
 	if persisted.URL != "" {
 		repo.URL = dagql.NonNull(dagql.String(persisted.URL))

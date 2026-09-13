@@ -183,10 +183,6 @@ func (s *gitSchema) Install(srv *dagql.Server) {
 				dagql.Arg("url").Doc(`The remote's fetch URL.`),
 				dagql.Arg("pushUrls").Doc(`Push destinations, when pushes go somewhere other than url. Registering more than one makes push require an explicit destination.`),
 			),
-		dagql.Func("__withPushURLs", s.withPushURLs).
-			View(AfterVersion("v1.0.0-0")).
-			IsPersistable().
-			Doc("(Internal-only) Legacy alias of withRemote for origin push routing, kept so persisted checkpoints replay."),
 		dagql.NodeFunc("__cleaned", s.cleaned).
 			IsPersistable().
 			Doc(`(Internal-only) Cleans the git repository by removing untracked files and resetting modifications.`),
@@ -230,7 +226,8 @@ func (s *gitSchema) Install(srv *dagql.Server) {
 			Doc("Push this ref's commit and history to a remote repository using the destination's credentials.",
 				"The source can come from a remote repository or an engine-side Git repository. To publish a workspace's commits, use Workspace.git.head.push. Pushing does not modify the calling client's checkout, and checkout hooks do not run.",
 				"A missing remote ref is created. Without a lease, Git's normal non-force rules apply. Each invocation performs a push; loading the returned receipt does not push again.").
-			Args(dagql.Arg("to").Doc("Destination remote repository. Defaults to the source's captured push URL, or its repository URL when none was captured. Required when the source has multiple push URLs or no remote URL."),
+			Args(dagql.Arg("to").Doc("Destination remote repository. Defaults to the origin remote's push routing, or the source's repository URL when none is registered. Required when the source has multiple push URLs or no remote URL."),
+				dagql.Arg("remote").Doc("Name of a registered remote to push to (see GitRepository.withRemote). Defaults to origin. The remote's push URLs, or its URL, become the destination; more than one push URL requires an explicit to instead."),
 				dagql.Arg("branch").Doc("Destination branch; a refs/ prefix is used verbatim. Defaults to this ref's branch name. Required for detached and non-branch refs."),
 				dagql.Arg("expectedRemoteSHA").Doc("Optional lease: a full lowercase object ID allows replacement only if the remote ref still has that value. Checked even for up-to-date pushes. Empty or omitted uses normal non-force rules, creating the ref if it does not exist.")),
 		dagql.NodeFunc("targetCommit", s.targetCommit).
