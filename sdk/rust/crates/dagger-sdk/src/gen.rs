@@ -8932,7 +8932,10 @@ pub struct GitRefPushOpts<'a> {
     /// Optional lease: a full lowercase object ID allows replacement only if the remote ref still has that value. Checked even for up-to-date pushes. Empty or omitted uses normal non-force rules, creating the ref if it does not exist.
     #[builder(setter(into, strip_option), default)]
     pub expected_remote_sha: Option<&'a str>,
-    /// Destination remote repository. Defaults to the source's captured push URL, or its repository URL when none was captured. Required when the source has multiple push URLs or no remote URL.
+    /// Name of a registered remote to push to (see GitRepository.withRemote). Defaults to origin. The remote's push URLs, or its URL, become the destination; more than one push URL requires an explicit to instead.
+    #[builder(setter(into, strip_option), default)]
+    pub remote: Option<&'a str>,
+    /// Destination remote repository. Defaults to the origin remote's push routing, or the source's repository URL when none is registered. Required when the source has multiple push URLs or no remote URL.
     #[builder(setter(into, strip_option), default)]
     pub to: Option<Id>,
 }
@@ -9146,6 +9149,9 @@ impl GitRef {
         let mut query = self.selection.select("push");
         if let Some(to) = opts.to {
             query = query.arg("to", to);
+        }
+        if let Some(remote) = opts.remote {
+            query = query.arg("remote", remote);
         }
         if let Some(branch) = opts.branch {
             query = query.arg("branch", branch);

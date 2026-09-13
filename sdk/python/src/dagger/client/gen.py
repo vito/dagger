@@ -8806,6 +8806,7 @@ class GitRef(Type):
         self,
         *,
         to: "GitRepository | None" = None,
+        remote: str | None = "",
         branch: str | None = "",
         expected_remote_sha: str | None = "",
     ) -> GitPushResult:
@@ -8824,9 +8825,15 @@ class GitRef(Type):
         Parameters
         ----------
         to:
-            Destination remote repository. Defaults to the source's captured
-            push URL, or its repository URL when none was captured. Required
-            when the source has multiple push URLs or no remote URL.
+            Destination remote repository. Defaults to the origin remote's
+            push routing, or the source's repository URL when none is
+            registered. Required when the source has multiple push URLs or no
+            remote URL.
+        remote:
+            Name of a registered remote to push to (see
+            GitRepository.withRemote). Defaults to origin. The remote's push
+            URLs, or its URL, become the destination; more than one push URL
+            requires an explicit to instead.
         branch:
             Destination branch; a refs/ prefix is used verbatim. Defaults to
             this ref's branch name. Required for detached and non-branch refs.
@@ -8838,6 +8845,7 @@ class GitRef(Type):
         """
         _args = [
             Arg("to", to, None),
+            Arg("remote", remote, ""),
             Arg("branch", branch, ""),
             Arg("expectedRemoteSHA", expected_remote_sha, ""),
         ]
