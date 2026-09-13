@@ -327,6 +327,9 @@ func (s *fileSchema) withReplaced(ctx context.Context, parent dagql.ObjectResult
 }
 
 func (s *fileSchema) export(ctx context.Context, parent dagql.ObjectResult[*core.File], args fileExportArgs) (dagql.String, error) {
+	if err := authorizeHostWrite(ctx, "exporting a file", args.Path); err != nil {
+		return "", err
+	}
 	filePath, err := parent.Self().File.GetOrEval(ctx, parent.Result)
 	if err != nil {
 		return "", err

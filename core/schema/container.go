@@ -4143,6 +4143,12 @@ func (s *containerSchema) export(ctx context.Context, parent dagql.ObjectResult[
 		return "", err
 	}
 
+	// Gate on the expanded path so the approval prompt names the literal
+	// destination the write will reach.
+	if err := authorizeHostWrite(ctx, "exporting a container tarball", path); err != nil {
+		return "", err
+	}
+
 	_, err = parent.Self().Export(
 		ctx,
 		core.ExportOpts{

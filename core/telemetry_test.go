@@ -55,6 +55,10 @@ func (*mockServer) AuthorizeGitPush(context.Context, string, string, bool) (*eng
 	panic("unexpected AuthorizeGitPush")
 }
 
+func (*mockServer) AuthorizeHostWrite(context.Context, string, string) error {
+	panic("unexpected AuthorizeHostWrite")
+}
+
 func (ms *mockServer) ServeHTTPToNestedClient(http.ResponseWriter, *http.Request, *engine.ClientMetadata, string, bool, dagql.AnyObjectResult, dagql.Typed) {
 }
 

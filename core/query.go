@@ -85,6 +85,12 @@ type Server interface {
 	// credentials are used. The returned client owns the approved credentials.
 	AuthorizeGitPush(context.Context, string, string, bool) (*engine.ClientMetadata, error)
 
+	// AuthorizeHostWrite checks session-local permission before an export
+	// writes to the calling client's host. A direct user API call is
+	// implicitly authorized; an agent tool call executing in the owner's
+	// context requires the owner's per-session approval.
+	AuthorizeHostWrite(ctx context.Context, action, dest string) error
+
 	// The cached workspace result from ensureWorkspaceLoaded.
 	CurrentWorkspace(context.Context) (*Workspace, error)
 

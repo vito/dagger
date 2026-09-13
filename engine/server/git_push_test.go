@@ -83,7 +83,7 @@ func TestGitPushApprovalOwnerBoundary(t *testing.T) {
 }
 
 func TestGitPushApprovals(t *testing.T) {
-	var approvals gitPushApprovals
+	var approvals sessionApprovals[gitPushApprovalKey]
 	base := gitPushApprovalKey{owner: "owner", remote: "https://example.com/repo", ref: "refs/heads/main"}
 	calls := 0
 	ask := func(context.Context) (bool, error) { calls++; return true, nil }
@@ -103,14 +103,14 @@ func TestGitPushApprovals(t *testing.T) {
 		require.NoError(t, err)
 	}
 	require.Equal(t, 5, calls)
-	var nextSession gitPushApprovals
+	var nextSession sessionApprovals[gitPushApprovalKey]
 	_, err := nextSession.check(t.Context(), base, ask)
 	require.NoError(t, err)
 	require.Equal(t, 6, calls, "grants must not survive a session")
 }
 
 func TestGitPushApprovalDenialAndCancellation(t *testing.T) {
-	var approvals gitPushApprovals
+	var approvals sessionApprovals[gitPushApprovalKey]
 	key := gitPushApprovalKey{remote: "git@example.com:repo", ref: "refs/heads/main"}
 	_, err := approvals.check(t.Context(), key, func(context.Context) (bool, error) { return false, context.Canceled })
 	require.ErrorIs(t, err, context.Canceled)
@@ -124,7 +124,7 @@ func TestGitPushApprovalDenialAndCancellation(t *testing.T) {
 }
 
 func TestGitPushApprovalConcurrent(t *testing.T) {
-	var approvals gitPushApprovals
+	var approvals sessionApprovals[gitPushApprovalKey]
 	key := gitPushApprovalKey{remote: "https://example.com/repo", ref: "refs/heads/main"}
 	started, release := make(chan struct{}), make(chan struct{})
 	var calls atomic.Int32

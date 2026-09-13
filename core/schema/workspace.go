@@ -2402,6 +2402,12 @@ func (s *workspaceSchema) export(
 		}
 	}()
 	if ws.ExportBase.Self() != nil {
+		// An agent tool runs in the owner's context, so it can reach the
+		// owner's checkout: fast-forwarding HEAD and rewriting worktree files
+		// needs the same per-session approval as an agent-initiated git push.
+		if err := authorizeHostWrite(ctx, "saving workspace changes", hostPath); err != nil {
+			return core.Void{}, err
+		}
 		wrote = true
 		return core.Void{}, s.exportWorkspaceGit(ctx, parent, hostPath)
 	}
@@ -2432,6 +2438,11 @@ func (s *workspaceSchema) export(
 	}
 	if isEmpty {
 		return core.Void{}, nil
+	}
+
+	// Gate after the emptiness check so an agent's no-op export never prompts.
+	if err := authorizeHostWrite(ctx, "saving workspace changes", hostPath); err != nil {
+		return core.Void{}, err
 	}
 
 	// Deliberately no withWorkspaceClientContext here: export is a side
