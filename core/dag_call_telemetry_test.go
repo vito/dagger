@@ -17,9 +17,11 @@ import (
 	otellog "go.opentelemetry.io/otel/log"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/dagger/dagger/dagql"
+	"github.com/dagger/dagger/dagql/call"
 	"github.com/dagger/dagger/dagql/call/callpbv1"
 	"github.com/dagger/dagger/engine/telemetryattrs"
 )
@@ -361,4 +363,103 @@ func TestRecordCallPayloadsRequiresSeenKeyStore(t *testing.T) {
 
 	recordCallPayloads(ctx, nil, rootDigest.String(), agent, false)
 	require.Equal(t, 0, rec.len())
+}
+
+// Call payloads deliberately carry raw Bytes arguments verbatim: they are the
+// material for rebuilding — and resuming from — a trace, so a workspace
+// snapshot's git bundle must survive the log channel intact. The channel that
+// must NOT carry the bytes is the legacy span attribute, exercised by
+// TestAroundFuncKeepsByteHeavyFramesOffSpanAttrs below.
+func TestRecordCallPayloadsCarriesBytesLiteralsVerbatim(t *testing.T) {
+	rec, ctx := payloadRecorderCtx(t)
+	const canary = "PAYLOAD-CANARY-restore-needs-me"
+	contents := make([]byte, call.MaxSpanAttrBytesLiteral+1)
+	copy(contents, canary)
+
+	blob := testResultCall("blob", &Void{}, nil)
+	blob.Args = []*dagql.ResultCallArg{{
+		Name: "contents",
+		Value: &dagql.ResultCallLiteral{
+			Kind:       dagql.ResultCallLiteralKindBytes,
+			BytesValue: contents,
+		},
+	}}
+	bundle := testResultCall("asGitBundle", &Void{}, blob)
+
+	rootDigest, err := bundle.RecipeDigest(ctx)
+	require.NoError(t, err)
+	blobDigest, err := blob.RecipeDigest(ctx)
+	require.NoError(t, err)
+
+	recordCallPayloads(ctx, &testSeenKeys{}, rootDigest.String(), bundle, false)
+
+	blobCall := rec.get(blobDigest.String())
+	require.NotNil(t, blobCall, "the byte-carrying frame must be published")
+	require.Equal(t, contents, blobCall.GetArgs()[0].GetValue().GetBytes(),
+		"the log channel must deliver the recipe's bytes verbatim")
+}
+
+// A frame with an oversized Bytes argument must not ride the legacy dag.call
+// span attribute: a multi-MB attribute bloats every span export, and the
+// first-copy-wins consumer store means a span-borne copy could shadow the
+// complete log copy. Skipping the attribute leaves callPayloadOnSpan false,
+// so the FULL frame reaches the log channel instead.
+func TestAroundFuncKeepsByteHeavyFramesOffSpanAttrs(t *testing.T) {
+	rec := &payloadRecorder{}
+	provider := sdklog.NewLoggerProvider(sdklog.WithProcessor(rec))
+	ctx := telemetry.WithLoggerProvider(context.Background(), provider)
+	sr := tracetest.NewSpanRecorder()
+	tp := sdktrace.NewTracerProvider(
+		sdktrace.WithSampler(sdktrace.AlwaysSample()),
+		sdktrace.WithSpanProcessor(sr),
+	)
+	ctx, root := tp.Tracer("span-attr-bytes-test").Start(ctx, "root")
+	t.Cleanup(func() {
+		root.End()
+		require.NoError(t, tp.Shutdown(context.Background()))
+	})
+	ctx = dagql.ContextWithCache(ctx, nil)
+	ctx = ContextWithQuery(ctx, &Query{Server: &payloadRoutingTestServer{
+		mockServer:   &mockServer{},
+		payloadStore: &testSeenKeys{},
+		spanStore:    &testSeenKeys{},
+	}})
+
+	const canary = "SPAN-ATTR-CANARY-must-not-ride"
+	contents := make([]byte, call.MaxSpanAttrBytesLiteral+1)
+	copy(contents, canary)
+	blob := testResultCall("blob", &Void{}, nil)
+	blob.Args = []*dagql.ResultCallArg{{
+		Name: "contents",
+		Value: &dagql.ResultCallLiteral{
+			Kind:       dagql.ResultCallLiteralKindBytes,
+			BytesValue: contents,
+		},
+	}}
+
+	req := &dagql.CallRequest{ResultCall: blob}
+	_, done := AroundFunc(ctx, req)
+	var callErr error
+	done(nil, false, &callErr)
+
+	var blobSpan sdktrace.ReadOnlySpan
+	for _, span := range sr.Ended() {
+		if span.Name() == "Query.blob" {
+			blobSpan = span
+		}
+	}
+	require.NotNil(t, blobSpan, "the call must still get its span")
+	for _, attr := range blobSpan.Attributes() {
+		require.NotEqual(t, telemetry.DagCallAttr, string(attr.Key),
+			"a byte-heavy frame must not ride the legacy span attribute")
+		require.NotContains(t, attr.Value.AsString(), canary)
+	}
+
+	blobDigest, err := blob.RecipeDigest(ctx)
+	require.NoError(t, err)
+	blobCall := rec.get(blobDigest.String())
+	require.NotNil(t, blobCall,
+		"with no span-borne copy, the root frame must ride the log channel")
+	require.Equal(t, contents, blobCall.GetArgs()[0].GetValue().GetBytes(),
+		"the log channel must deliver the recipe's bytes verbatim")
 }

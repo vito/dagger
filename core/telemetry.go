@@ -108,13 +108,23 @@ func AroundFunc(
 	// only read DagCallAttr and, without it, fall back to walking creator
 	// spans -- which self-reference for object results and recurse forever.
 	// Keep the legacy attribute until those CLIs are out of circulation.
+	//
+	// Byte-heavy frames are the exception: a workspace snapshot's git bundle
+	// rides a Bytes argument to Query.blob, and a multi-megabyte attribute
+	// would bloat every export of the span — and, since consumers fold both
+	// channels into a first-copy-wins store, a span-borne copy that diverged
+	// from the log copy could shadow it. Leaving the attribute off keeps
+	// callPayloadOnSpan false, which routes the FULL frame (raw bytes
+	// included, as resume-from-trace requires) over the log channel below.
 	if callPB, err := req.ResultCall.CallPB(ctx); err != nil {
 		slog.WarnContext(ctx, "failed to build call payload", "field", spanName, "err", err)
-	} else if callAttr, err := callPB.Encode(); err != nil {
-		slog.WarnContext(ctx, "failed to encode call", "field", spanName, "err", err)
-	} else {
-		attrs = append(attrs, attribute.String(telemetry.DagCallAttr, callAttr))
-		callPayloadOnSpan = true
+	} else if !call.HasOversizedBytesLiterals(callPB) {
+		if callAttr, err := callPB.Encode(); err != nil {
+			slog.WarnContext(ctx, "failed to encode call", "field", spanName, "err", err)
+		} else {
+			attrs = append(attrs, attribute.String(telemetry.DagCallAttr, callAttr))
+			callPayloadOnSpan = true
+		}
 	}
 
 	// if inside a module call, add call trace metadata. this is useful

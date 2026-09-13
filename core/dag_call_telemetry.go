@@ -129,6 +129,12 @@ func recordCallPayloads(
 		// the frame under everywhere else (span attributes, other frames'
 		// references), so consumers use it verbatim rather than re-deriving it
 		// and coupling themselves to this engine version's digest scheme.
+		//
+		// The body is the frame VERBATIM, large Bytes arguments included:
+		// call payloads are the material for rebuilding — and resuming from —
+		// a trace, so the recipe must arrive intact. Byte-heavy frames stay
+		// off the legacy span attribute instead (AroundFunc), which routes
+		// them through here.
 		payload, err := (proto.MarshalOptions{Deterministic: true}).Marshal(callPB)
 		if err != nil {
 			slog.WarnContext(ctx, "failed to marshal call payload", "digest", dgst, "err", err)
