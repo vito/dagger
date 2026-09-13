@@ -2010,6 +2010,13 @@ export type GitRepositoryWithBundleOpts = {
   prerequisiteRef?: string
 }
 
+export type GitRepositoryWithRemoteOpts = {
+  /**
+   * Push destinations, when pushes go somewhere other than url. Registering more than one makes push require an explicit destination.
+   */
+  pushUrls?: string[]
+}
+
 export type HostDirectoryOpts = {
   /**
    * Exclude artifacts that match the given pattern (e.g., ["node_modules/", ".git*"]).
@@ -10354,6 +10361,8 @@ export class GitRepository extends BaseClient {
   /**
    * Returns details of a commit.
    * @param id Identifier of the commit (e.g., "b6315d8f2810962c601af73f86831f6866ea798b").
+   *
+   * May be abbreviated to an unambiguous hex prefix (4-40 characters), which is expanded against locally available objects. Remote repositories (resolved via ls-remote) can only expand prefixes of already-fetched commits; use the full SHA otherwise.
    */
   commit = (id: string): GitCommit => {
     const ctx = this._ctx.select("commit", { id })
@@ -10382,6 +10391,8 @@ export class GitRepository extends BaseClient {
   /**
    * Returns details of a ref.
    * @param name Ref's name (can be a commit identifier, a tag name, a branch name, or a fully-qualified ref).
+   *
+   * Commit identifiers may be abbreviated: an unambiguous hex prefix (4-40 characters) of a commit SHA resolves like git rev-parse, with named refs taking precedence. Abbreviated SHAs resolve against locally available objects, so remote repositories (resolved via ls-remote) can only expand prefixes of already-fetched commits; use the full SHA or a named ref otherwise.
    */
   ref = (name: string): GitRef => {
     const ctx = this._ctx.select("ref", { name })
@@ -10455,6 +10466,25 @@ export class GitRepository extends BaseClient {
    */
   withDirectory = (directory: Directory): GitRepository => {
     const ctx = this._ctx.select("withDirectory", { directory })
+    return new GitRepository(ctx)
+  }
+
+  /**
+   * Register a named remote on this repository, replacing any registered remote of the same name.
+   *
+   * Registered remotes are recorded in checkouts materialized from this repository (GitRef.tree, Workspace.git.directory), so remote-aware tooling like gh can resolve and fetch from them. The origin remote also routes push when no explicit destination is passed: its push URLs, or its URL, become the default destination.
+   *
+   * Routing metadata only, never a credential grant: pushes still authenticate with the caller's own credentials and require approval as usual.
+   * @param name The remote's name, e.g. "origin" or "upstream".
+   * @param url The remote's fetch URL.
+   * @param opts.pushUrls Push destinations, when pushes go somewhere other than url. Registering more than one makes push require an explicit destination.
+   */
+  withRemote = (
+    name: string,
+    url: string,
+    opts?: GitRepositoryWithRemoteOpts,
+  ): GitRepository => {
+    const ctx = this._ctx.select("withRemote", { name, url, ...opts })
     return new GitRepository(ctx)
   }
 

@@ -9076,6 +9076,10 @@ class GitRepository(Type):
         id:
             Identifier of the commit (e.g.,
             "b6315d8f2810962c601af73f86831f6866ea798b").
+            May be abbreviated to an unambiguous hex prefix (4-40 characters),
+            which is expanded against locally available objects. Remote
+            repositories (resolved via ls-remote) can only expand prefixes of
+            already-fetched commits; use the full SHA otherwise.
         """
         _args = [
             Arg("id", id),
@@ -9143,6 +9147,12 @@ class GitRepository(Type):
         name:
             Ref's name (can be a commit identifier, a tag name, a branch name,
             or a fully-qualified ref).
+            Commit identifiers may be abbreviated: an unambiguous hex prefix
+            (4-40 characters) of a commit SHA resolves like git rev-parse,
+            with named refs taking precedence. Abbreviated SHAs resolve
+            against locally available objects, so remote repositories
+            (resolved via ls-remote) can only expand prefixes of already-
+            fetched commits; use the full SHA or a named ref otherwise.
         """
         _args = [
             Arg("name", name),
@@ -9270,6 +9280,45 @@ class GitRepository(Type):
             Arg("directory", directory),
         ]
         _ctx = self._select("withDirectory", _args)
+        return GitRepository(_ctx)
+
+    def with_remote(
+        self,
+        name: str,
+        url: str,
+        *,
+        push_urls: list[str] | None = None,
+    ) -> Self:
+        """Register a named remote on this repository, replacing any registered
+        remote of the same name.
+
+        Registered remotes are recorded in checkouts materialized from this
+        repository (GitRef.tree, Workspace.git.directory), so remote-aware
+        tooling like gh can resolve and fetch from them. The origin remote
+        also routes push when no explicit destination is passed: its push
+        URLs, or its URL, become the default destination.
+
+        Routing metadata only, never a credential grant: pushes still
+        authenticate with the caller's own credentials and require approval as
+        usual.
+
+        Parameters
+        ----------
+        name:
+            The remote's name, e.g. "origin" or "upstream".
+        url:
+            The remote's fetch URL.
+        push_urls:
+            Push destinations, when pushes go somewhere other than url.
+            Registering more than one makes push require an explicit
+            destination.
+        """
+        _args = [
+            Arg("name", name),
+            Arg("url", url),
+            Arg("pushUrls", [] if push_urls is None else push_urls, []),
+        ]
+        _ctx = self._select("withRemote", _args)
         return GitRepository(_ctx)
 
     def with_(
