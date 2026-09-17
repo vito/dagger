@@ -457,7 +457,8 @@ exec %q "$@"
 	t.Cleanup(func() { require.NoError(t, os.WriteFile(release, nil, 0600)) })
 	ctx = engine.ContextWithClientMetadata(ctx, &engine.ClientMetadata{SessionID: t.Name()})
 	ctx = ContextWithQuery(ctx, &Query{Server: &remoteGitMaintenanceServer{}})
-	remoteGit, cleanup, err := new(RemoteGitRepository).setup(ctx)
+	repo := &RemoteGitRepository{URL: &gitutil.GitURL{Scheme: "file", Path: origin}}
+	remoteGit, cleanup, err := repo.setup(ctx)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, cleanup()) })
 	remoteGit = remoteGit.New(gitutil.WithGitDir(mirror), gitutil.WithExec(func(ctx context.Context, cmd *exec.Cmd) error {
