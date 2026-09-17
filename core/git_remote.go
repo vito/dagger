@@ -236,6 +236,9 @@ func (repo *RemoteGitRepository) setupWithSSHAuthSock(ctx context.Context, sshAu
 	if repo.URL != nil && repo.URL.Scheme == gitutil.SSHProtocol && repo.SSHAuthSocket.Self() == nil && sshAuthSock == "" {
 		return nil, nil, fmt.Errorf("%w: SSH URLs are not supported without an SSH socket", gitutil.ErrGitAuthFailed)
 	}
+	ctx, span := Tracer(ctx).Start(ctx, "configure git command: "+repo.URL.Remote(), telemetry.Internal())
+	defer telemetry.EndWithCause(span, &rerr)
+
 	query, err := CurrentQuery(ctx)
 	if err != nil {
 		return nil, nil, err
