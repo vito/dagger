@@ -1309,7 +1309,6 @@ func (m *MCP) applyWorkspaceSnapshot(ctx context.Context, srv *dagql.Server, bef
 	if err != nil {
 		return err
 	}
-	filtered := false
 	// The tool may have run git itself (init, commit, ...): the repository's
 	// metadata is the workspace's own concern, so leave it out of the diff
 	// entirely by comparing the two trees without it.
@@ -1327,7 +1326,6 @@ func (m *MCP) applyWorkspaceSnapshot(ctx context.Context, srv *dagql.Server, bef
 			return err
 		}
 		slog.Debug("mcp: dropped VCS metadata written by MCP server from workspace snapshot", "paths", n)
-		filtered = true
 	}
 	// A workspace whose .gitignore rules match nothing makes this a cheap
 	// no-op: only the .gitignore files along each added path are read.
@@ -1341,16 +1339,13 @@ func (m *MCP) applyWorkspaceSnapshot(ctx context.Context, srv *dagql.Server, bef
 			return err
 		}
 		slog.Debug("mcp: dropped gitignored additions written by MCP server from workspace snapshot", "paths", ignored)
-		filtered = true
 	}
-	if filtered {
-		empty, err := changes.Self().IsEmpty(ctx)
-		if err != nil {
-			return err
-		}
-		if empty {
-			return nil
-		}
+	paths, err = changes.Self().ComputePaths(ctx)
+	if err != nil {
+		return err
+	}
+	if changesetPathCount(paths) == 0 {
+		return nil
 	}
 	return m.applyChangeset(ctx, srv, changes)
 }
@@ -1792,13 +1787,11 @@ func (m *MCP) CallBatch(ctx context.Context, tools []LLMTool, toolCalls []*LLMTo
 		allResults = append(allResults, m.callBatchRegular(ctx, tools, regularCalls, toolCallDisplays)...)
 	}
 
-	// 5. Execute all read-only MCP calls in parallel (safe across servers)
-	var readOnlyToolCalls []*LLMToolCall
-	for _, calls := range readOnlyMCPCalls {
-		readOnlyToolCalls = append(readOnlyToolCalls, calls...)
-	}
-	if len(readOnlyToolCalls) > 0 {
-		allResults = append(allResults, m.callBatchRegular(ctx, tools, readOnlyToolCalls, toolCallDisplays)...)
+	// Sync read-only calls too: they need current workspace edits and the live
+	// server's retained runtime files just as destructive calls do. Keep export
+	// sequential because annotations are hints, not a filesystem sandbox.
+	for serverName, calls := range readOnlyMCPCalls {
+		allResults = append(allResults, m.callBatchMCPServer(ctx, tools, calls, serverName, toolCallDisplays)...)
 	}
 
 	return allResults
@@ -1857,12 +1850,16 @@ func (m *MCP) callBatchMCPServer(ctx context.Context, tools []LLMTool, toolCalls
 		return m.callBatchRegular(ctx, tools, toolCalls, toolCallDisplays)
 	}
 
+	runningSvc.workspaceMu.Lock()
+	defer runningSvc.workspaceMu.Unlock()
+
 	var results []*LLMMessage
 	ran := false
 	snapshot, hasChanges, err := mcpSrv.Service.Self().runAndSnapshotChanges(
 		ctx,
 		runningSvc,
 		ctr.Self().Config.WorkingDir,
+		m.workspace.Self().Address,
 		sourceDir,
 		func() error {
 			// Execute all tool calls for this server in parallel within the synced context
@@ -1887,6 +1884,12 @@ func (m *MCP) callBatchMCPServer(ctx context.Context, tools []LLMTool, toolCalls
 	if hasChanges {
 		if err := m.applyWorkspaceSnapshot(ctx, srv, sourceDir, snapshot); err != nil {
 			slog.Error("failed to update workspace after MCP server batch", "server", serverName, "error", err)
+		} else if exported, err := m.workspaceDirectory(ctx, srv); err != nil {
+			slog.Error("failed to record synced MCP workspace", "server", serverName, "error", err)
+		} else if _, err := exported.Self().Snapshot.GetOrEval(ctx, exported.Result); err != nil {
+			slog.Error("failed to snapshot synced MCP workspace baseline", "server", serverName, "error", err)
+		} else {
+			runningSvc.workspaceSource = exported
 		}
 	}
 

@@ -131,6 +131,10 @@ type RunningService struct {
 	clientScopeLease      *engine.ClientLifecycleLease
 
 	workspaceMu sync.Mutex
+	// Last exported workspace, used to reconcile deletions without discarding
+	// ignored runtime files in the service's live working directory.
+	workspaceSource  dagql.ObjectResult[*Directory]
+	workspaceAddress string
 
 	dependencyExitPropagationMu         sync.Mutex
 	dependencyExitPropagationSuppressed int
