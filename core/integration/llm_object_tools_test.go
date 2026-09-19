@@ -241,6 +241,59 @@ func (LLMSuite) TestParallelChangesetToolsMergeResults(ctx context.Context, t *t
 	require.Contains(t, out, "SECOND.txt")
 }
 
+// TestLargeChangesetToolSkipsPatchWork covers a move with both additions and
+// removals: computing full paths would stage every file for rename detection.
+func (LLMSuite) TestLargeChangesetToolSkipsPatchWork(ctx context.Context, t *testctx.T) {
+	c := connect(ctx, t)
+	source := c.Directory().
+		WithNewFile("dagger.toml", "[modules.editor]\nsource = \"modules/editor\"\n").
+		WithNewFile("modules/editor/dagger.json", `{"name":"editor","engineVersion":"v1.0.0-0","sdk":"dang"}`).
+		WithNewFile("modules/editor/main.dang", `
+type Editor {
+  agent(base: LLM!): LLM! @agent {
+    base.withTools(currentNode)
+  }
+
+  moveTree(ws: Workspace!): Changeset! {
+    let root = ws.directory("/")
+    root.withDirectory("new", root.directory("old")).withoutDirectory("old").changes(root)
+  }
+}
+`)
+	for i := range 110 {
+		source = source.WithNewFile(fmt.Sprintf("old/%03d.txt", i), fmt.Sprintf("file %d\n", i))
+	}
+	ws := source.AsWorkspace()
+	model := cannedRecordingModel(ctx, t, c, c.LLM().
+		WithPrompt("move the tree").
+		WithResponse([]dagger.LLMContentBlockInput{{
+			Kind: dagger.LLMContentBlockKindToolCall, CallID: "call_1", ToolName: "moveTree",
+		}}).
+		WithToolResult("call_1", "", false).
+		WithResponse([]dagger.LLMContentBlockInput{{Kind: dagger.LLMContentBlockKindText, Text: "done"}}))
+	base := c.LLM(dagger.LLMOpts{Model: model}).WithWorkspace(ws)
+	result := ws.Agents().Compose(dagger.AgentMiddlewareGroupComposeOpts{Base: base}).
+		WithPrompt("move the tree").Loop()
+	transcript, err := result.Transcript(ctx)
+	require.NoError(t, err)
+	require.Contains(t, transcript, "exceeds the 200-path inspection budget")
+
+	id, err := result.PortableID(ctx)
+	require.NoError(t, err)
+	gid := new(call.ID)
+	require.NoError(t, gid.Decode(string(id)))
+	fields := map[string]bool{}
+	collectIDFieldNames(gid, fields)
+	require.False(t, fields["withPatch"], "oversized changesets must stay raw")
+
+	entries, err := result.Workspace().Directory("new").Entries(ctx)
+	require.NoError(t, err)
+	require.Len(t, entries, 110)
+	entries, err = result.Workspace().Directory("/").Entries(ctx)
+	require.NoError(t, err)
+	require.NotContains(t, entries, "old/")
+}
+
 // TestChangesetToolKeepsEmptyDirectories locks in that a Changeset-returning
 // tool's empty directories survive the engine's patch normalization
 // (core.normalizeChangesetToPatch). Git patches carry file content only, so
