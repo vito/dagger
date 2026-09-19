@@ -67,45 +67,36 @@ func TestToolResultContentType(t *testing.T) {
 	require.Empty(t, toolResultContentType("prefix\n"+patch))
 }
 
-func TestSummarizeChangesetPaths(t *testing.T) {
-	paths := &ChangesetPaths{
-		Added: []string{
-			"sdk/", // directories are not files; not counted
-			"sdk/go/a.go", "sdk/go/b.go", "sdk/python/c.py",
-			"core/new.go",
-			"moved.go", // renamed: counted once, as a rename
-		},
-		Modified: []string{"core/mcp.go", "README.md"},
-		Removed:  []string{"old/", "orig.go"},
-		AllRemoved: []string{
-			"old/", "old/x.go", "old/y.go",
-			"orig.go", // the rename's old name; not a removal
-		},
-		Renamed: map[string]string{"moved.go": "orig.go"},
-	}
-
-	out := summarizeChangesetPaths(paths)
-	lines := strings.Split(out, "\n")
-	require.Equal(t, "9 files changed (4 added, 2 modified, 2 removed, 1 renamed).", lines[0])
-	require.Contains(t, lines[1], "too large to show in full")
-	// Buckets sort by count descending, then by name; root files land in "./".
-	require.Equal(t, []string{
-		"  sdk/  3 files",
-		"  ./    2 files",
-		"  core/ 2 files",
-		"  old/  2 files",
-	}, lines[2:])
-	require.Empty(t, toolResultContentType(out))
-}
-
-func TestSummarizeChangesetPathsCapsBuckets(t *testing.T) {
+func TestOversizedChangesetSkipsPatchWork(t *testing.T) {
+	ctx := t.Context()
+	srv, err := dagql.NewServer(ctx, &Query{})
+	require.NoError(t, err)
+	srv.InstallObject(dagql.NewClass[*Changeset](srv))
 	paths := &ChangesetPaths{}
-	for i := range patchSummaryMaxBuckets + 5 {
-		paths.Modified = append(paths.Modified, fmt.Sprintf("dir%02d/file.txt", i))
+	for i := range patchSummaryMaxPaths {
+		paths.Added = append(paths.Added, fmt.Sprintf("new/%d", i))
+		paths.AllRemoved = append(paths.AllRemoved, fmt.Sprintf("old/%d", i))
 	}
-	out := summarizeChangesetPaths(paths)
-	require.Contains(t, out, "… and 5 more directories")
-	require.Equal(t, patchSummaryMaxBuckets, strings.Count(out, " 1 files"), out)
+	ch := &Changeset{paths: &changesetPathsMemo{paths: paths}}
+	ch.paths.done.Store(true)
+	ch.paths.once.Do(func() {})
+	changes, err := dagql.NewObjectResultForCall(ch, srv, &dagql.ResultCall{
+		Kind: dagql.ResultCallKindSynthetic, SyntheticOp: "oversized",
+		Type: dagql.NewResultCallType(ch.Type()),
+	})
+	require.NoError(t, err)
+
+	// No server is needed on either oversized branch: neither may request
+	// asPatch, diffStats, or an exact per-path summary.
+	out := newMCP().summarizePatch(ctx, nil, changes)
+	require.Contains(t, out, "exceeds the 200-path inspection budget")
+	require.NotContains(t, out, "new/")
+	require.NotContains(t, out, "old/")
+	require.NotContains(t, out, "WARNING")
+	require.Empty(t, toolResultContentType(out))
+	normalized, err := normalizeChangesetToPatch(ctx, nil, changes)
+	require.NoError(t, err)
+	require.Same(t, ch, normalized.Self())
 }
 
 func TestCallMarksPatchResult(t *testing.T) {

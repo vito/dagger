@@ -181,7 +181,13 @@ var errDeltaLimitExceeded = errors.New("changeset delta entry limit exceeded")
 // limit walks everything.
 func collectChangesetDeltaBounded(ctx context.Context, beforeDir, afterDir string, limit int) (_ *changesetDelta, exceeded bool, _ error) {
 	delta := &changesetDelta{limit: limit}
-	err := fsdiff.WalkChanges(ctx, beforeDir, afterDir, fsdiff.CompareInodeThenContent, func(kind continuityfs.ChangeKind, path string, f os.FileInfo, prevErr error) error {
+	comparison := fsdiff.CompareInodeThenContent
+	if limit >= 0 {
+		// Count distinct backing files conservatively, even when their stat
+		// matches. Reading content here would defeat the inspection budget.
+		comparison = fsdiff.CompareInodeOnly
+	}
+	err := fsdiff.WalkChanges(ctx, beforeDir, afterDir, comparison, func(kind continuityfs.ChangeKind, path string, f os.FileInfo, prevErr error) error {
 		if prevErr != nil {
 			return prevErr
 		}
@@ -296,9 +302,9 @@ func (d *changesetDelta) appendRemovedTree(root, rel string) error {
 // changesetDeltaExceeds reports whether the metadata delta between the two
 // trees has more than limit entries, stopping the walk as soon as that is
 // known. The count is an upper bound on what computeChangesetPathsDelta would
-// report (see changesetDelta.count), so true means the trees definitely differ
-// in more than limit changed or metadata-differing paths, while false is
-// exact.
+// report (see changesetDelta.count). Distinct backing files count even if
+// their contents match, so true means more than limit candidates; false
+// guarantees at most limit paths changed.
 func changesetDeltaExceeds(ctx context.Context, beforeDir, afterDir string, limit int) (bool, error) {
 	_, exceeded, err := collectChangesetDeltaBounded(ctx, beforeDir, afterDir, limit)
 	if err != nil {

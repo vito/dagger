@@ -199,9 +199,9 @@ func changesetPathCount(paths *ChangesetPaths) int {
 // comes straight from its memoized result and is exact. Otherwise the metadata
 // delta is walked and abandoned as soon as more than limit entries are seen,
 // without the rename detection or content verification ComputePaths performs:
-// a file whose metadata differs but whose content doesn't still counts. So
-// true means the changeset definitely has more than limit changed or
-// metadata-differing paths, while false is exact: at most limit paths changed.
+// a distinct backing file still counts even if its content is identical.
+// Thus true means more than limit candidate paths, not necessarily actual
+// changes, while false guarantees at most limit paths changed.
 //
 // The partial walk never populates the ComputePaths memo; a later ComputePaths
 // still computes the full result.
@@ -240,14 +240,9 @@ func (ch *Changeset) PathCountExceeds(ctx context.Context, limit int) (bool, err
 		if ctx.Err() != nil {
 			return false, context.Cause(ctx)
 		}
-		// Same fallback as computePathsOnce, which ComputePaths already
-		// implements; the full result is memoized for whoever asks next.
-		slog.Warn("changeset delta diff failed; falling back to full path computation", "error", deltaErr)
-		paths, err := ch.ComputePaths(ctx)
-		if err != nil {
-			return false, err
-		}
-		return changesetPathCount(paths) > limit, nil
+		// A bounded inspection must not fall back to an unbounded content
+		// diff. Callers can omit the summary or keep the raw changeset.
+		return false, fmt.Errorf("bound changeset delta: %w", deltaErr)
 	}
 	return exceeds, nil
 }

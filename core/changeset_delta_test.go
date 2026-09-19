@@ -251,7 +251,7 @@ func TestChangesetDeltaExceeds(t *testing.T) {
 		before := t.TempDir()
 		after := t.TempDir()
 		writeDeltaTestFile(t, before, "keep.txt", "same\n")
-		writeDeltaTestFile(t, after, "keep.txt", "same\n")
+		require.NoError(t, os.Link(filepath.Join(before, "keep.txt"), filepath.Join(after, "keep.txt")))
 		writeDeltaTestFile(t, before, "mod.txt", "old\n")
 		writeDeltaTestFile(t, after, "mod.txt", "new\n")
 		writeDeltaTestFile(t, before, "remove.txt", "bye\n")
@@ -280,11 +280,11 @@ func TestChangesetDeltaExceeds(t *testing.T) {
 		}
 	})
 
-	t.Run("identical trees never exceed", func(t *testing.T) {
+	t.Run("shared backing files never exceed", func(t *testing.T) {
 		before := t.TempDir()
 		after := t.TempDir()
 		writeDeltaTestFile(t, before, "a.txt", "same\n")
-		writeDeltaTestFile(t, after, "a.txt", "same\n")
+		require.NoError(t, os.Link(filepath.Join(before, "a.txt"), filepath.Join(after, "a.txt")))
 
 		exceeds, err := changesetDeltaExceeds(ctx, before, after, 0)
 		require.NoError(t, err)
@@ -311,6 +311,22 @@ func TestChangesetDeltaExceeds(t *testing.T) {
 		exceeds, err = changesetDeltaExceeds(ctx, before, after, 1)
 		require.NoError(t, err)
 		require.False(t, exceeds)
+	})
+
+	t.Run("large additions and removals skip rename detection", func(t *testing.T) {
+		before := t.TempDir()
+		after := t.TempDir()
+		for i := range patchSummaryMaxPaths {
+			writeDeltaTestFile(t, before, fmt.Sprintf("old-%03d", i), "same content\n")
+			writeDeltaTestFile(t, after, fmt.Sprintf("new-%03d", i), "same content\n")
+		}
+		// Full path computation would stage both sides and invoke git to
+		// pair renames. The bounded walk must succeed without git at all.
+		t.Setenv("PATH", t.TempDir())
+		delta, exceeded, err := collectChangesetDeltaBounded(ctx, before, after, patchSummaryMaxPaths)
+		require.NoError(t, err)
+		require.True(t, exceeded)
+		require.Nil(t, delta)
 	})
 
 	t.Run("aborts inside a removed tree", func(t *testing.T) {
