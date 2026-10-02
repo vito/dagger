@@ -2298,6 +2298,7 @@ func nestedClientMetadataForRequest(h http.Header, nestedClientMetadata *engine.
 	var workspaceRef *string
 	var workspaceEnv *string
 	var userConfigPath string
+	var llmConfig *engine.LLMConfig
 	if md, _ := engine.ClientMetadataFromHTTPHeaders(h); md != nil {
 		clientMetadata.ClientVersion = md.ClientVersion
 		clientMetadata.AllowedLLMModules = slices.Clone(md.AllowedLLMModules)
@@ -2319,6 +2320,7 @@ func nestedClientMetadataForRequest(h http.Header, nestedClientMetadata *engine.
 			workspaceEnv = &env
 		}
 		userConfigPath = md.UserConfigPath
+		llmConfig = md.LLMConfig
 	}
 
 	clientMetadata.ExtraModules = extraModules
@@ -2330,6 +2332,7 @@ func nestedClientMetadataForRequest(h http.Header, nestedClientMetadata *engine.
 	clientMetadata.Workspace = workspaceRef
 	clientMetadata.WorkspaceEnv = workspaceEnv
 	clientMetadata.UserConfigPath = userConfigPath
+	clientMetadata.LLMConfig = llmConfig
 	return &clientMetadata
 }
 
@@ -4070,6 +4073,7 @@ func (srv *Server) CloudEngineClient(
 		Workspace:      parentClient.clientMetadata.Workspace,
 		WorkspaceEnv:   parentClient.clientMetadata.WorkspaceEnv,
 		UserConfigPath: parentClient.clientMetadata.UserConfigPath,
+		LLMConfig:      parentClient.clientMetadata.LLMConfig,
 		ExtraModules:   parentClient.clientMetadata.ExtraModules,
 		// Artifact queries load their own selected modules.
 		SkipWorkspaceModules: true,
