@@ -37,6 +37,7 @@ func TryNativeWorkspaceMerge(ctx context.Context, working, incoming *Changeset) 
 		return nil, false, nil
 	}
 	ctx, span := Tracer(ctx).Start(ctx, "git native workspace merge", telemetry.Internal())
+	phases := newMergePhases(span, "git.native_merge")
 	defer func() {
 		if nativeFallback(ctx, span, "dagger.git.native_merge.fallback_reason", rerr) {
 			supported, rerr = false, nil
@@ -61,20 +62,30 @@ func TryNativeWorkspaceMerge(ctx context.Context, working, incoming *Changeset) 
 	}
 	contents := make([]*changesetContent, 2)
 	for i, changes := range []*Changeset{working, incoming} {
-		var err error
-		contents[i], err = changes.content(ctx)
-		if err != nil {
+		if err := phases.run(ctx, "paths_"+nativeMergeLabels[i], func(ctx context.Context) error {
+			_, err := changes.ComputePaths(ctx)
+			return err
+		}); err != nil {
+			return nil, true, err
+		}
+		if err := phases.run(ctx, "content_"+nativeMergeLabels[i], func(ctx context.Context) (err error) {
+			contents[i], err = changes.content(ctx)
+			return err
+		}); err != nil {
 			return nil, true, err
 		}
 	}
 	span.SetAttributes(attribute.Int("dagger.git.native_merge.scoped_stage_paths",
 		len(commitStagePaths(contents[0].paths))+len(commitStagePaths(contents[1].paths))))
-	local, err := nativeCommitRepository(ctx, lazy.Ref)
-	if err != nil {
+	var local *LocalGitRepository
+	if err := phases.run(ctx, "repository", func(ctx context.Context) (err error) {
+		local, err = nativeCommitRepository(ctx, lazy.Ref)
+		return err
+	}); err != nil {
 		return nil, true, err
 	}
 	var result *Directory
-	err = local.mount(ctx, 0, false, nil, func(source *gitutil.GitCLI) error {
+	err := local.mount(ctx, 0, false, nil, func(source *gitutil.GitCLI) error {
 		out, err := source.Run(ctx, "rev-parse", "--absolute-git-dir")
 		if err != nil {
 			return err
@@ -83,20 +94,29 @@ func TryNativeWorkspaceMerge(ctx context.Context, working, incoming *Changeset) 
 		if err != nil {
 			return err
 		}
+		setup := phaseNow()
+		var fnEnd phaseMark
 		result, err = withGitMergeWorkspace(ctx, working.Before, "Workspace native reconciliation", func(ws *gitMergeWorkspace) error {
+			defer func() { fnEnd = phaseNow() }()
+			phases.record(ctx, "workspace", setup)
 			paths := make([]*ChangesetPaths, 2)
 			apply := make([]func(string) error, 2)
 			for i, content := range contents {
 				paths[i] = content.paths.withoutGitMeta()
-				if err := validateNativeWorkspaceContent(ctx, ws.workDir, content); err != nil {
+				if err := phases.run(ctx, "validate_"+nativeMergeLabels[i], func(ctx context.Context) error {
+					return validateNativeWorkspaceContent(ctx, ws.workDir, content)
+				}); err != nil {
 					return err
 				}
 				apply[i] = func(work string) error {
 					return (&gitMergeWorkspace{root: work, dir: "/", workDir: work}).applyContent(ctx, content)
 				}
 			}
-			return nativeWorkspaceMerge(ctx, filepath.Join(gitDir, "objects"), lazy.Ref.Self().Ref.SHA, ws.workDir, paths, apply)
+			return nativeWorkspaceMerge(ctx, filepath.Join(gitDir, "objects"), lazy.Ref.Self().Ref.SHA, ws.workDir, paths, apply, phases)
 		})
+		if err == nil {
+			phases.record(ctx, "commit", fnEnd)
+		}
 		return err
 	})
 	err = errors.Join(err, ctx.Err())
@@ -222,13 +242,14 @@ func validateNativeWorkspaceDelta(ctx context.Context, base, delta string, paths
 // nativeWorkspaceMerge is the filesystem-only transaction, also exercised by
 // the checkout oracle tests. base is a private writable child; parentObjects is
 // held read-only by its caller. Only scratch worktrees and delta paths are read.
-func nativeWorkspaceMerge(ctx context.Context, parentObjects, parent, base string, paths []*ChangesetPaths, apply []func(string) error) error {
+func nativeWorkspaceMerge(ctx context.Context, parentObjects, parent, base string, paths []*ChangesetPaths, apply []func(string) error, phases *mergePhases) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if err := validateNativeMergePaths(paths); err != nil {
 		return err
 	}
+	start := phaseNow()
 	scratch, err := os.MkdirTemp("", "dagger-workspace-merge-")
 	if err != nil {
 		return err
@@ -254,6 +275,7 @@ func nativeWorkspaceMerge(ctx context.Context, parentObjects, parent, base strin
 	}
 	commits := make([]string, 2)
 	trees := make([]string, 2)
+	start = phases.record(ctx, "init", start)
 	for i, changes := range paths {
 		work = filepath.Join(scratch, strconv.Itoa(i))
 		if err := os.Mkdir(work, 0755); err != nil {
@@ -283,8 +305,10 @@ func nativeWorkspaceMerge(ctx context.Context, parentObjects, parent, base strin
 		if _, err := run("update-ref", "refs/heads/"+nativeMergeLabels[i], commits[i]); err != nil {
 			return err
 		}
+		start = phases.record(ctx, "stage_"+nativeMergeLabels[i], start)
 	}
 	merged, err := run("merge-tree", "--write-tree", "--name-only", "--merge-base="+parent, nativeMergeLabels[0], nativeMergeLabels[1])
+	start = phases.record(ctx, "merge_tree", start)
 	if err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -301,6 +325,7 @@ func nativeWorkspaceMerge(ctx context.Context, parentObjects, parent, base strin
 	// identical entries retain incoming permissions, ownership and raw bytes
 	// (including CRLF). Applying raw content is part of that transition, not
 	// a shortcut returning After in place of Git reconciliation.
+	defer func() { phases.record(ctx, "replay", start) }()
 	work = base
 	if err := apply[0](base); err != nil {
 		return err

@@ -385,7 +385,7 @@ func TestScopedGitMergeMatchesFull(t *testing.T) {
 						require.NoError(t, err)
 					}
 					ws := &gitMergeWorkspace{root: dir, dir: "/", workDir: dir}
-					err := ws.mergeChangesets(ctx, scope, ours, theirs, conflicts, strategy)
+					err := ws.mergeChangesets(ctx, scope, ours, theirs, conflicts, strategy, nil)
 					require.NoError(t, os.RemoveAll(filepath.Join(dir, ".git")))
 					return dir, err
 				}
