@@ -424,6 +424,7 @@ func (r *LLMRouter) Route(model, provider string) (*LLMEndpoint, error) {
 	if m, ok := lookupCatalogModel(endpoint.Provider, endpoint.Model); ok {
 		endpoint.DefaultMaxTokens = m.DefaultMaxTokens
 		endpoint.ContextWindow = m.ContextWindow
+		endpoint.ReasoningMode = catalogReasoningMode(m)
 	}
 	return endpoint, nil
 }
