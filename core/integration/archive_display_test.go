@@ -16,7 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"dagger.io/dagger"
+	"dagger.io/dagger/core"
 	"github.com/dagger/dagger/engine/archive"
 	"github.com/dagger/dagger/engine/telemetryattrs"
 	"github.com/dagger/dagger/internal/buildkit/identity"
@@ -43,7 +43,7 @@ func (AgentRestoreSuite) TestLazyArchiveDisplay(ctx context.Context, t *testctx.
 	source, sink := connectWithTrace(sourceCtx, t)
 	// No model turn is needed, even to produce this fixture. Any accidental
 	// turn against this empty recording fails instead of contacting a provider.
-	seed, err := source.LLM(dagger.LLMOpts{Model: emptyReplayModel}).WithPrompt("retained display-only conversation").ID(sourceCtx)
+	seed, err := core.NewQuery(source).LLM(core.LLMOpts{Model: emptyReplayModel}).WithPrompt("retained display-only conversation").ID(sourceCtx)
 	require.NoError(t, err)
 	_, err = rehydrateAgent(sourceCtx, source, string(seed), "display-agent", "display-agent", "IDLE", "")
 	require.NoError(t, err)
@@ -53,7 +53,7 @@ func (AgentRestoreSuite) TestLazyArchiveDisplay(ctx context.Context, t *testctx.
 	const selectedText = "SELECTED-ARCHIVE-OUTPUT-ONLY"
 	const unrelatedText = "UNRELATED-ARCHIVE-OUTPUT"
 	const unrelatedBytes = 4 << 20
-	base := source.Container().From(alpineImage).WithEnvVariable("ARCHIVE_DISPLAY_FIXTURE", identity.NewID())
+	base := core.NewQuery(source).Container().From(alpineImage).WithEnvVariable("ARCHIVE_DISPLAY_FIXTURE", identity.NewID())
 	_, err = base.WithNewFile("/unrelated.sh", "#!/bin/sh\nprintf '"+unrelatedText+"\\n'\nhead -c 4194304 /dev/zero | tr '\\000' x\nprintf '\\n'\n").
 		WithExec([]string{"sh", "/unrelated.sh"}).Sync(sourceCtx)
 	require.NoError(t, err)
