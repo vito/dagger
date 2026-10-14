@@ -1079,6 +1079,7 @@ func (fn *ModuleFunction) Call(ctx context.Context, opts *CallOpts) (t dagql.Any
 	})
 	owner, owned := ExpertiseOwner(ctx)
 	fnCall.expertiseOwner = expertiseOwner{key: owner, valid: owned}
+	fnCall.composingAgentHandle = composingAgentHandle(ctx)
 	if fn.objDef != nil {
 		fnCall.ParentName = fn.objDef.OriginalName
 	}

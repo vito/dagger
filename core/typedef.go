@@ -2450,6 +2450,10 @@ type FunctionCall struct {
 	// module calls. Zero when the call did not originate from an agent turn.
 	callerAgent dagql.ObjectResult[*Agent]
 
+	// composingAgentHandle propagates initial-composition lineage across module
+	// client boundaries without changing callerAgent's provenance semantics.
+	composingAgentHandle string
+
 	// expertiseOwner follows the outermost expertise run through nested client
 	// sessions, like callerAgent. It is restored from the module call's recorded
 	// internal argument, not persisted on this engine-side function-call record.

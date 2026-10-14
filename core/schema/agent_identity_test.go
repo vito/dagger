@@ -175,6 +175,7 @@ func TestAgentSpawnCompositionFailureRetry(t *testing.T) {
 			Parent: &core.ModTreeNode{RootValue: objectResult(t, srv, "spawn-root-value", srv.Root().Unwrap().(*core.Query)), Type: rootType}},
 	}}
 	fail := true
+	expectedParent := chief.Self().Handle
 	var owners []dagql.ObjectResult[*core.Agent]
 	dagql.Fields[*core.Query]{
 		dagql.Func("identityExpertise", func(context.Context, *core.Query, struct{}) (*core.Expertise, error) { return entry.Clone(), nil }),
@@ -196,7 +197,10 @@ func TestAgentSpawnCompositionFailureRetry(t *testing.T) {
 			require.Nil(t, me.Self().Seed.Self())
 			parent, err := (agentSchema{}).parent(ctx, me, struct{}{})
 			require.NoError(t, err)
-			require.Equal(t, chief.Self().Handle, parent.Value.Self().Handle)
+			require.Equal(t, expectedParent, parent.Value.Self().Handle)
+			caller, ok := core.CallerAgent(ctx)
+			require.True(t, ok)
+			require.Equal(t, chief.Self().Handle, caller.Self().Handle, "composition lineage must not replace message provenance")
 			_, err = agents.Send(ctx, me, "too soon", "")
 			require.ErrorContains(t, err, "still composing")
 			if fail {
@@ -236,6 +240,9 @@ func TestAgentSpawnCompositionFailureRetry(t *testing.T) {
 			if err != nil {
 				return llm, err
 			}
+			if llm.Self().OwnerAgentHandle != "" {
+				expectedParent = llm.Self().OwnerAgentHandle
+			}
 			worker, err = spawnIdentityAgent(ctx, srv, llm, spawnArgs...)
 			return llm, err
 		}).DoNotCache("The fixture spawns a fresh worker on each attempt."),
@@ -268,4 +275,27 @@ func TestAgentSpawnCompositionFailureRetry(t *testing.T) {
 	rt, err = agents.Require(ctx, worker)
 	require.NoError(t, err)
 	require.Equal(t, core.AgentStateIdle, rt.State())
+
+	// Initial composition runs on the new family's behalf for lineage only:
+	// CallerAgent is still chief, but the nested worker's parent is family.
+	dagql.Fields[*core.Query]{
+		dagql.Func("parentExpertise", func(context.Context, *core.Query, struct{}) (*core.Expertise, error) { return parentEntry.Clone(), nil }),
+	}.Install(srv)
+	var parentExpertise dagql.ObjectResult[*core.Expertise]
+	require.NoError(t, srv.Select(ctx, srv.Root(), &parentExpertise, dagql.Selector{Field: "parentExpertise"}))
+	parentID, err := parentExpertise.ID()
+	require.NoError(t, err)
+	family, err := spawnIdentityAgent(ctx, srv, base,
+		dagql.NamedInput{Name: "name", Value: dagql.Opt(dagql.String("family"))},
+		dagql.NamedInput{Name: "expertise", Value: dagql.ArrayInput[dagql.ID[*core.Expertise]]{dagql.NewID[*core.Expertise](parentID)}})
+	require.NoError(t, err)
+	familyParent, err := (agentSchema{}).parent(ctx, family, struct{}{})
+	require.NoError(t, err)
+	require.Equal(t, chief.Self().Handle, familyParent.Value.Self().Handle)
+	workerParent, err := (agentSchema{}).parent(ctx, worker, struct{}{})
+	require.NoError(t, err)
+	require.Equal(t, family.Self().Handle, workerParent.Value.Self().Handle)
+	require.Equal(t, "family", workerParent.Value.Self().Name)
+	require.Len(t, worker.Self().Seed.Self().Expertise, 1)
+	require.Equal(t, childKey, worker.Self().Seed.Self().Messages[0].CompositionOwner)
 }

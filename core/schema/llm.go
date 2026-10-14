@@ -853,8 +853,9 @@ func (s *llmSchema) spawn(ctx context.Context, parent dagql.ObjectResult[*core.L
 	}
 	if len(args.Expertise) > 0 {
 		// Spawn starts a new conversation's entry scope, even when called by
-		// another entry. Keep CallerAgent intact for the child's lineage.
-		composeCtx := core.RestoreExpertiseOwner(ctx, "")
+		// another entry. Lineage follows this composing agent, independently
+		// of CallerAgent's message provenance and deadlock-detection meaning.
+		composeCtx := core.WithComposingAgent(core.RestoreExpertiseOwner(ctx, ""), handle)
 		if err := srv.Select(composeCtx, parent, &parent, dagql.Selector{
 			Field: "compose",
 			Args:  []dagql.NamedInput{{Name: "expertise", Value: dagql.ArrayInput[dagql.ID[*core.Expertise]](args.Expertise)}},

@@ -7,6 +7,29 @@ import (
 )
 
 type agentContextKey struct{}
+type composingAgentContextKey struct{}
+
+// WithComposingAgent identifies whose initial conversation spawn is composing.
+// This affects only the lineage of agents spawned during that composition;
+// CallerAgent remains unchanged for messages and deadlock detection.
+func WithComposingAgent(ctx context.Context, handle string) context.Context {
+	return context.WithValue(ctx, composingAgentContextKey{}, handle)
+}
+
+func composingAgentHandle(ctx context.Context) string {
+	if handle, ok := ctx.Value(composingAgentContextKey{}).(string); ok {
+		return handle
+	}
+	query, err := CurrentQuery(ctx)
+	if err != nil {
+		return ""
+	}
+	fnCall, err := query.CurrentFunctionCall(ctx)
+	if err != nil || fnCall == nil {
+		return ""
+	}
+	return fnCall.composingAgentHandle
+}
 
 // AgentToContext binds a running agent's handle into the context so that a
 // tool invoked from its evaluation loop can receive it: a module function

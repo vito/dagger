@@ -625,9 +625,9 @@ func (ars *AgentRuntimes) Require(ctx context.Context, agent dagql.ObjectResult[
 // be invisible to the roster.
 //
 // parentHandle is the recorded parent a restore supplies; empty derives the
-// parent from the calling agent, if any. A supplied parent must already have
-// an entry in this session and may be neither the agent itself nor one of its
-// descendants (see checkParentLocked).
+// parent from the agent being initially composed, or otherwise the calling
+// agent. A supplied parent must already have an entry in this session and may
+// be neither the agent itself nor one of its descendants (see checkParentLocked).
 func (ars *AgentRuntimes) Create(ctx context.Context, agent dagql.ObjectResult[*Agent], state AgentState, loopErr string, restored bool, parentHandle string) (*AgentRuntime, error) {
 	return ars.create(ctx, agent, state, loopErr, restored, parentHandle, false)
 }
@@ -686,7 +686,9 @@ func (ars *AgentRuntimes) create(ctx context.Context, agent dagql.ObjectResult[*
 	if md, err := engine.ClientMetadataFromContext(ctx); err == nil {
 		rt.controlNamespace.Session, rt.controlOrigin = md.SessionID, md.ClientID
 	}
-	if caller, ok := CallerAgent(ctx); ok && caller.Self().Handle != key {
+	if composing := composingAgentHandle(ctx); composing != "" && composing != key {
+		rt.parentHandle = composing
+	} else if caller, ok := CallerAgent(ctx); ok && caller.Self().Handle != key {
 		rt.parentHandle = caller.Self().Handle
 	}
 	if parentHandle != "" {
