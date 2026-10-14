@@ -1212,7 +1212,7 @@ type Donor {
 }
 
 func (LLMSuite) TestRecomposeWorkerIdentity(ctx context.Context, t *testctx.T) {
-	c := connect(ctx, t)
+	c, sink := connectWithTrace(ctx, t)
 	fixture, err := installAgents(t, c, "staff")
 	require.NoError(t, err)
 	workerScript := recomposeRecordingTurn(core.NewQuery(c).LLM(), "inspect worker", "parentName")
@@ -1227,6 +1227,7 @@ func (LLMSuite) TestRecomposeWorkerIdentity(ctx context.Context, t *testctx.T) {
 		WithResponse([]core.LLMContentBlockInput{parentCall}).
 		WithToolResult(parentCall.CallID, "", false).
 		WithResponse([]core.LLMContentBlockInput{{Kind: core.LLMContentBlockKindText, Text: "refresh worker done"}})
+	workerScript = recomposeRecordingTurn(workerScript, "restored worker", "parentName")
 	workerModel := cannedRecordingModel(ctx, t, c, workerScript)
 	source, err := fixture.File("../staff/main.dang").Contents(ctx)
 	require.NoError(t, err)
@@ -1284,6 +1285,36 @@ func (LLMSuite) TestRecomposeWorkerIdentity(ctx context.Context, t *testctx.T) {
 	transcript, err = llm.Transcript(ctx)
 	require.NoError(t, err)
 	require.Contains(t, transcript, "updated parent: chief")
+
+	// CLI restore evaluates a captured conversation before minting its runtime.
+	// Seed-free owner references must remain lazy through that evaluation.
+	chiefSnapshot := core.Ref[*core.LLM](core.NewQuery(c), core.ID(chief.mustRun(ctx, t, "snapshot { id }").Get("snapshot.id").String()))
+	chiefRecipe, err := sink.captureLLMRecipe(ctx, t, c, chiefSnapshot)
+	require.NoError(t, err)
+	workerRecipe, err := sink.captureLLMRecipe(ctx, t, c, llm)
+	require.NoError(t, err)
+	t.Run("restore worker before recomposition", func(ctx context.Context, t *testctx.T) {
+		target := connect(ctx, t)
+		restoredChiefSeed, err := core.Ref[*core.LLM](core.NewQuery(target), chiefRecipe).ID(ctx)
+		require.NoError(t, err)
+		_, err = rehydrateAgent(ctx, target, string(restoredChiefSeed), root.Get("handle").String(), "chief", "IDLE", "")
+		require.NoError(t, err)
+		restoredWorkerSeed, err := core.Ref[*core.LLM](core.NewQuery(target), workerRecipe).ID(ctx)
+		require.NoError(t, err, "load the snapshot before spawning its owning worker")
+		restoredWorker, err := rehydrateAgentWithParent(ctx, target, string(restoredWorkerSeed), matches[1], "helper", "IDLE", "", root.Get("handle").String())
+		require.NoError(t, err)
+		_, _, err = restoredWorker.sendAndWait(ctx, t, "restored worker")
+		require.NoError(t, err)
+		restoredTranscript := restoredWorker.mustRun(ctx, t, "snapshot { transcript }").Get("snapshot.transcript").String()
+		require.Equal(t, 2, strings.Count(restoredTranscript, "updated parent: chief"), "parentName must run again after restore")
+		restored := core.Ref[*core.LLM](core.NewQuery(target), core.ID(restoredWorker.mustRun(ctx, t, "snapshot { id }").Get("snapshot.id").String()))
+		require.Equal(t, entries, recordedExpertise(ctx, t, target, restored))
+		restored = recomposeRecordedExpertise(ctx, t, target, restored.Workspace(), restored)
+		require.Equal(t, []string{"Updated worker role: helper"}, recomposeSystemPrompts(ctx, t, target, restored))
+		restoredTools, err := restored.Tools(ctx)
+		require.NoError(t, err)
+		require.NotContains(t, restoredTools, "chiefOnly")
+	})
 
 	llm, err = applyURIExpertise(ctx, c, llm.Workspace(), llm, "compose", "staff/agent")
 	require.NoError(t, err)
