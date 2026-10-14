@@ -214,7 +214,33 @@ func TestAgentSpawnCompositionFailureRetry(t *testing.T) {
 		{Name: "name", Value: dagql.Opt(dagql.String("worker"))},
 		{Name: "expertise", Value: dagql.ArrayInput[dagql.ID[*core.Expertise]]{dagql.NewID[*core.Expertise](id)}},
 	}
-	_, err = spawnIdentityAgent(ctx, srv, base, spawnArgs...)
+	// Run the spawn from a real parent expertise entry. The child's compose
+	// must start its own record/ownership scope without losing CallerAgent.
+	parentFn := objectResult(t, srv, "spawn-parent", &core.Function{Name: "spawnWorker", ReturnType: llmType, Args: dagql.ObjectResultArray[*core.FunctionArg]{args[0]}})
+	parentObj := core.NewObjectTypeDef("Query", "", nil)
+	parentObj.Functions = dagql.ObjectResultArray[*core.Function]{parentFn}
+	parentType := objectResult(t, srv, "spawn-parent-type", (&core.TypeDef{}).WithObject(objectResult(t, srv, "spawn-parent-object", parentObj)))
+	parentEntry := entry.Clone()
+	parentEntry.Artifact.Path = []string{"fixture", "spawn-worker"}
+	parentEntry.Artifact.Node.Name = "spawnWorker"
+	parentEntry.Artifact.Node.Parent.Type = parentType
+	parentKey, err := parentEntry.Identity()
+	require.NoError(t, err)
+	var worker dagql.ObjectResult[*core.Agent]
+	dagql.Fields[*core.Query]{
+		dagql.NodeFunc("spawnWorker", func(ctx context.Context, _ dagql.ObjectResult[*core.Query], args struct{ Base core.LLMID }) (dagql.ObjectResult[*core.LLM], error) {
+			owner, ok := core.ExpertiseOwner(ctx)
+			require.True(t, ok)
+			require.Equal(t, parentKey, owner)
+			llm, err := args.Base.Load(ctx, srv)
+			if err != nil {
+				return llm, err
+			}
+			worker, err = spawnIdentityAgent(ctx, srv, llm, spawnArgs...)
+			return llm, err
+		}).DoNotCache("The fixture spawns a fresh worker on each attempt."),
+	}.Install(srv)
+	_, err = parentEntry.Run(ctx, base)
 	require.ErrorContains(t, err, "left STOPPED")
 	require.ErrorContains(t, err, "fixture composition failure")
 	require.Len(t, owners, 1)
@@ -223,13 +249,22 @@ func TestAgentSpawnCompositionFailureRetry(t *testing.T) {
 	require.True(t, found)
 	require.Equal(t, core.AgentStateStopped, rt.State())
 	fail = false
-	worker, err := spawnIdentityAgent(ctx, srv, base, spawnArgs...)
+	_, err = parentEntry.Run(ctx, base)
 	require.NoError(t, err)
 	require.Len(t, owners, 2)
 	require.NotEqual(t, owners[0].Self().Handle, worker.Self().Handle)
 	require.Equal(t, "worker", worker.Self().Name)
 	require.Equal(t, worker.Self().Handle, worker.Self().Seed.Self().OwnerAgentHandle)
 	require.Equal(t, "worker ready", worker.Self().Seed.Self().Messages[0].TextContent())
+	childSeed := worker.Self().Seed.Self()
+	require.Len(t, childSeed.Expertise, 1, "a spawned conversation records its own entries")
+	childKey, err := childSeed.Expertise[0].Self().Identity()
+	require.NoError(t, err)
+	wantKey, err := entry.Identity()
+	require.NoError(t, err)
+	require.Equal(t, wantKey, childKey)
+	require.NotEqual(t, parentKey, childKey)
+	require.Equal(t, childKey, childSeed.Messages[0].CompositionOwner)
 	rt, err = agents.Require(ctx, worker)
 	require.NoError(t, err)
 	require.Equal(t, core.AgentStateIdle, rt.State())

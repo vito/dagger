@@ -852,7 +852,10 @@ func (s *llmSchema) spawn(ctx context.Context, parent dagql.ObjectResult[*core.L
 		return res, fmt.Errorf("agent %q (%s) was left STOPPED because initial composition failed: %w", name, handle, err)
 	}
 	if len(args.Expertise) > 0 {
-		if err := srv.Select(ctx, parent, &parent, dagql.Selector{
+		// Spawn starts a new conversation's entry scope, even when called by
+		// another entry. Keep CallerAgent intact for the child's lineage.
+		composeCtx := core.RestoreExpertiseOwner(ctx, "")
+		if err := srv.Select(composeCtx, parent, &parent, dagql.Selector{
 			Field: "compose",
 			Args:  []dagql.NamedInput{{Name: "expertise", Value: dagql.ArrayInput[dagql.ID[*core.Expertise]](args.Expertise)}},
 		}); err != nil {
