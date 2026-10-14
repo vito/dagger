@@ -105,6 +105,10 @@ type LLM struct {
 	// Outermost composition entries, in their original order.
 	Expertise dagql.ObjectResultArray[*Expertise]
 
+	// OwnerAgentHandle identifies the agent whose conversation this is. It is
+	// independent of the caller and is recorded without embedding an Agent ID.
+	OwnerAgentHandle string
+
 	// The environment accessible to the LLM, exposed over MCP
 	mcp *MCP
 

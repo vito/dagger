@@ -27,14 +27,11 @@ import (
 // within the session (hack/designs/async-agents.md §3).
 //
 // An Agent is a spawned instance, not a derivable value: LLM.spawn mints a
-// unique runtime handle per call and pins it into the object's ID chain (via the
-// pure LLM.agent(handle:) lookup — the same re-exec pinning AgentMessage uses),
-// so two spawns of an identical composition are two distinct agents. The
-// value itself stays pure and content-addressed — seed conversation, minted
-// runtime handle, display name — and starting it registers a runtime entry
-// (loop goroutine on a detached context, computed state) in the session's
-// AgentRuntimes table, keyed by the runtime handle. All runtime state lives in
-// that table, never on the value.
+// unique runtime handle before composing its conversation. Live references use
+// Query.__agentReference(handle:) and carry no seed, avoiding an ID cycle when
+// the conversation refers to its own agent. Legacy LLM.agent values still carry
+// a seed for compatibility. Runtime state, including the fixed initial seed,
+// lives in the session's AgentRuntimes table and is addressed only by handle.
 type Agent struct {
 	// Seed is the conversation the agent's evaluation loop starts from,
 	// including its tools, workspace, and message history.
@@ -80,6 +77,72 @@ func (*Agent) TypeDescription() string {
 func (a *Agent) Clone() *Agent {
 	cp := *a
 	return &cp
+}
+
+// AgentReference returns a seed-free reference to an existing runtime in the
+// current session. Its recipe contains only the handle, so conversations can
+// refer to their owning agent without a conversation/agent ID cycle.
+func AgentReference(ctx context.Context, handle string) (dagql.ObjectResult[*Agent], error) {
+	var result dagql.ObjectResult[*Agent]
+	srv, err := CurrentDagqlServer(ctx)
+	if err != nil {
+		return result, err
+	}
+	err = srv.Select(ctx, srv.Root(), &result, dagql.Selector{
+		Field: "__agentReference",
+		Args:  []dagql.NamedInput{{Name: "handle", Value: dagql.String(handle)}},
+	})
+	return result, err
+}
+
+// WithLLMOwnerAgent records conversation ownership as a handle-only selector.
+func WithLLMOwnerAgent(ctx context.Context, llm dagql.ObjectResult[*LLM], handle string) (dagql.ObjectResult[*LLM], error) {
+	if llm.Self().OwnerAgentHandle == handle {
+		return llm, nil
+	}
+	srv, err := CurrentDagqlServer(ctx)
+	if err != nil {
+		return llm, err
+	}
+	err = srv.Select(ctx, llm, &llm, dagql.Selector{
+		Field: "__withOwnerAgent",
+		Args:  []dagql.NamedInput{{Name: "handle", Value: dagql.String(handle)}},
+	})
+	return llm, err
+}
+
+// Reference resolves only the current session's runtime table. The runtime
+// incarnation is cache eligibility metadata, never a selector input or recipe
+// dependency: replay under another session resolves that session's runtime.
+func (ars *AgentRuntimes) Reference(ctx context.Context, handle string) (dagql.ObjectResult[*Agent], error) {
+	var result dagql.ObjectResult[*Agent]
+	ars.mu.Lock()
+	rt, found := ars.entries[handle]
+	ars.mu.Unlock()
+	if !found {
+		return result, fmt.Errorf("agent handle %q has no runtime entry in this session: spawn or restore it first", handle)
+	}
+	srv, err := CurrentDagqlServer(ctx)
+	if err != nil {
+		return result, err
+	}
+	result, err = dagql.NewObjectResultForCurrentCall(ctx, srv, &Agent{Handle: handle, Name: rt.name})
+	if err != nil {
+		return result, err
+	}
+	cache, err := dagql.EngineCache(ctx)
+	if err != nil {
+		return result, err
+	}
+	md, err := engine.ClientMetadataFromContext(ctx)
+	if err != nil {
+		return result, err
+	}
+	resource := dagql.SessionResourceHandle("agent-reference:" + ars.incarnation + ":" + handle)
+	if err := cache.BindSessionResource(ctx, md.SessionID, md.ClientID, resource, true); err != nil {
+		return result, err
+	}
+	return result.WithSessionResourceHandle(ctx, resource)
 }
 
 // AgentState is the computed lifecycle state of an agent's runtime entry.
@@ -524,6 +587,12 @@ func (ars *AgentRuntimes) Require(ctx context.Context, agent dagql.ObjectResult[
 	if !found {
 		return nil, fmt.Errorf("agent %q has no runtime in this session: it must be spawned or re-hydrated before it can be addressed", agent.Self().Name)
 	}
+	rt.mu.Lock()
+	composing := rt.composing
+	rt.mu.Unlock()
+	if composing {
+		return nil, fmt.Errorf("agent %q is still composing its initial conversation", agent.Self().Name)
+	}
 	return rt, nil
 }
 
@@ -559,6 +628,17 @@ func (ars *AgentRuntimes) Require(ctx context.Context, agent dagql.ObjectResult[
 // an entry in this session and may be neither the agent itself nor one of its
 // descendants (see checkParentLocked).
 func (ars *AgentRuntimes) Create(ctx context.Context, agent dagql.ObjectResult[*Agent], state AgentState, loopErr string, restored bool, parentHandle string) (*AgentRuntime, error) {
+	return ars.create(ctx, agent, state, loopErr, restored, parentHandle, false)
+}
+
+// Prepare reserves identity and lineage before running spawn's expertise. The
+// entry is addressable by handle, but lifecycle mutations cannot start it until
+// CompleteComposition installs the final seed.
+func (ars *AgentRuntimes) Prepare(ctx context.Context, agent dagql.ObjectResult[*Agent], state AgentState, loopErr string, restored bool, parentHandle string) (*AgentRuntime, error) {
+	return ars.create(ctx, agent, state, loopErr, restored, parentHandle, true)
+}
+
+func (ars *AgentRuntimes) create(ctx context.Context, agent dagql.ObjectResult[*Agent], state AgentState, loopErr string, restored bool, parentHandle string, composing bool) (*AgentRuntime, error) {
 	key, err := agentKey(agent)
 	if err != nil {
 		return nil, err
@@ -598,6 +678,7 @@ func (ars *AgentRuntimes) Create(ctx context.Context, agent dagql.ObjectResult[*
 		return nil, fmt.Errorf("retain agent client scope: %w", err)
 	}
 	rt := newAgentRuntime(ars, key, agent)
+	rt.composing = composing
 	rt.clientScopeLease = lease
 	rt.restored = restored
 	rt.controlNamespace = agentcontrol.Namespace{Trace: trace.SpanContextFromContext(ctx).TraceID().String(), Incarnation: ars.incarnation}
@@ -698,6 +779,7 @@ func newAgentRuntime(ars *AgentRuntimes, key string, agent dagql.ObjectResult[*A
 		key:      key,
 		name:     agent.Self().Name,
 		self:     agent,
+		seed:     agent.Self().Seed,
 		last:     agent.Self().Seed,
 		messages: map[string]*agentMessageRecord{},
 		// wake has a single slot: it only needs to record "something changed,
@@ -1158,17 +1240,16 @@ type AgentRuntime struct {
 	// dispatcher uses to resolve subscribers.
 	ars *AgentRuntimes
 
-	// self is the agent handle the entry was created from: an honest dagql
-	// instance of the agent value. Immutable after creation (any handle
-	// carrying the same runtime handle denotes the same entry, whatever its
-	// seed re-derived to). The loop binds it into its context
-	// (AgentToContext) so tools dispatched by a step can reach the calling
-	// agent — the Agent! argument injection.
+	// self is the runtime's agent identity. Spawn switches it to a seed-free
+	// reference when initial composition completes, before activation. The loop
+	// binds it into its context so tools can identify their calling agent.
 	self dagql.ObjectResult[*Agent]
 
 	mu sync.Mutex
 
 	// Facts, guarded by mu. State() is a pure projection of these.
+	composing     bool                     // spawn is still composing the initial seed
+	seed          dagql.ObjectResult[*LLM] // fixed once initial composition completes
 	started       bool                     // the loop goroutine was launched
 	stepping      bool                     // a Step is in flight
 	turnOpen      bool                     // a turn has consumed input and not yet resolved
@@ -1374,6 +1455,46 @@ func (rt *AgentRuntime) stateLocked() AgentState {
 		// but never started: both are IDLE — mailbox empty, no turn open.
 		return AgentStateIdle
 	}
+}
+
+// CompleteComposition publishes the initial conversation and switches the loop's
+// self identity to a handle-only reference before any lifecycle operation runs.
+func (rt *AgentRuntime) CompleteComposition(ctx context.Context, self dagql.ObjectResult[*Agent], seed dagql.ObjectResult[*LLM]) error {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	if !rt.composing || rt.closing {
+		return fmt.Errorf("agent %q is not awaiting initial composition", rt.name)
+	}
+	rt.self = self
+	rt.seed = seed
+	rt.transitionLocked(func() {
+		rt.last = seed
+		rt.held = seed.Self().HasPending()
+		rt.composing = false
+	})
+	return nil
+}
+
+// AbortComposition preserves a failed spawn as a dormant tombstone; no loop can
+// run the partial composition. Keeping the handle prevents accidental reuse.
+func (rt *AgentRuntime) AbortComposition(ctx context.Context, cause error) {
+	_ = rt.Stop(ctx, true, cause, AgentStopExplicit)
+	rt.mu.Lock()
+	rt.composing = false
+	rt.mu.Unlock()
+}
+
+// ParentHandle is the immutable lineage recorded when this runtime was created.
+func (rt *AgentRuntime) ParentHandle() string {
+	return rt.parentHandle
+}
+
+// Seed returns the initial conversation, independently of the reference used
+// to address the runtime. Handle-only references deliberately carry no Seed.
+func (rt *AgentRuntime) Seed() dagql.ObjectResult[*LLM] {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	return rt.seed
 }
 
 // Snapshot returns the last committed conversation: the seed if the loop

@@ -997,6 +997,14 @@ func (m *MCP) adoptLLM(ctx context.Context, srv *dagql.Server, next dagql.Object
 		return "", fmt.Errorf("cannot continue: no conversation is bound to this tool call")
 	}
 
+	if current.Self().OwnerAgentHandle != "" {
+		var err error
+		next, err = WithLLMOwnerAgent(ctx, next, current.Self().OwnerAgentHandle)
+		if err != nil {
+			return "", err
+		}
+	}
+
 	// Load the new toolset now, so a broken env fails the tool call rather than
 	// the next turn. Doubles as the material for the summary below.
 	after, err := next.Self().mcp.Tools(ctx)
