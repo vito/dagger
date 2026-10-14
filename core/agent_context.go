@@ -9,6 +9,41 @@ import (
 type agentContextKey struct{}
 type composingAgentContextKey struct{}
 
+const composingAgentArg = "_composingAgent"
+
+func composingAgentInputSpec() dagql.InputSpec {
+	return dagql.InputSpec{Name: composingAgentArg, Type: dagql.Optional[dagql.String]{}, Internal: true}
+}
+
+func stampComposingAgent(ctx context.Context, req *dagql.CallRequest) error {
+	if req.Replay {
+		return nil
+	}
+	if arg := req.Arg(composingAgentArg); arg != nil && arg.Value != nil && arg.Value.Kind != dagql.ResultCallLiteralKindNull {
+		return nil
+	}
+	if handle := composingAgentHandle(ctx); handle != "" {
+		return req.SetArgInput(ctx, composingAgentArg, dagql.Opt(dagql.String(handle)), false)
+	}
+	return nil
+}
+
+func composingAgentCallContext(ctx context.Context, opts *CallOpts) context.Context {
+	if opts.useRecordedExpertiseOwner {
+		// An absent recorded scope must not inherit the replay caller's agent.
+		ctx = WithComposingAgent(ctx, "")
+	}
+	for _, input := range opts.Inputs {
+		if input.Name != composingAgentArg {
+			continue
+		}
+		if handle, ok := input.Value.(dagql.Optional[dagql.String]); ok && handle.Valid {
+			return WithComposingAgent(ctx, string(handle.Value))
+		}
+	}
+	return ctx
+}
+
 // WithComposingAgent identifies whose initial conversation spawn is composing.
 // This affects only the lineage of agents spawned during that composition;
 // CallerAgent remains unchanged for messages and deadlock detection.

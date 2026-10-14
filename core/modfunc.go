@@ -111,8 +111,8 @@ type CallOpts struct {
 	SkipSelfSchema bool
 	Server         *dagql.Server
 
-	// Schema dispatch uses the recorded scope, including an absent owner.
-	// Direct engine calls without a selector inherit their caller's scope.
+	// Schema dispatch uses the recorded expertise and composing-agent scopes,
+	// including absent scopes. Direct engine calls inherit their caller's scopes.
 	useRecordedExpertiseOwner bool
 }
 
@@ -189,7 +189,7 @@ func (fn *ModuleFunction) setCallInputs(ctx context.Context, opts *CallOpts) ([]
 	hasArg := map[string]bool{}
 
 	for _, input := range opts.Inputs {
-		if input.Name == expertiseOwnerArg {
+		if input.Name == expertiseOwnerArg || input.Name == composingAgentArg {
 			continue
 		}
 		normalizedName := gqlArgName(input.Name)
@@ -685,6 +685,11 @@ func (fn *ModuleFunction) DynamicInputsForCall(
 	if err := StampExpertiseOwner(ctx, req); err != nil {
 		return err
 	}
+	// The same entry can compose several agents. A helper without public
+	// Agent/LLM arguments can still spawn, so lineage must partition its cache.
+	if err := stampComposingAgent(ctx, req); err != nil {
+		return err
+	}
 	var ctxArgs []*FunctionArg
 	var workspaceArgs []*FunctionArg
 	var userDefaults []*UserDefault
@@ -1020,6 +1025,7 @@ func (fn *ModuleFunction) loadFunctionRuntime(ctx context.Context) (_ ModuleRunt
 
 func (fn *ModuleFunction) Call(ctx context.Context, opts *CallOpts) (t dagql.AnyResult, rerr error) {
 	ctx = expertiseCallContext(ctx, opts)
+	ctx = composingAgentCallContext(ctx, opts)
 	mod := fn.mod.Self()
 
 	lg := bklog.G(ctx).WithField("module", mod.Name()).WithField("function", fn.metadata.Name)

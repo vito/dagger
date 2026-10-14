@@ -103,9 +103,11 @@ func TestAgentHandleReferenceRestore(t *testing.T) {
 	require.True(t, parent.Valid)
 	require.Equal(t, chief.Self().Handle, parent.Value.Self().Handle)
 	require.Nil(t, parent.Value.Self().Seed.Self())
-	rootParent, err := (agentSchema{}).parent(ctx, chief, struct{}{})
-	require.NoError(t, err)
+	var rootParent dagql.Nullable[dagql.ObjectResult[*core.Agent]]
+	require.NoError(t, srv.Select(ctx, chief, &rootParent, dagql.Selector{Field: "parent"}))
 	require.False(t, rootParent.Valid)
+	chiefRecipe, err := chief.RecipeID(ctx)
+	require.NoError(t, err)
 	for _, field := range []string{"seed", "snapshot"} {
 		var llm dagql.ObjectResult[*core.LLM]
 		require.NoError(t, srv.Select(ctx, ref, &llm, dagql.Selector{Field: field}))
@@ -118,10 +120,21 @@ func TestAgentHandleReferenceRestore(t *testing.T) {
 	_, err = dst.Load(dstCtx, recipe)
 	require.ErrorContains(t, err, "has no runtime entry in this session")
 	dstBase := agentIdentityLLM(t, dstCtx, dst)
+	ancestor, err := spawnIdentityAgent(dstCtx, dst, dstBase,
+		dagql.NamedInput{Name: "name", Value: dagql.Opt(dagql.String("restored-ancestor"))})
+	require.NoError(t, err)
 	_, err = spawnIdentityAgent(dstCtx, dst, dstBase,
 		dagql.NamedInput{Name: "name", Value: dagql.Opt(dagql.String("restored-chief"))},
-		dagql.NamedInput{Name: "handle", Value: dagql.Opt(dagql.String(chief.Self().Handle))})
+		dagql.NamedInput{Name: "handle", Value: dagql.Opt(dagql.String(chief.Self().Handle))},
+		dagql.NamedInput{Name: "parentHandle", Value: dagql.Opt(dagql.String(ancestor.Self().Handle))})
 	require.NoError(t, err)
+	// A seed-bearing ID may have cached a null parent in the source session.
+	// Replaying it must project the destination runtime's restored lineage.
+	restoredChief, err := dst.Load(dstCtx, chiefRecipe)
+	require.NoError(t, err)
+	require.NoError(t, dst.Select(dstCtx, restoredChief, &rootParent, dagql.Selector{Field: "parent"}))
+	require.True(t, rootParent.Valid)
+	require.Equal(t, ancestor.Self().Handle, rootParent.Value.Self().Handle)
 	_, err = spawnIdentityAgent(dstCtx, dst, dstBase,
 		dagql.NamedInput{Name: "name", Value: dagql.Opt(dagql.String("restored-worker"))},
 		dagql.NamedInput{Name: "handle", Value: dagql.Opt(dagql.String(worker.Self().Handle))},
