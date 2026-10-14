@@ -27,11 +27,12 @@ import (
 // within the session (hack/designs/async-agents.md §3).
 //
 // An Agent is a spawned instance, not a derivable value: LLM.spawn mints a
-// unique runtime handle before composing its conversation. Live references use
-// Query.__agentReference(handle:) and carry no seed, avoiding an ID cycle when
-// the conversation refers to its own agent. Legacy LLM.agent values still carry
-// a seed for compatibility. Runtime state, including the fixed initial seed,
-// lives in the session's AgentRuntimes table and is addressed only by handle.
+// unique runtime handle before composing its conversation. Spawn's public ID
+// retains the finalized seed through LLM.agent(handle:, name:). References
+// injected into the conversation use Query.__agentReference(handle:) without a
+// seed, avoiding an ID cycle when the conversation refers to its owning agent.
+// Runtime state, including the fixed initial seed, lives in the session's
+// AgentRuntimes table and is addressed only by handle.
 type Agent struct {
 	// Seed is the conversation the agent's evaluation loop starts from,
 	// including its tools, workspace, and message history.
@@ -1240,9 +1241,9 @@ type AgentRuntime struct {
 	// dispatcher uses to resolve subscribers.
 	ars *AgentRuntimes
 
-	// self is the runtime's agent identity. Spawn switches it to a seed-free
-	// reference when initial composition completes, before activation. The loop
-	// binds it into its context so tools can identify their calling agent.
+	// self is the runtime's agent identity. Spawn finalizes it with the composed
+	// seed before activation. The loop binds it into its context so tools can
+	// identify their calling agent.
 	self dagql.ObjectResult[*Agent]
 
 	mu sync.Mutex
@@ -1457,8 +1458,8 @@ func (rt *AgentRuntime) stateLocked() AgentState {
 	}
 }
 
-// CompleteComposition publishes the initial conversation and switches the loop's
-// self identity to a handle-only reference before any lifecycle operation runs.
+// CompleteComposition publishes the finalized seed and public agent identity
+// before any lifecycle operation runs.
 func (rt *AgentRuntime) CompleteComposition(ctx context.Context, self dagql.ObjectResult[*Agent], seed dagql.ObjectResult[*LLM]) error {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
@@ -1468,7 +1469,7 @@ func (rt *AgentRuntime) CompleteComposition(ctx context.Context, self dagql.Obje
 	rt.self = self
 	rt.seed = seed
 	rt.transitionLocked(func() {
-		rt.last = seed
+		rt.commitLast(ctx, seed)
 		rt.held = seed.Self().HasPending()
 		rt.composing = false
 	})
@@ -1491,10 +1492,13 @@ func (rt *AgentRuntime) ParentHandle() string {
 
 // Seed returns the initial conversation, independently of the reference used
 // to address the runtime. Handle-only references deliberately carry no Seed.
-func (rt *AgentRuntime) Seed() dagql.ObjectResult[*LLM] {
+func (rt *AgentRuntime) Seed() (dagql.ObjectResult[*LLM], error) {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
-	return rt.seed
+	if rt.composing {
+		return dagql.ObjectResult[*LLM]{}, fmt.Errorf("agent %q is still composing its initial conversation", rt.name)
+	}
+	return rt.seed, nil
 }
 
 // Snapshot returns the last committed conversation: the seed if the loop

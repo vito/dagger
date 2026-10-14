@@ -851,10 +851,6 @@ func (s *llmSchema) spawn(ctx context.Context, parent dagql.ObjectResult[*core.L
 		rt.AbortComposition(ctx, err)
 		return res, fmt.Errorf("agent %q (%s) was left STOPPED because initial composition failed: %w", name, handle, err)
 	}
-	pinned, err = core.AgentReference(ctx, handle)
-	if err != nil {
-		return fail(err)
-	}
 	if len(args.Expertise) > 0 {
 		if err := srv.Select(ctx, parent, &parent, dagql.Selector{
 			Field: "compose",
@@ -867,6 +863,17 @@ func (s *llmSchema) spawn(ctx context.Context, parent dagql.ObjectResult[*core.L
 	// is still this agent, not an owner carried by the entry's return value.
 	parent, err = core.WithLLMOwnerAgent(ctx, parent, handle)
 	if err != nil {
+		return fail(err)
+	}
+	// Keep spawn's public ID seed-bearing. The seed's references to its owner
+	// use __agentReference(handle:), so this cannot form a recipe cycle.
+	if err := srv.Select(ctx, parent, &pinned, dagql.Selector{
+		Field: "agent",
+		Args: []dagql.NamedInput{
+			{Name: "handle", Value: dagql.String(handle)},
+			{Name: "name", Value: dagql.String(name)},
+		},
+	}); err != nil {
 		return fail(err)
 	}
 	if err := rt.CompleteComposition(ctx, pinned, parent); err != nil {

@@ -65,10 +65,9 @@ func (s agentSchema) Install(srv *dagql.Server) {
 			Doc(`Why the loop failed, for a FAILED agent; empty otherwise.`,
 				`The snapshot holds the completed prefix — send or resume retries from it.`),
 
-		// Read the runtime's fixed seed, not the reference's value: handle-only
-		// references carry no conversation and spawn finalizes it after composition.
+		// Public Agent IDs carry their fixed seed. Handle-only references read
+		// it from the runtime, after initial composition has completed.
 		dagql.NodeFunc("seed", s.seed).
-			DoNotCache("Resolves the runtime's initial conversation, which is finalized after spawn composition.").
 			Experimental("Agent APIs are likely to change.").
 			Doc(`The conversation the agent was spawned from: the tools, workspace and message history its loop started with.`,
 				`Fixed by the spawn; stepping does not move it (see snapshot for the latest committed step). Its workspace is the baseline the agent's own changes are measured from.`,
@@ -284,6 +283,9 @@ func (s agentSchema) loopError(ctx context.Context, parent dagql.ObjectResult[*c
 }
 
 func (s agentSchema) seed(ctx context.Context, parent dagql.ObjectResult[*core.Agent], _ struct{}) (dagql.ObjectResult[*core.LLM], error) {
+	if parent.Self().Seed.Self() != nil {
+		return parent.Self().Seed, nil
+	}
 	agents, err := agentRuntimes(ctx)
 	if err != nil {
 		return dagql.ObjectResult[*core.LLM]{}, err
@@ -293,11 +295,9 @@ func (s agentSchema) seed(ctx context.Context, parent dagql.ObjectResult[*core.A
 		return dagql.ObjectResult[*core.LLM]{}, err
 	}
 	if found {
-		return rt.Seed(), nil
+		return rt.Seed()
 	}
-	// Preserve the legacy LLM.agent lookup's seed projection. Live handle
-	// references cannot reach this branch: their lookup requires a runtime.
-	return parent.Self().Seed, nil
+	return dagql.ObjectResult[*core.LLM]{}, fmt.Errorf("agent %q has no runtime entry in this session", parent.Self().Handle)
 }
 
 func (s agentSchema) snapshot(ctx context.Context, parent dagql.ObjectResult[*core.Agent], _ struct{}) (res dagql.ObjectResult[*core.LLM], _ error) {
