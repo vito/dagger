@@ -1235,7 +1235,7 @@ func (LLMSuite) TestRecomposeWorkerIdentity(ctx context.Context, t *testctx.T) {
 	chief := spawnWithExpertise(ctx, t, c, core.NewQuery(c).LLM(core.LLMOpts{Model: chiefModel}).WithWorkspace(ws), "chief", chiefEntries)
 	root := chief.mustRun(ctx, t, "name handle parent { handle }")
 	require.Equal(t, "chief", root.Get("name").String())
-	require.False(t, root.Get("parent").Exists(), "root agents have no parent")
+	require.Nil(t, root.Get("parent").Value(), "root agents have no parent")
 	_, _, err = chief.sendAndWait(ctx, t, "hire child")
 	require.NoError(t, err)
 	transcript := chief.mustRun(ctx, t, "snapshot { transcript }").Get("snapshot.transcript").String()
@@ -1304,7 +1304,7 @@ func (LLMSuite) TestComposeTransformURIIdentity(ctx context.Context, t *testctx.
 type Swapper {
   first(base: LLM!): LLM! { base.withSystemPrompt("first original") }
   second(base: LLM!): LLM! { base.withSystemPrompt("second original") }
-  notATransform: String! { "not a conversation" }
+  notATransform: Directory! { directory }
 }
 `
 	ws := recomposeFixture(c, source).AsWorkspace()
@@ -1353,13 +1353,13 @@ func (AgentRuntimeSuite) TestParentLineageAndRestore(ctx context.Context, t *tes
 	c, sink := connectWithTrace(ctx, t)
 	root := spawnAgent(ctx, t, c, spawnOpts{model: emptyReplayModel, name: "root"})
 	rootInfo := root.mustRun(ctx, t, "handle parent { handle }")
-	require.False(t, rootInfo.Get("parent").Exists())
+	require.Nil(t, rootInfo.Get("parent").Value())
 	rootHandle := rootInfo.Get("handle").String()
 	child := spawnAgent(ctx, t, c, spawnOpts{model: emptyReplayModel, name: "child", parentHandle: rootHandle})
 	childInfo := child.mustRun(ctx, t, "handle parent { name handle parent { handle } }")
 	require.Equal(t, rootHandle, childInfo.Get("parent.handle").String())
 	require.Equal(t, "root", childInfo.Get("parent.name").String())
-	require.False(t, childInfo.Get("parent.parent").Exists())
+	require.Nil(t, childInfo.Get("parent.parent").Value())
 	// Restore lineage independently of either conversation seed. In the fresh
 	// session both runtimes are minted from the captured conversation recipes.
 	rootSnapshot := core.Ref[*core.LLM](core.NewQuery(c), core.ID(root.mustRun(ctx, t, "snapshot { id }").Get("snapshot.id").String()))
@@ -1373,11 +1373,11 @@ func (AgentRuntimeSuite) TestParentLineageAndRestore(ctx context.Context, t *tes
 	require.NoError(t, err)
 	restoredChild, err := rehydrateAgentWithParent(ctx, target, string(childRecipe), childInfo.Get("handle").String(), "child", "IDLE", "", rootHandle)
 	require.NoError(t, err)
-	require.False(t, restoredRoot.mustRun(ctx, t, "parent { handle }").Get("parent").Exists())
+	require.Nil(t, restoredRoot.mustRun(ctx, t, "parent { handle }").Get("parent").Value())
 	restored := restoredChild.mustRun(ctx, t, "parent { name handle parent { handle } }")
 	require.Equal(t, rootHandle, restored.Get("parent.handle").String())
 	require.Equal(t, "root", restored.Get("parent.name").String())
-	require.False(t, restored.Get("parent.parent").Exists())
+	require.Nil(t, restored.Get("parent.parent").Value())
 }
 
 func (LLMSuite) TestSpawnExpertiseFailureCanRetry(ctx context.Context, t *testctx.T) {
