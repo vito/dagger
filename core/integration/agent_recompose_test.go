@@ -2,7 +2,6 @@ package core
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -117,15 +116,15 @@ func applyExpertiseIDs(ctx context.Context, c *dagger.Client, base *core.LLM, op
 	return core.Ref[*core.LLM](core.NewQuery(c), result.Node.Result.ID), nil
 }
 
-func applyBoundExpertise(ctx context.Context, c *dagger.Client, ws *core.Workspace, base *core.LLM, operation, uri, arguments string) (*core.LLM, error) {
-	ids, err := boundExpertiseIDs(ctx, c, ws, uri, arguments)
+func applyURIExpertise(ctx context.Context, c *dagger.Client, ws *core.Workspace, base *core.LLM, operation, uri string) (*core.LLM, error) {
+	ids, err := uriExpertiseIDs(ctx, c, ws, uri)
 	if err != nil {
 		return nil, err
 	}
 	return applyExpertiseIDs(ctx, c, base.WithWorkspace(ws), operation, ids)
 }
 
-func boundExpertiseIDs(ctx context.Context, c *dagger.Client, ws *core.Workspace, uri, arguments string) ([]core.ID, error) {
+func uriExpertiseIDs(ctx context.Context, c *dagger.Client, ws *core.Workspace, uri string) ([]core.ID, error) {
 	wsID, err := ws.ID(ctx)
 	if err != nil {
 		return nil, err
@@ -138,10 +137,10 @@ func boundExpertiseIDs(ctx context.Context, c *dagger.Client, ws *core.Workspace
 		}
 	}
 	err = c.Do(ctx, &dagger.Request{
-		Query: `query($ws: ID!, $uri: String!, $args: JSON!) {
-			node(id: $ws) { ... on Workspace { artifacts { filterUri(uri: $uri) { asExpertise(arguments: $args) { id } } } } }
+		Query: `query($ws: ID!, $uri: String!) {
+			node(id: $ws) { ... on Workspace { artifacts { filterUri(uri: $uri) { asExpertise { id } } } } }
 		}`,
-		Variables: map[string]any{"ws": wsID, "uri": uri, "args": arguments},
+		Variables: map[string]any{"ws": wsID, "uri": uri},
 	}, &dagger.Response{Data: &res})
 	if err != nil {
 		return nil, err
@@ -154,8 +153,7 @@ func boundExpertiseIDs(ctx context.Context, c *dagger.Client, ws *core.Workspace
 }
 
 type recordedExpertiseEntry struct {
-	Artifact  struct{ URI string }
-	Arguments string
+	Artifact struct{ URI string }
 }
 
 func recordedExpertise(ctx context.Context, t *testctx.T, c *dagger.Client, llm *core.LLM) []recordedExpertiseEntry {
@@ -166,7 +164,7 @@ func recordedExpertise(ctx context.Context, t *testctx.T, c *dagger.Client, llm 
 		Node struct{ Expertise []recordedExpertiseEntry }
 	}
 	require.NoError(t, c.Do(ctx, &dagger.Request{
-		Query:     `query($id: ID!) { node(id: $id) { ... on LLM { expertise { artifact { uri } arguments } } } }`,
+		Query:     `query($id: ID!) { node(id: $id) { ... on LLM { expertise { artifact { uri } } } } }`,
 		Variables: map[string]any{"id": id},
 	}, &dagger.Response{Data: &res}))
 	return res.Node.Expertise
@@ -178,7 +176,7 @@ func recomposeRecordedExpertise(ctx context.Context, t *testctx.T, c *dagger.Cli
 	t.Helper()
 	var ids []core.ID
 	for _, entry := range recordedExpertise(ctx, t, c, llm) {
-		resolved, err := boundExpertiseIDs(ctx, c, ws, entry.Artifact.URI, entry.Arguments)
+		resolved, err := uriExpertiseIDs(ctx, c, ws, entry.Artifact.URI)
 		require.NoError(t, err)
 		require.Len(t, resolved, 1)
 		ids = append(ids, resolved[0])
@@ -859,7 +857,6 @@ type Inner {
 	entries := recordedExpertise(ctx, t, c, llm)
 	require.Len(t, entries, 1)
 	require.Contains(t, entries[0].Artifact.URI, "outer/agent")
-	require.JSONEq(t, `{}`, entries[0].Arguments)
 	expected := []string{"outer prompt", "inner prompt"}
 	require.ElementsMatch(t, expected, recomposeSystemPrompts(ctx, t, c, llm))
 	for range 2 {
@@ -1191,13 +1188,13 @@ type Donor {
 	seeds := map[string]*core.LLM{"manual": core.Ref[*core.LLM](core.NewQuery(c), res.Owner.Manual.ID)}
 	for _, name := range []string{"first", "second"} {
 		// Both entries call precisely the same helper with the same base ID.
-		seeds[name], err = applyBoundExpertise(ctx, c, ws, base, "compose", "owner/"+name, `{}`)
+		seeds[name], err = applyURIExpertise(ctx, c, ws, base, "compose", "owner/"+name)
 		require.NoError(t, err)
 	}
 	seeds["both"] = composeRecomposeFixture(ctx, t, c, ws, nil, "owner")
 	updated := ws.WithNewFile("owner/donor/main.dang", strings.ReplaceAll(donorSource, "shared helper original", "shared helper refreshed"))
 	for _, name := range []string{"manual", "first", "second", "both"} {
-		llm, err := applyBoundExpertise(ctx, c, updated, seeds[name], "recompose", "owner/first", `{}`)
+		llm, err := applyURIExpertise(ctx, c, updated, seeds[name], "recompose", "owner/first")
 		require.NoError(t, err)
 		expected := []string{"shared helper refreshed"}
 		if name != "first" {
@@ -1208,153 +1205,229 @@ type Donor {
 		require.NoError(t, err)
 		target := connect(ctx, t)
 		restored := core.Ref[*core.LLM](core.NewQuery(target), portable)
-		restored, err = applyBoundExpertise(ctx, target, restored.Workspace(), restored, "recompose", "owner/first", `{}`)
+		restored, err = applyURIExpertise(ctx, target, restored.Workspace(), restored, "recompose", "owner/first")
 		require.NoError(t, err)
 		require.ElementsMatch(t, expected, recomposeSystemPrompts(ctx, t, target, restored), "replayed seed %s", name)
 	}
 }
 
-func (LLMSuite) TestRecomposeBoundWorker(ctx context.Context, t *testctx.T) {
-	c, sink := connectWithTrace(ctx, t)
+func (LLMSuite) TestRecomposeWorkerIdentity(ctx context.Context, t *testctx.T) {
+	c := connect(ctx, t)
 	fixture, err := installAgents(t, c, "staff")
 	require.NoError(t, err)
-	ws := agentFixtureWorkspace(fixture)
-	llm, err := applyBoundExpertise(ctx, c, ws, core.NewQuery(c).LLM(), "compose", "staff/worker", `{"name":"helper"}`)
+	workerScript := recomposeRecordingTurn(core.NewQuery(c).LLM(), "inspect worker", "parentName")
+	workerScript = recomposeRecordingTurn(workerScript, "refresh worker", "reload", "parentName")
+	workerModel := cannedRecordingModel(ctx, t, c, workerScript)
+	source, err := fixture.File("../staff/main.dang").Contents(ctx)
 	require.NoError(t, err)
+	source = strings.ReplaceAll(source, "__WORKER_MODEL__", workerModel)
+	ws := agentFixtureWorkspace(fixture.WithNewFile("../staff/main.dang", source))
+
+	// Discovery remains directive-based even though explicit asExpertise is
+	// signature-based. The plain worker transform must not become a chief role.
+	defaultLLM := composeRecomposeFixture(ctx, t, c, ws, nil)
+	defaults := recordedExpertise(ctx, t, c, defaultLLM)
+	require.Len(t, defaults, 1)
+	require.Contains(t, defaults[0].Artifact.URI, "staff/agent")
+	chiefModel := cannedRecordingModel(ctx, t, c, recomposeRecordingTurn(core.NewQuery(c).LLM(), "hire child", "hire"))
+	chiefEntries, err := uriExpertiseIDs(ctx, c, ws, "staff/agent")
+	require.NoError(t, err)
+	chief := spawnWithExpertise(ctx, t, c, core.NewQuery(c).LLM(core.LLMOpts{Model: chiefModel}).WithWorkspace(ws), "chief", chiefEntries)
+	root := chief.mustRun(ctx, t, "name handle parent { handle }")
+	require.Equal(t, "chief", root.Get("name").String())
+	require.False(t, root.Get("parent").Exists(), "root agents have no parent")
+	_, _, err = chief.sendAndWait(ctx, t, "hire child")
+	require.NoError(t, err)
+	transcript := chief.mustRun(ctx, t, "snapshot { transcript }").Get("snapshot.transcript").String()
+	matches := regexp.MustCompile(`worker handle: ([a-zA-Z0-9_-]+)`).FindStringSubmatch(transcript)
+	require.Len(t, matches, 2, transcript)
+	worker := unmintedAgent(ctx, t, c, matches[1], "helper")
+	lineage := worker.mustRun(ctx, t, "name parent { name handle }")
+	require.Equal(t, "helper", lineage.Get("name").String())
+	require.Equal(t, "chief", lineage.Get("parent.name").String())
+	require.Equal(t, root.Get("handle").String(), lineage.Get("parent.handle").String())
+	llm := core.Ref[*core.LLM](core.NewQuery(c), core.ID(worker.mustRun(ctx, t, "snapshot { id }").Get("snapshot.id").String()))
 	entries := recordedExpertise(ctx, t, c, llm)
 	require.Len(t, entries, 1)
 	require.Contains(t, entries[0].Artifact.URI, "staff/worker")
-	require.JSONEq(t, `{"name":"helper"}`, entries[0].Arguments)
 	require.Equal(t, []string{"Worker role: helper"}, recomposeSystemPrompts(ctx, t, c, llm))
-
-	model := cannedRecordingModel(ctx, t, c, recomposeRecordingTurn(llm, "mutate peers", "advance", "peerState"))
-	llm = llm.WithModel(model).WithPrompt("mutate peers").Loop()
-	transcript, err := llm.Transcript(ctx)
+	_, _, err = worker.sendAndWait(ctx, t, "inspect worker")
 	require.NoError(t, err)
-	require.Contains(t, transcript, "original peer helper; counter: 1")
+	require.Contains(t, worker.mustRun(ctx, t, "snapshot { transcript }").Get("snapshot.transcript").String(), "original parent: chief")
 
-	source, err := ws.File("../staff/main.dang").Contents(ctx)
+	updated := strings.NewReplacer("Worker role: ", "Updated worker role: ", "Original peer implementation.", "Updated peer implementation.", "original parent: ", "updated parent: ").Replace(source)
+	llm = core.Ref[*core.LLM](core.NewQuery(c), core.ID(worker.mustRun(ctx, t, "snapshot { id }").Get("snapshot.id").String()))
+	llmID, err := llm.WithWorkspace(ws.WithNewFile("../staff/main.dang", updated)).ID(ctx)
 	require.NoError(t, err)
-	updated := strings.ReplaceAll(strings.ReplaceAll(source, "Original peer implementation.", "Updated peer implementation."), "original peer ", "updated peer ")
-	// Workspace file operations are relative to its cwd, modules/app.
-	ws = ws.WithNewFile("../staff/main.dang", updated)
-	llm = recomposeRecordedExpertise(ctx, t, c, ws, llm)
+	require.NoError(t, worker.reseedAgent(ctx, t, string(llmID)))
+	// Reload executes inside the worker. Its me injection must identify the
+	// worker, never the chief that originally invoked spawn.
+	_, _, err = worker.sendAndWait(ctx, t, "refresh worker")
+	require.NoError(t, err)
+	llm = core.Ref[*core.LLM](core.NewQuery(c), core.ID(worker.mustRun(ctx, t, "snapshot { id }").Get("snapshot.id").String()))
 	require.Equal(t, entries, recordedExpertise(ctx, t, c, llm))
+	require.Equal(t, []string{"Updated worker role: helper"}, recomposeSystemPrompts(ctx, t, c, llm))
 	tools, err := llm.Tools(ctx)
 	require.NoError(t, err)
 	require.NotContains(t, tools, "chiefOnly")
 	require.Contains(t, tools, "Updated peer implementation.")
-	require.NotContains(t, tools, "Original peer implementation.")
-	model = cannedRecordingModel(ctx, t, c, recomposeRecordingTurn(llm, "updated peers", "peerState", "advance", "peerState"))
-	llm = llm.WithModel(model).WithPrompt("updated peers").Loop()
 	transcript, err = llm.Transcript(ctx)
 	require.NoError(t, err)
-	require.Contains(t, transcript, "updated peer helper; counter: 1")
-	require.Contains(t, transcript, "updated peer helper; counter: 2")
+	require.Contains(t, transcript, "updated parent: chief")
 
-	// The record and the preserved state must survive portable ID replay.
-	portable, err := sink.captureLLMRecipe(ctx, t, c, llm)
+	llm, err = applyURIExpertise(ctx, c, llm.Workspace(), llm, "compose", "staff/agent")
 	require.NoError(t, err)
-	c = connect(ctx, t)
-	llm = core.Ref[*core.LLM](core.NewQuery(c), portable)
-	require.Equal(t, entries, recordedExpertise(ctx, t, c, llm))
-	llm = recomposeRecordedExpertise(ctx, t, c, llm.Workspace(), llm)
+	require.ElementsMatch(t, []string{"Updated worker role: helper", "Chief role."}, recomposeSystemPrompts(ctx, t, c, llm))
 	tools, err = llm.Tools(ctx)
 	require.NoError(t, err)
-	require.NotContains(t, tools, "chiefOnly")
-
-	// Install the chief entry explicitly; it must not replace the worker
-	// entry merely because they originate in the same module.
-	llm, err = applyBoundExpertise(ctx, c, llm.Workspace(), llm, "recompose", "staff/agent", `{}`)
-	require.NoError(t, err)
-	allEntries := recordedExpertise(ctx, t, c, llm)
-	require.Len(t, allEntries, 2)
-	require.Equal(t, entries[0], allEntries[0])
-	require.Contains(t, allEntries[1].Artifact.URI, "staff/agent")
-	for range 2 {
-		require.ElementsMatch(t, []string{"Worker role: helper", "Chief role."}, recomposeSystemPrompts(ctx, t, c, llm))
-		tools, err = llm.Tools(ctx)
-		require.NoError(t, err)
-		require.Contains(t, tools, "## chiefOnly\n")
-		require.Contains(t, tools, "## peerState\n")
-		llm = recomposeRecordedExpertise(ctx, t, c, llm.Workspace(), llm)
-		require.Equal(t, allEntries, recordedExpertise(ctx, t, c, llm))
-	}
-	model = cannedRecordingModel(ctx, t, c, recomposeRecordingTurn(llm, "both roles", "chiefOnly", "peerState"))
-	transcript, err = llm.WithModel(model).WithPrompt("both roles").Loop().Transcript(ctx)
-	require.NoError(t, err)
-	require.Contains(t, transcript, "Chief capability.")
-	require.Contains(t, transcript, "updated peer helper; counter: 2")
+	require.Contains(t, tools, "## chiefOnly\n")
+	require.Len(t, recordedExpertise(ctx, t, c, llm), 2)
+	llm = recomposeRecordedExpertise(ctx, t, c, llm.Workspace(), llm)
+	require.ElementsMatch(t, []string{"Updated worker role: helper", "Chief role."}, recomposeSystemPrompts(ctx, t, c, llm))
 }
 
-func (LLMSuite) TestComposeBoundObjectAndCanonicalIdentity(ctx context.Context, t *testctx.T) {
+func spawnWithExpertise(ctx context.Context, t *testctx.T, c *dagger.Client, llm *core.LLM, name string, entries []core.ID) *agentHandle {
+	t.Helper()
+	id, err := llm.ID(ctx)
+	require.NoError(t, err)
+	var result struct{ Node struct{ Spawn string } }
+	require.NoError(t, c.Do(ctx, &dagger.Request{
+		Query:     `query($id: ID!, $name: String!, $entries: [ID!]!) { node(id: $id) { ... on LLM { spawn(name: $name, expertise: $entries) } } }`,
+		Variables: map[string]any{"id": id, "name": name, "entries": entries},
+	}, &dagger.Response{Data: &result}))
+	return &agentHandle{c: c, agentID: result.Node.Spawn}
+}
+
+func (LLMSuite) TestComposeTransformURIIdentity(ctx context.Context, t *testctx.T) {
 	c, sink := connectWithTrace(ctx, t)
-	fixture, err := installAgents(t, c, "staff")
+	const source = `
+type Swapper {
+  first(base: LLM!): LLM! { base.withSystemPrompt("first original") }
+  second(base: LLM!): LLM! { base.withSystemPrompt("second original") }
+  notATransform: String! { "not a conversation" }
+}
+`
+	ws := recomposeFixture(c, source).AsWorkspace()
+	// Neither transform carries @agent; explicit conversion uses signatures.
+	llm := composeRecomposeFixture(ctx, t, c, ws, nil)
+	require.Empty(t, recordedExpertise(ctx, t, c, llm))
+	llm, err := applyURIExpertise(ctx, c, ws, llm, "compose", "swapper/first")
 	require.NoError(t, err)
-	ws := agentFixtureWorkspace(fixture)
-	agent, err := core.NewQuery(c).LLM().Spawn(ctx, core.LLMSpawnOpts{Name: "bound-agent"})
-	require.NoError(t, err)
-	agentID, err := agent.ID(ctx)
-	require.NoError(t, err)
-	handle, err := agent.Handle(ctx)
-	require.NoError(t, err)
-	args := fmt.Sprintf(`{"label":"first","agent":%q}`, agentID)
-	llm, err := applyBoundExpertise(ctx, c, ws, core.NewQuery(c).LLM(), "compose", "staff/attached", args)
-	require.NoError(t, err)
-	require.Equal(t, []string{"Attached first: " + handle}, recomposeSystemPrompts(ctx, t, c, llm))
 	entries := recordedExpertise(ctx, t, c, llm)
 	require.Len(t, entries, 1)
-	// Object inputs are canonicalized to portable IDs. Compare the Agent
-	// they resolve to rather than the source session's engine handle encoding.
-	assertBinding := func(arguments, label string) {
-		t.Helper()
-		var bound struct{ Agent, Label string }
-		require.NoError(t, json.Unmarshal([]byte(arguments), &bound))
-		require.Equal(t, label, bound.Label)
-		boundHandle, err := core.Ref[*core.Agent](core.NewQuery(c), core.ID(bound.Agent)).Handle(ctx)
-		require.NoError(t, err)
-		require.Equal(t, handle, boundHandle)
-	}
-	assertBinding(entries[0].Arguments, "first")
-
-	// Whitespace and key order do not create a distinct composition entry.
-	canonicalDuplicate := fmt.Sprintf(`{ "agent": %q, "label": "first" }`, agentID)
-	_, err = applyBoundExpertise(ctx, c, ws, llm, "compose", "staff/attached", canonicalDuplicate)
-	require.Error(t, err)
-	ids, err := boundExpertiseIDs(ctx, c, ws, "staff/attached", args)
+	require.Contains(t, entries[0].Artifact.URI, "swapper/first")
+	_, err = applyURIExpertise(ctx, c, ws, llm, "compose", entries[0].Artifact.URI)
+	require.Error(t, err, "an absolute URI must identify the same entry")
+	ids, err := uriExpertiseIDs(ctx, c, ws, "swapper/first")
 	require.NoError(t, err)
 	require.Len(t, ids, 1)
 	_, err = applyExpertiseIDs(ctx, c, core.NewQuery(c).LLM().WithWorkspace(ws), "compose", []core.ID{ids[0], ids[0]})
-	require.Error(t, err, "duplicates in a single compose batch must also fail")
-	// A genuinely different binding of the same artifact is a new entry.
-	secondArgs := fmt.Sprintf(`{"agent":%q,"label":"second"}`, agentID)
-	llm, err = applyBoundExpertise(ctx, c, ws, llm, "compose", "staff/attached", secondArgs)
+	require.Error(t, err, "duplicates in a single compose batch must fail")
+	_, err = uriExpertiseIDs(ctx, c, ws, "swapper/not-a-transform")
+	require.Error(t, err, "asExpertise must reject non-transform artifacts")
+	llm, err = applyURIExpertise(ctx, c, ws, llm, "compose", "swapper/second")
 	require.NoError(t, err)
 	entries = recordedExpertise(ctx, t, c, llm)
 	require.Len(t, entries, 2)
-	assertBinding(entries[0].Arguments, "first")
-	assertBinding(entries[1].Arguments, "second")
+	require.Contains(t, entries[0].Artifact.URI, "swapper/first")
+	require.Contains(t, entries[1].Artifact.URI, "swapper/second")
 
-	// Only the selected binding is refreshed, even within one function/module.
-	source, err := ws.File("../staff/main.dang").Contents(ctx)
+	ws = ws.WithNewFile(recomposeModulePath, strings.ReplaceAll(source, "original", "updated"))
+	llm, err = applyURIExpertise(ctx, c, ws, llm, "recompose", entries[0].Artifact.URI)
 	require.NoError(t, err)
-	ws = ws.WithNewFile("../staff/main.dang", strings.ReplaceAll(source, "Attached ", "Refreshed "))
-	llm, err = applyBoundExpertise(ctx, c, ws, llm, "recompose", "staff/attached", canonicalDuplicate)
-	require.NoError(t, err)
-	require.ElementsMatch(t, []string{"Refreshed first: " + handle, "Attached second: " + handle}, recomposeSystemPrompts(ctx, t, c, llm))
+	require.ElementsMatch(t, []string{"first updated", "second original"}, recomposeSystemPrompts(ctx, t, c, llm))
 	require.Equal(t, entries, recordedExpertise(ctx, t, c, llm))
-
 	t.Run("portable replay", func(ctx context.Context, t *testctx.T) {
 		portable, err := sink.captureLLMRecipe(ctx, t, c, llm)
 		require.NoError(t, err)
 		target := connect(ctx, t)
 		restored := core.Ref[*core.LLM](core.NewQuery(target), portable)
-		require.Equal(t, entries, recordedExpertise(ctx, t, target, restored),
-			"portable replay retains ordered entries and canonical scalar/object arguments")
+		require.Equal(t, entries, recordedExpertise(ctx, t, target, restored))
 		restored = recomposeRecordedExpertise(ctx, t, target, restored.Workspace(), restored)
 		require.Equal(t, entries, recordedExpertise(ctx, t, target, restored))
-		require.ElementsMatch(t, []string{"Refreshed first: " + handle, "Refreshed second: " + handle}, recomposeSystemPrompts(ctx, t, target, restored))
+		require.ElementsMatch(t, []string{"first updated", "second updated"}, recomposeSystemPrompts(ctx, t, target, restored))
 	})
+}
+
+func (AgentRuntimeSuite) TestParentLineageAndRestore(ctx context.Context, t *testctx.T) {
+	c, sink := connectWithTrace(ctx, t)
+	root := spawnAgent(ctx, t, c, spawnOpts{model: emptyReplayModel, name: "root"})
+	rootInfo := root.mustRun(ctx, t, "handle parent { handle }")
+	require.False(t, rootInfo.Get("parent").Exists())
+	rootHandle := rootInfo.Get("handle").String()
+	child := spawnAgent(ctx, t, c, spawnOpts{model: emptyReplayModel, name: "child", parentHandle: rootHandle})
+	childInfo := child.mustRun(ctx, t, "handle parent { name handle parent { handle } }")
+	require.Equal(t, rootHandle, childInfo.Get("parent.handle").String())
+	require.Equal(t, "root", childInfo.Get("parent.name").String())
+	require.False(t, childInfo.Get("parent.parent").Exists())
+	// Restore lineage independently of either conversation seed. In the fresh
+	// session both runtimes are minted from the captured conversation recipes.
+	rootSnapshot := core.Ref[*core.LLM](core.NewQuery(c), core.ID(root.mustRun(ctx, t, "snapshot { id }").Get("snapshot.id").String()))
+	childSnapshot := core.Ref[*core.LLM](core.NewQuery(c), core.ID(child.mustRun(ctx, t, "snapshot { id }").Get("snapshot.id").String()))
+	rootRecipe, err := sink.captureLLMRecipe(ctx, t, c, rootSnapshot)
+	require.NoError(t, err)
+	childRecipe, err := sink.captureLLMRecipe(ctx, t, c, childSnapshot)
+	require.NoError(t, err)
+	target := connect(ctx, t)
+	restoredRoot, err := rehydrateAgent(ctx, target, string(rootRecipe), rootHandle, "root", "IDLE", "")
+	require.NoError(t, err)
+	restoredChild, err := rehydrateAgentWithParent(ctx, target, string(childRecipe), childInfo.Get("handle").String(), "child", "IDLE", "", rootHandle)
+	require.NoError(t, err)
+	require.False(t, restoredRoot.mustRun(ctx, t, "parent { handle }").Get("parent").Exists())
+	restored := restoredChild.mustRun(ctx, t, "parent { name handle parent { handle } }")
+	require.Equal(t, rootHandle, restored.Get("parent.handle").String())
+	require.Equal(t, "root", restored.Get("parent.name").String())
+	require.False(t, restored.Get("parent.parent").Exists())
+}
+
+func (LLMSuite) TestSpawnExpertiseFailureCanRetry(ctx context.Context, t *testctx.T) {
+	c := connect(ctx, t)
+	const source = `
+type Swapper {
+  broken(base: LLM!, me: Agent!): LLM! { raise "composition deliberately failed" }
+  ready(base: LLM!, me: Agent!): LLM! { base.withSystemPrompt("ready: " + me.name) }
+  fresh(base: LLM!): LLM! { llm(model: "recording/W10=") }
+}
+`
+	ws := recomposeFixture(c, source).AsWorkspace()
+	base := core.NewQuery(c).LLM(core.LLMOpts{Model: emptyReplayModel}).WithWorkspace(ws)
+	id, err := base.ID(ctx)
+	require.NoError(t, err)
+	broken, err := uriExpertiseIDs(ctx, c, ws, "swapper/broken")
+	require.NoError(t, err)
+	var result struct{ Node struct{ Spawn string } }
+	err = c.Do(ctx, &dagger.Request{
+		Query:     `query($id: ID!, $entries: [ID!]!) { node(id: $id) { ... on LLM { spawn(name: "retry", expertise: $entries) } } }`,
+		Variables: map[string]any{"id": id, "entries": broken},
+	}, &dagger.Response{Data: &result})
+	require.ErrorContains(t, err, "composition deliberately failed")
+	ready, err := uriExpertiseIDs(ctx, c, ws, "swapper/ready")
+	require.NoError(t, err)
+	retry := spawnWithExpertise(ctx, t, c, base, "retry", ready)
+	require.Equal(t, "retry", retry.mustRun(ctx, t, "name").Get("name").String())
+	require.Contains(t, retry.mustRun(ctx, t, "snapshot { transcript }").Get("snapshot.transcript").String(), "ready: retry")
+
+	t.Run("fresh conversation retains spawn owner", func(ctx context.Context, t *testctx.T) {
+		fresh, err := uriExpertiseIDs(ctx, c, ws, "swapper/fresh")
+		require.NoError(t, err)
+		require.Len(t, fresh, 1)
+		require.Len(t, ready, 1)
+		agent := spawnWithExpertise(ctx, t, c, base, "fresh-agent", []core.ID{fresh[0], ready[0]})
+		require.Contains(t, agent.mustRun(ctx, t, "snapshot { transcript }").Get("snapshot.transcript").String(), "ready: fresh-agent")
+	})
+}
+
+func (LLMSuite) TestComposeTransformRequiresAgent(ctx context.Context, t *testctx.T) {
+	c := connect(ctx, t)
+	fixture, err := installAgents(t, c, "staff")
+	require.NoError(t, err)
+	ws := agentFixtureWorkspace(fixture)
+	ids, err := uriExpertiseIDs(ctx, c, ws, "staff/worker")
+	require.NoError(t, err, "conversion does not require an agent to have been minted yet")
+	require.Len(t, ids, 1)
+	_, err = applyExpertiseIDs(ctx, c, core.NewQuery(c).LLM().WithWorkspace(ws), "compose", ids)
+	require.Error(t, err)
+	require.Contains(t, strings.ToLower(err.Error()), "agent")
 }
 
 func (LLMSuite) TestRecomposeDirectCallerLeavesForeignToolsUnowned(ctx context.Context, t *testctx.T) {

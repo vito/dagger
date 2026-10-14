@@ -17,7 +17,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"testing"
 
 	"dagger.io/dagger/core"
@@ -131,38 +130,16 @@ func (AgentsSuite) TestNestedDiscovery(ctx context.Context, t *testctx.T) {
 	require.Contains(t, out, "dag+expertise://?expertise=nested/tools/agent")
 }
 
-func (AgentsSuite) TestDiscoverySkipsUnboundRequiredArg(ctx context.Context, t *testctx.T) {
+func (AgentsSuite) TestValidationRejectsExtraRequiredArg(ctx context.Context, t *testctx.T) {
 	c := connect(ctx, t)
-	modGen, err := installAgents(t, c, "badagent", "editor")
+	modGen, err := installAgents(t, c, "badagent")
 	require.NoError(t, err)
 
-	// Required extra arguments are valid module signatures, but compose-all
-	// must skip entries it cannot invoke without an explicit binding.
-	_, err = modGen.With(daggerExec("agent", "-l")).CombinedOutput(ctx)
+	// badagent's @agent declares a required `extra: String!` beyond its LLM base,
+	// which must be rejected at module load.
+	out, err := modGen.With(daggerExecFail("agent", "-l")).CombinedOutput(ctx)
 	require.NoError(t, err)
-	// Observe actual entry execution, rather than listing all discoverable
-	// artifacts (which intentionally includes parameterized entrypoints).
-	const composedMarker = "DISCOVERY_EDITOR_COMPOSED"
-	editorSource := editorSourceWithDoc("Discovery fixture tool.")
-	editorSource = strings.Replace(editorSource, "    base\n", "    print(\""+composedMarker+"\")\n    base\n", 1)
-	modGen = modGen.WithNewFile("../editor/main.dang", editorSource)
-	// EOF exits the prompt without inference. Give initialization an inert
-	// endpoint so this exercises composition without real provider credentials.
-	out, err := modGen.
-		WithEnvVariable("OPENAI_API_KEY", "unused").
-		WithEnvVariable("OPENAI_MODEL", "unused").
-		WithEnvVariable("OPENAI_BASE_URL", "http://127.0.0.1:1").
-		With(daggerExec("agent", "--progress=plain")).CombinedOutput(ctx)
-	require.NoError(t, err)
-	require.Contains(t, out, composedMarker)
-	require.NotContains(t, out, "unbound required agent argument")
-
-	// The skipped entry remains available when the caller supplies its arg.
-	ws := agentFixtureWorkspace(modGen)
-	llm, err := applyBoundExpertise(ctx, c, ws, core.NewQuery(c).LLM(), "compose", "badagent/agent", `{"extra":"explicitly bound"}`)
-	require.NoError(t, err)
-	require.Contains(t, recomposeSystemPrompts(ctx, t, c, llm), "explicitly bound")
-	require.Len(t, recordedExpertise(ctx, t, c, llm), 1)
+	require.Contains(t, out, "may only require a single LLM! argument")
 }
 
 func (AgentsSuite) TestValidationRejectsMissingBaseArg(ctx context.Context, t *testctx.T) {

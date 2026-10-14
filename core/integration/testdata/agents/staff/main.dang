@@ -3,38 +3,33 @@ type Staff {
     base.withSystemPrompt("Chief role.").withTools(currentNode.{{... on Dagger.Staff!}}.chief)
   }
 
-  worker(base: LLM!, name: String!): LLM! @agent {
-    base.withSystemPrompt("Worker role: " + name).withTools(currentNode.{{... on Dagger.Staff!}}.peers(name))
-  }
-
-  attached(base: LLM!, agent: Agent!, label: String!): LLM! @agent {
-    base.withSystemPrompt("Attached " + label + ": " + agent.handle)
+  worker(base: LLM!, me: Agent!): LLM! {
+    base.withSystemPrompt("Worker role: " + me.name).withTools(currentNode.{{... on Dagger.Staff!}}.peers)
   }
 
   chief: Chief! { Chief() }
-  peers(name: String!): Peers! { Peers(name) }
+  peers: Peers! { Peers() }
+  notATransform: String! { "not a conversation" }
 }
 
 type Chief {
   chiefOnly: String! { "Chief capability." }
+
+  hire(ws: Workspace!): String! @cache(policy: FunctionCachePolicy.Never) {
+    let worker = llm(model: "__WORKER_MODEL__").withWorkspace(ws).spawn(name: "helper", expertise: ws.artifacts.filterUri("staff/worker").asExpertise.{{ id }}.map { node(id: _.id).{{ ... on Expertise! }} })
+    "worker handle: " + worker.handle
+  }
 }
 
 type Peers {
-  let name: String!
-  let counter: Int! = 0
-
-  new(name: String!) {
-    self.name = name
-    self
-  }
-
-  advance: Peers! {
-    counter += 1
-    self
-  }
-
   """Original peer implementation."""
-  peerState: String! {
-    "original peer " + name + "; counter: " + toString(counter)
+  parentName(me: Agent!): String! {
+    let parent = me.parent
+    if (parent == null) { raise "worker has no parent" }
+    "original parent: " + parent.name
+  }
+
+  reload(llm: LLM!): LLM! {
+    llm.recompose(expertise: llm.expertise.{{ artifact { uri } }}.map { node(id: llm.workspace.artifacts.filterUri(_.artifact.uri).asExpertise.{{ id }}[0].id).{{ ... on Expertise! }} })
   }
 }

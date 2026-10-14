@@ -1,6 +1,6 @@
-"""An agent with an explicitly bound required argument (formerly invalid)."""
+"""A deliberately malformed agent module (extra required arg) for validation tests."""
 type Badagent {
-  """Discovered but not composed until extra is bound."""
+  """@agent with an extra required arg, which the contract forbids."""
   agent(base: LLM!, extra: String!): LLM! @agent {
     base.withSystemPrompt(extra)
   }
