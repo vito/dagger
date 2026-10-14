@@ -678,6 +678,21 @@ impl Agent {
         let query = self.selection.select("id");
         query.execute(self.graphql_client.clone()).await
     }
+    /// The agent that spawned this agent, or null for a root agent. Restored agents retain their recorded parent handle.
+    pub async fn parent(&self) -> Result<Option<Agent>, DaggerError> {
+        let query = self.selection.select("parent");
+        let query = query.select("id");
+        let id: Option<Id> = query.execute(self.graphql_client.clone()).await?;
+        Ok(id.map(|id| Agent {
+            proc: self.proc.clone(),
+            selection: query
+                .root()
+                .select("node")
+                .arg("id", &id.0)
+                .inline_fragment("Agent"),
+            graphql_client: self.graphql_client.clone(),
+        }))
+    }
     /// Display label for the agent; carries no identity.
     pub async fn name(&self) -> Result<String, DaggerError> {
         let query = self.selection.select("name");
@@ -1537,12 +1552,6 @@ pub struct Artifacts {
     pub graphql_client: DynGraphQLClient,
 }
 #[derive(Builder, Debug, PartialEq)]
-pub struct ArtifactsAsExpertiseOpts {
-    /// Field arguments besides the conversation, as a JSON object.
-    #[builder(setter(into, strip_option), default)]
-    pub arguments: Option<Json>,
-}
-#[derive(Builder, Debug, PartialEq)]
 pub struct ArtifactsPathDefinitionsOpts<'a> {
     /// Prefix each address with the workspace's Git address and commit.
     #[builder(setter(into, strip_option), default)]
@@ -1619,40 +1628,9 @@ impl Artifacts {
         let query = self.selection.select("id");
         query.execute(self.graphql_client.clone()).await
     }
-    /// Convert the selection to expertise without running it, binding these arguments. Fail if a selected agent's required arguments are unbound; a module load failure fails with its load error.
-    ///
-    /// # Arguments
-    ///
-    /// * `opt` - optional argument, see inner type for documentation, use <func>_opts to use
+    /// Convert conversation-transforming functions to expertise without running them. Each must return LLM! and take exactly one LLM! argument, with only auto-filled or optional additional arguments. An Agent! argument receives the conversation's owning agent when composed. The @agent directive nominates entries for default composition but is not required for explicit conversion. A module load failure fails with its load error.
     pub async fn as_expertise(&self) -> Result<Vec<Expertise>, DaggerError> {
         let query = self.selection.select("asExpertise");
-        let query = query.select("id");
-        let ids: Vec<Id> = query.execute(self.graphql_client.clone()).await?;
-        Ok(ids
-            .into_iter()
-            .map(|id| Expertise {
-                proc: self.proc.clone(),
-                selection: crate::querybuilder::query()
-                    .select("node")
-                    .arg("id", &id.0)
-                    .inline_fragment("Expertise"),
-                graphql_client: self.graphql_client.clone(),
-            })
-            .collect())
-    }
-    /// Convert the selection to expertise without running it, binding these arguments. Fail if a selected agent's required arguments are unbound; a module load failure fails with its load error.
-    ///
-    /// # Arguments
-    ///
-    /// * `opt` - optional argument, see inner type for documentation, use <func>_opts to use
-    pub async fn as_expertise_opts(
-        &self,
-        opts: ArtifactsAsExpertiseOpts,
-    ) -> Result<Vec<Expertise>, DaggerError> {
-        let mut query = self.selection.select("asExpertise");
-        if let Some(arguments) = opts.arguments {
-            query = query.arg("arguments", arguments);
-        }
         let query = query.select("id");
         let ids: Vec<Id> = query.execute(self.graphql_client.clone()).await?;
         Ok(ids
@@ -8889,11 +8867,6 @@ impl Expertise {
             graphql_client: self.graphql_client.clone(),
         }
     }
-    /// Bound arguments besides the conversation, as canonical JSON. Object IDs use portable recipes when available; session-only values retain their handles.
-    pub async fn arguments(&self) -> Result<Json, DaggerError> {
-        let query = self.selection.select("arguments");
-        query.execute(self.graphql_client.clone()).await
-    }
     /// The agent function's name.
     pub async fn name(&self) -> Result<String, DaggerError> {
         let query = self.selection.select("name");
@@ -12921,6 +12894,9 @@ pub struct LlmSpawnOpts<'a> {
     /// The loop error to create the agent with, for state FAILED. Refused with any other state.
     #[builder(setter(into, strip_option), default)]
     pub error: Option<&'a str>,
+    /// Compose these entries after minting the agent's identity and before fixing its seed. Agent arguments receive the newly spawned agent, not the caller.
+    #[builder(setter(into, strip_option), default)]
+    pub expertise: Option<Vec<Id>>,
     /// The runtime handle to restore the instance under, as published on its loop span as dagger.io/agent.id. Omit to mint a fresh instance.
     #[builder(setter(into, strip_option), default)]
     pub handle: Option<&'a str>,
@@ -12964,7 +12940,7 @@ impl Llm {
         let query = self.selection.select("id");
         query.execute(self.graphql_client.clone()).await
     }
-    /// Expertise composed into this conversation, in order, with bound arguments. Nested composition belongs to its outer entry and is not recorded separately.
+    /// Expertise composed into this conversation, in order. Nested composition belongs to its outer entry and is not recorded separately.
     pub async fn expertise(&self) -> Result<Vec<Expertise>, DaggerError> {
         let query = self.selection.select("expertise");
         let query = query.select("id");
@@ -12981,7 +12957,7 @@ impl Llm {
             })
             .collect())
     }
-    /// Run and record expertise in list order, retaining existing contributions. An entry with the same artifact address and canonical bound arguments must not already be composed.
+    /// Run and record expertise in list order, retaining existing contributions. An entry with the same artifact address must not already be composed.
     ///
     /// # Arguments
     ///
@@ -12996,7 +12972,7 @@ impl Llm {
         }
     }
     /// Run expertise in list order, replacing contributions of matching recorded entries and preserving compatible tool state. Record and run new entries; leave unmentioned entries untouched.
-    /// Entry identity is its artifact address with dimension keys and canonical bound arguments. Contributions made transitively while an entry runs belong to that entry, including nested composition. Contributions made outside an entry are unowned and retained. Keep this LLM's workspace.
+    /// Entry identity is its artifact address with dimension keys. Contributions made transitively while an entry runs belong to that entry, including nested composition. Contributions made outside an entry are unowned and retained. Keep this LLM's workspace.
     /// A change to a tool binding's version resets its state. Removed bindings, changed identities, and incompatible state are errors.
     ///
     /// # Arguments
@@ -13672,6 +13648,9 @@ impl Llm {
     /// * `opt` - optional argument, see inner type for documentation, use <func>_opts to use
     pub async fn spawn_opts<'a>(&self, opts: LlmSpawnOpts<'a>) -> Result<Agent, DaggerError> {
         let mut query = self.selection.select("spawn");
+        if let Some(expertise) = opts.expertise {
+            query = query.arg("expertise", expertise);
+        }
         if let Some(name) = opts.name {
             query = query.arg("name", name);
         }

@@ -1144,6 +1144,17 @@ class Agent(Type):
         ]
         return await self._ctx.execute_sync(self, "notify", _args)
 
+    async def parent(self) -> "Agent | None":
+        """The agent that spawned this agent, or null for a root agent. Restored
+        agents retain their recorded parent handle.
+
+        .. caution::
+            Experimental: Agent APIs are likely to change.
+        """
+        _args: list[Arg] = []
+        _ctx = self._select("parent", _args)
+        return await _ctx.execute_object(Agent)
+
     async def pause(self, *, interrupt: bool | None = False) -> Self:
         """Stop draining the mailbox once the in-flight step completes, or
         immediately with interrupt.
@@ -2247,19 +2258,16 @@ class Artifacts(Type):
         _ctx = self._select("asChecks", _args)
         return await _ctx.execute_object_list(Check)
 
-    async def as_expertise(self, *, arguments: JSON | None = "{}") -> list["Expertise"]:
-        """Convert the selection to expertise without running it, binding these
-        arguments. Fail if a selected agent's required arguments are unbound;
-        a module load failure fails with its load error.
-
-        Parameters
-        ----------
-        arguments:
-            Field arguments besides the conversation, as a JSON object.
+    async def as_expertise(self) -> list["Expertise"]:
+        """Convert conversation-transforming functions to expertise without
+        running them. Each must return LLM! and take exactly one LLM!
+        argument, with only auto-filled or optional additional arguments. An
+        Agent! argument receives the conversation's owning agent when
+        composed. The @agent directive nominates entries for default
+        composition but is not required for explicit conversion. A module load
+        failure fails with its load error.
         """
-        _args = [
-            Arg("arguments", arguments, "{}"),
-        ]
+        _args: list[Arg] = []
         _ctx = self._select("asExpertise", _args)
         return await _ctx.execute_object_list(Expertise)
 
@@ -8379,29 +8387,7 @@ class ErrorValue(Type):
 
 @typecheck
 class Expertise(Type):
-    """An agent function with bound arguments that can modify a
-    conversation."""
-
-    async def arguments(self) -> JSON:
-        """Bound arguments besides the conversation, as canonical JSON. Object
-        IDs use portable recipes when available; session-only values retain
-        their handles.
-
-        Returns
-        -------
-        JSON
-            An arbitrary JSON-encoded value.
-
-        Raises
-        ------
-        ExecuteTimeoutError
-            If the time to execute the query exceeds the configured timeout.
-        QueryError
-            If the API returns an error.
-        """
-        _args: list[Arg] = []
-        _ctx = self._select("arguments", _args)
-        return await _ctx.execute(JSON)
+    """A function that can modify a conversation."""
 
     def artifact(self) -> Artifact:
         """The artifact this expertise runs."""
@@ -12596,8 +12582,8 @@ class LLM(Type):
 
     def compose(self, expertise: list[Expertise]) -> Self:
         """Run and record expertise in list order, retaining existing
-        contributions. An entry with the same artifact address and canonical
-        bound arguments must not already be composed.
+        contributions. An entry with the same artifact address must not
+        already be composed.
 
         Parameters
         ----------
@@ -12655,9 +12641,8 @@ class LLM(Type):
         return await _ctx.execute(int | None)
 
     async def expertise(self) -> list[Expertise]:
-        """Expertise composed into this conversation, in order, with bound
-        arguments. Nested composition belongs to its outer entry and is not
-        recorded separately.
+        """Expertise composed into this conversation, in order. Nested
+        composition belongs to its outer entry and is not recorded separately.
         """
         _args: list[Arg] = []
         _ctx = self._select("expertise", _args)
@@ -12852,11 +12837,10 @@ class LLM(Type):
         recorded entries and preserving compatible tool state. Record and run
         new entries; leave unmentioned entries untouched.
 
-        Entry identity is its artifact address with dimension keys and
-        canonical bound arguments. Contributions made transitively while an
-        entry runs belong to that entry, including nested composition.
-        Contributions made outside an entry are unowned and retained. Keep
-        this LLM's workspace.
+        Entry identity is its artifact address with dimension keys.
+        Contributions made transitively while an entry runs belong to that
+        entry, including nested composition. Contributions made outside an
+        entry are unowned and retained. Keep this LLM's workspace.
 
         A change to a tool binding's version resets its state. Removed
         bindings, changed identities, and incompatible state are errors.
@@ -12884,6 +12868,7 @@ class LLM(Type):
     async def spawn(
         self,
         *,
+        expertise: list[Expertise] | None = None,
         name: str | None = None,
         handle: str | None = None,
         state: AgentState | None = AgentState.IDLE,
@@ -12916,6 +12901,10 @@ class LLM(Type):
 
         Parameters
         ----------
+        expertise:
+            Compose these entries after minting the agent's identity and
+            before fixing its seed. Agent arguments receive the newly spawned
+            agent, not the caller.
         name:
             Display label for the agent — telemetry and error messages;
             carries no identity. Defaults to a short name derived from the
@@ -12950,6 +12939,7 @@ class LLM(Type):
             If the API returns an error.
         """
         _args = [
+            Arg("expertise", [] if expertise is None else expertise, []),
             Arg("name", name, None),
             Arg("handle", handle, None),
             Arg("state", state, AgentState.IDLE),

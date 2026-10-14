@@ -635,6 +635,25 @@ func (r *Agent) Notify(ctx context.Context, subscriber *Agent, opts ...AgentNoti
 	}, nil
 }
 
+// The agent that spawned this agent, or null for a root agent. Restored agents retain their recorded parent handle.
+//
+// Experimental: Agent APIs are likely to change.
+func (r *Agent) Parent(ctx context.Context) (*Agent, error) {
+	q := r.query.Select("parent")
+
+	q = q.Select("id")
+	var objectID *ID
+	if err := q.Bind(&objectID).Execute(ctx); err != nil {
+		return nil, err
+	}
+	if objectID == nil {
+		return nil, nil
+	}
+	return &Agent{
+		query: selectNode(q.Root(), *objectID, "Agent"),
+	}, nil
+}
+
 // AgentPauseOpts contains options for Agent.Pause
 type AgentPauseOpts struct {
 	// Preempt the in-flight step instead of letting it finish. All completed steps are kept and the interrupted turn stays open: messages it consumed remain pending, while unconsumed mailbox messages are discarded. Resume continues the turn from the last committed step. On an idle, never-started, or failed agent there is nothing to preempt, so this is a plain pause.
@@ -1910,23 +1929,9 @@ func (r *Artifacts) AsChecks(ctx context.Context) ([]Check, error) {
 	return convert(response), nil
 }
 
-// ArtifactsAsExpertiseOpts contains options for Artifacts.AsExpertise
-type ArtifactsAsExpertiseOpts struct {
-	// Field arguments besides the conversation, as a JSON object.
-	//
-	// Default: "{}"
-	Arguments JSON
-}
-
-// Convert the selection to expertise without running it, binding these arguments. Fail if a selected agent's required arguments are unbound; a module load failure fails with its load error.
-func (r *Artifacts) AsExpertise(ctx context.Context, opts ...ArtifactsAsExpertiseOpts) ([]Expertise, error) {
+// Convert conversation-transforming functions to expertise without running them. Each must return LLM! and take exactly one LLM! argument, with only auto-filled or optional additional arguments. An Agent! argument receives the conversation's owning agent when composed. The @agent directive nominates entries for default composition but is not required for explicit conversion. A module load failure fails with its load error.
+func (r *Artifacts) AsExpertise(ctx context.Context) ([]Expertise, error) {
 	q := r.query.Select("asExpertise")
-	for i := len(opts) - 1; i >= 0; i-- {
-		// `arguments` optional argument
-		if !querybuilder.IsZeroValue(opts[i].Arguments) {
-			q = q.Arg("arguments", opts[i].Arguments)
-		}
-	}
 
 	q = q.Select("id")
 
@@ -9054,7 +9059,7 @@ func (r *ErrorValue) AsNode() Node {
 	}
 }
 
-// An agent function with bound arguments that can modify a conversation.
+// A function that can modify a conversation.
 type Expertise struct {
 	query *querybuilder.Selection
 	// refetchID is set when this object is built through a field marked
@@ -9062,7 +9067,6 @@ type Expertise struct {
 	// field again.
 	refetchID bool
 
-	arguments   *JSON
 	description *string
 	id          *ID
 	name        *string
@@ -9075,19 +9079,6 @@ func (r *Expertise) WithGraphQLQuery(q *querybuilder.Selection) *Expertise {
 		// must be reevaluated.
 		refetchID: true,
 	}
-}
-
-// Bound arguments besides the conversation, as canonical JSON. Object IDs use portable recipes when available; session-only values retain their handles.
-func (r *Expertise) Arguments(ctx context.Context) (JSON, error) {
-	if r.arguments != nil {
-		return *r.arguments, nil
-	}
-	q := r.query.Select("arguments")
-
-	var response JSON
-
-	q = q.Bind(&response)
-	return response, q.Execute(ctx)
 }
 
 // The artifact this expertise runs.
@@ -14088,7 +14079,7 @@ func (r *LLM) Artifacts(opts ...LLMArtifactsOpts) *Artifacts {
 	}
 }
 
-// Run and record expertise in list order, retaining existing contributions. An entry with the same artifact address and canonical bound arguments must not already be composed.
+// Run and record expertise in list order, retaining existing contributions. An entry with the same artifact address must not already be composed.
 func (r *LLM) Compose(expertise []*Expertise) *LLM {
 	q := r.query.Select("compose")
 	q = q.Arg("expertise", expertise)
@@ -14125,7 +14116,7 @@ func (r *LLM) ContextWindow(ctx context.Context) (int, error) {
 	return response, q.Execute(ctx)
 }
 
-// Expertise composed into this conversation, in order, with bound arguments. Nested composition belongs to its outer entry and is not recorded separately.
+// Expertise composed into this conversation, in order. Nested composition belongs to its outer entry and is not recorded separately.
 func (r *LLM) Expertise(ctx context.Context) ([]Expertise, error) {
 	q := r.query.Select("expertise")
 
@@ -14343,7 +14334,7 @@ func (r *LLM) ReasoningEffort(ctx context.Context) (string, error) {
 
 // Run expertise in list order, replacing contributions of matching recorded entries and preserving compatible tool state. Record and run new entries; leave unmentioned entries untouched.
 //
-// Entry identity is its artifact address with dimension keys and canonical bound arguments. Contributions made transitively while an entry runs belong to that entry, including nested composition. Contributions made outside an entry are unowned and retained. Keep this LLM's workspace.
+// Entry identity is its artifact address with dimension keys. Contributions made transitively while an entry runs belong to that entry, including nested composition. Contributions made outside an entry are unowned and retained. Keep this LLM's workspace.
 //
 // A change to a tool binding's version resets its state. Removed bindings, changed identities, and incompatible state are errors.
 func (r *LLM) Recompose(expertise []*Expertise) *LLM {
@@ -14391,6 +14382,8 @@ func (r *LLM) Skills(ctx context.Context) ([]LLMSkill, error) {
 
 // LLMSpawnOpts contains options for LLM.Spawn
 type LLMSpawnOpts struct {
+	// Compose these entries after minting the agent's identity and before fixing its seed. Agent arguments receive the newly spawned agent, not the caller.
+	Expertise []*Expertise
 	// Display label for the agent — telemetry and error messages; carries no identity. Defaults to a short name derived from the conversation.
 	Name string
 	// The runtime handle to restore the instance under, as published on its loop span as dagger.io/agent.id. Omit to mint a fresh instance.
@@ -14419,6 +14412,10 @@ type LLMSpawnOpts struct {
 func (r *LLM) Spawn(ctx context.Context, opts ...LLMSpawnOpts) (*Agent, error) {
 	q := r.query.Select("spawn")
 	for i := len(opts) - 1; i >= 0; i-- {
+		// `expertise` optional argument
+		if !querybuilder.IsZeroValue(opts[i].Expertise) {
+			q = q.Arg("expertise", opts[i].Expertise)
+		}
 		// `name` optional argument
 		if !querybuilder.IsZeroValue(opts[i].Name) {
 			q = q.Arg("name", opts[i].Name)

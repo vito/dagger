@@ -23,14 +23,11 @@ class Artifacts extends Client\AbstractObject implements Client\IdAble, Node
     }
 
     /**
-     * Convert the selection to expertise without running it, binding these arguments. Fail if a selected agent's required arguments are unbound; a module load failure fails with its load error.
+     * Convert conversation-transforming functions to expertise without running them. Each must return LLM! and take exactly one LLM! argument, with only auto-filled or optional additional arguments. An Agent! argument receives the conversation's owning agent when composed. The @agent directive nominates entries for default composition but is not required for explicit conversion. A module load failure fails with its load error.
      */
-    public function asExpertise(?Json $arguments = null): array
+    public function asExpertise(): array
     {
         $leafQueryBuilder = new \Dagger\Client\QueryBuilder('asExpertise');
-        if (null !== $arguments) {
-        $leafQueryBuilder->setArgument('arguments', $arguments);
-        }
         return (array)$this->queryLeaf($leafQueryBuilder, 'asExpertise');
     }
 

@@ -23,7 +23,7 @@ class LLM extends Client\AbstractObject implements Client\IdAble, Node, Syncer
     }
 
     /**
-     * Expertise composed into this conversation, in order, with bound arguments. Nested composition belongs to its outer entry and is not recorded separately.
+     * Expertise composed into this conversation, in order. Nested composition belongs to its outer entry and is not recorded separately.
      */
     public function expertise(): array
     {
@@ -32,7 +32,7 @@ class LLM extends Client\AbstractObject implements Client\IdAble, Node, Syncer
     }
 
     /**
-     * Run and record expertise in list order, retaining existing contributions. An entry with the same artifact address and canonical bound arguments must not already be composed.
+     * Run and record expertise in list order, retaining existing contributions. An entry with the same artifact address must not already be composed.
      */
     public function compose(array $expertise): LLM
     {
@@ -44,7 +44,7 @@ class LLM extends Client\AbstractObject implements Client\IdAble, Node, Syncer
     /**
      * Run expertise in list order, replacing contributions of matching recorded entries and preserving compatible tool state. Record and run new entries; leave unmentioned entries untouched.
      *
-     * Entry identity is its artifact address with dimension keys and canonical bound arguments. Contributions made transitively while an entry runs belong to that entry, including nested composition. Contributions made outside an entry are unowned and retained. Keep this LLM's workspace.
+     * Entry identity is its artifact address with dimension keys. Contributions made transitively while an entry runs belong to that entry, including nested composition. Contributions made outside an entry are unowned and retained. Keep this LLM's workspace.
      *
      * A change to a tool binding's version resets its state. Removed bindings, changed identities, and incompatible state are errors.
      */
@@ -412,6 +412,7 @@ class LLM extends Client\AbstractObject implements Client\IdAble, Node, Syncer
      * With a handle, spawn restores an instance instead of minting one: this conversation becomes the committed history of the agent that handle names, so prompting it continues where it left off — rebuild a conversation's ID from a trace, load it, and spawn it under the handle it belonged to. Fails if that instance already has a runtime entry in this session: a restore must happen before anything else addresses the instance, since by then it may have stepped.
      */
     public function spawn(
+        ?array $expertise = null,
         ?string $name = null,
         ?string $handle = null,
         ?AgentState $state = null,
@@ -419,6 +420,9 @@ class LLM extends Client\AbstractObject implements Client\IdAble, Node, Syncer
         ?string $error = '',
     ): Agent {
         $leafQueryBuilder = new \Dagger\Client\QueryBuilder('spawn');
+        if (null !== $expertise) {
+        $leafQueryBuilder->setArgument('expertise', $expertise);
+        }
         if (null !== $name) {
         $leafQueryBuilder->setArgument('name', $name);
         }

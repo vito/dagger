@@ -189,6 +189,11 @@ type Agent implements Node {
   """A unique identifier for this Agent."""
   id: ID!
 
+  """
+  The agent that spawned this agent, or null for a root agent. Restored agents retain their recorded parent handle.
+  """
+  parent: Agent @experimental(reason: "Agent APIs are likely to change.")
+
   """Display label for the agent; carries no identity."""
   name: String! @experimental(reason: "Agent APIs are likely to change.")
 
@@ -668,14 +673,14 @@ type Artifacts implements Node {
   id: ID!
 
   """
-  Convert the selection to expertise without running it, binding these
-  arguments. Fail if a selected agent's required arguments are unbound; a module
-  load failure fails with its load error.
+  Convert conversation-transforming functions to expertise without running them.
+  Each must return LLM! and take exactly one LLM! argument, with only
+  auto-filled or optional additional arguments. An Agent! argument receives the
+  conversation's owning agent when composed. The @agent directive nominates
+  entries for default composition but is not required for explicit conversion. A
+  module load failure fails with its load error.
   """
-  asExpertise(
-    """Field arguments besides the conversation, as a JSON object."""
-    arguments: JSON = "{}"
-  ): [Expertise!]!
+  asExpertise: [Expertise!]!
 
   """
   Convert the selection to Generators without running them. Fail if any artifact
@@ -3507,19 +3512,13 @@ enum ExistsType {
   SYMLINK_TYPE
 }
 
-"""An agent function with bound arguments that can modify a conversation."""
+"""A function that can modify a conversation."""
 type Expertise implements Node {
   """A unique identifier for this Expertise."""
   id: ID!
 
   """The artifact this expertise runs."""
   artifact: Artifact!
-
-  """
-  Bound arguments besides the conversation, as canonical JSON. Object IDs use
-  portable recipes when available; session-only values retain their handles.
-  """
-  arguments: JSON!
 
   """The agent function's name."""
   name: String!
@@ -4894,15 +4893,14 @@ type LLM implements Node & Syncer {
   id: ID!
 
   """
-  Expertise composed into this conversation, in order, with bound arguments.
-  Nested composition belongs to its outer entry and is not recorded separately.
+  Expertise composed into this conversation, in order. Nested composition
+  belongs to its outer entry and is not recorded separately.
   """
   expertise: [Expertise!]!
 
   """
   Run and record expertise in list order, retaining existing contributions. An
-  entry with the same artifact address and canonical bound arguments must not
-  already be composed.
+  entry with the same artifact address must not already be composed.
   """
   compose(
     """The expertise to run. Each reference retains its source workspace."""
@@ -4914,10 +4912,10 @@ type LLM implements Node & Syncer {
   entries and preserving compatible tool state. Record and run new entries;
   leave unmentioned entries untouched.
 
-  Entry identity is its artifact address with dimension keys and canonical bound
-  arguments. Contributions made transitively while an entry runs belong to that
-  entry, including nested composition. Contributions made outside an entry are
-  unowned and retained. Keep this LLM's workspace.
+  Entry identity is its artifact address with dimension keys. Contributions made
+  transitively while an entry runs belong to that entry, including nested
+  composition. Contributions made outside an entry are unowned and retained.
+  Keep this LLM's workspace.
 
   A change to a tool binding's version resets its state. Removed bindings,
   changed identities, and incompatible state are errors.
@@ -5239,6 +5237,12 @@ type LLM implements Node & Syncer {
   stepped.
   """
   spawn(
+    """
+    Compose these entries after minting the agent's identity and before fixing
+    its seed. Agent arguments receive the newly spawned agent, not the caller.
+    """
+    expertise: [ID!] = [] @expectedType(name: "Expertise")
+
     """
     Display label for the agent — telemetry and error messages; carries no
     identity. Defaults to a short name derived from the conversation.

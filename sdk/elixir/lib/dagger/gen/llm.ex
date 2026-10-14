@@ -65,7 +65,7 @@ defmodule Dagger.LLM do
   end
 
   @doc """
-  Run and record expertise in list order, retaining existing contributions. An entry with the same artifact address and canonical bound arguments must not already be composed.
+  Run and record expertise in list order, retaining existing contributions. An entry with the same artifact address must not already be composed.
   """
   @spec compose(t(), [String.t()]) :: Dagger.LLM.t()
   def compose(%__MODULE__{} = llm, expertise) do
@@ -101,7 +101,7 @@ defmodule Dagger.LLM do
   end
 
   @doc """
-  Expertise composed into this conversation, in order, with bound arguments. Nested composition belongs to its outer entry and is not recorded separately.
+  Expertise composed into this conversation, in order. Nested composition belongs to its outer entry and is not recorded separately.
   """
   @spec expertise(t()) :: {:ok, [Dagger.Expertise.t()]} | {:error, term()}
   def expertise(%__MODULE__{} = llm) do
@@ -247,7 +247,7 @@ defmodule Dagger.LLM do
   @doc """
   Run expertise in list order, replacing contributions of matching recorded entries and preserving compatible tool state. Record and run new entries; leave unmentioned entries untouched.
 
-  Entry identity is its artifact address with dimension keys and canonical bound arguments. Contributions made transitively while an entry runs belong to that entry, including nested composition. Contributions made outside an entry are unowned and retained. Keep this LLM's workspace.
+  Entry identity is its artifact address with dimension keys. Contributions made transitively while an entry runs belong to that entry, including nested composition. Contributions made outside an entry are unowned and retained. Keep this LLM's workspace.
 
   A change to a tool binding's version resets its state. Removed bindings, changed identities, and incompatible state are errors.
   """
@@ -299,6 +299,7 @@ defmodule Dagger.LLM do
   > "Agent APIs are likely to change."
   """
   @spec spawn(t(), [
+          {:expertise, [Dagger.Expertise.t()]},
           {:name, String.t() | nil},
           {:handle, String.t() | nil},
           {:state, Dagger.AgentState.t() | nil},
@@ -309,6 +310,13 @@ defmodule Dagger.LLM do
     query_builder =
       llm.query_builder
       |> QB.select("spawn")
+      |> QB.maybe_put_arg(
+        "expertise",
+        if(optional_args[:expertise],
+          do: Enum.map(optional_args[:expertise], &Dagger.ID.id!/1),
+          else: nil
+        )
+      )
       |> QB.maybe_put_arg("name", optional_args[:name])
       |> QB.maybe_put_arg("handle", optional_args[:handle])
       |> QB.maybe_put_arg("state", optional_args[:state])

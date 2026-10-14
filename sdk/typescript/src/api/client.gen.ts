@@ -347,13 +347,6 @@ export function ArtifactDimensionKindNameToValue(
       return name as ArtifactDimensionKind
   }
 }
-export type ArtifactsAsExpertiseOpts = {
-  /**
-   * Field arguments besides the conversation, as a JSON object.
-   */
-  arguments?: JSON
-}
-
 export type ArtifactsFilterDirectivesOpts = {
   /**
    * Remove the matching artifacts instead.
@@ -2874,6 +2867,11 @@ export type LLMLoopOpts = {
 
 export type LLMSpawnOpts = {
   /**
+   * Compose these entries after minting the agent's identity and before fixing its seed. Agent arguments receive the newly spawned agent, not the caller.
+   */
+  expertise?: Expertise[]
+
+  /**
    * Display label for the agent — telemetry and error messages; carries no identity. Defaults to a short name derived from the conversation.
    */
   name?: string
@@ -4964,6 +4962,21 @@ export class Agent extends BaseClient {
   }
 
   /**
+   * The agent that spawned this agent, or null for a root agent. Restored agents retain their recorded parent handle.
+   * @experimental
+   */
+  parent = async (): Promise<Agent | null> => {
+    const ctx = this._ctx.select("parent").select("id")
+
+    const response: Awaited<string | null> = await ctx.execute()
+
+    if (response === null) {
+      return null
+    }
+    return new Agent(ctx.copy().selectNode(response, "Agent"))
+  }
+
+  /**
    * Stop draining the mailbox once the in-flight step completes, or immediately with interrupt.
    *
    * Pause takes priority over pending work: a mid-turn pause suspends the turn, which resume continues. Messages sent while paused enqueue with QUEUED delivery until a resume.
@@ -5888,17 +5901,14 @@ export class Artifacts extends BaseClient {
   }
 
   /**
-   * Convert the selection to expertise without running it, binding these arguments. Fail if a selected agent's required arguments are unbound; a module load failure fails with its load error.
-   * @param opts.arguments Field arguments besides the conversation, as a JSON object.
+   * Convert conversation-transforming functions to expertise without running them. Each must return LLM! and take exactly one LLM! argument, with only auto-filled or optional additional arguments. An Agent! argument receives the conversation's owning agent when composed. The @agent directive nominates entries for default composition but is not required for explicit conversion. A module load failure fails with its load error.
    */
-  asExpertise = async (
-    opts?: ArtifactsAsExpertiseOpts,
-  ): Promise<Expertise[]> => {
+  asExpertise = async (): Promise<Expertise[]> => {
     type asExpertise = {
       id: ID
     }
 
-    const ctx = this._ctx.select("asExpertise", { ...opts }).select("id")
+    const ctx = this._ctx.select("asExpertise").select("id")
 
     const response: Awaited<asExpertise[]> = await ctx.execute()
 
@@ -10339,28 +10349,20 @@ export class ErrorValue extends BaseClient {
 }
 
 /**
- * An agent function with bound arguments that can modify a conversation.
+ * A function that can modify a conversation.
  */
 export class Expertise extends BaseClient {
   private readonly _id?: ID = undefined
-  private readonly _arguments?: JSON = undefined
   private readonly _description?: string = undefined
   private readonly _name?: string = undefined
 
   /**
    * Constructor is used for internal usage only, do not create object from it.
    */
-  constructor(
-    ctx?: Context,
-    _id?: ID,
-    _arguments?: JSON,
-    _description?: string,
-    _name?: string,
-  ) {
+  constructor(ctx?: Context, _id?: ID, _description?: string, _name?: string) {
     super(ctx)
 
     this._id = _id
-    this._arguments = _arguments
     this._description = _description
     this._name = _name
   }
@@ -10376,21 +10378,6 @@ export class Expertise extends BaseClient {
     const ctx = this._ctx.select("id")
 
     const response: Awaited<ID> = await ctx.execute()
-
-    return response
-  }
-
-  /**
-   * Bound arguments besides the conversation, as canonical JSON. Object IDs use portable recipes when available; session-only values retain their handles.
-   */
-  arguments_ = async (): Promise<JSON> => {
-    if (this._arguments) {
-      return this._arguments
-    }
-
-    const ctx = this._ctx.select("arguments")
-
-    const response: Awaited<JSON> = await ctx.execute()
 
     return response
   }
@@ -13846,7 +13833,7 @@ export class LLM extends BaseClient {
   }
 
   /**
-   * Run and record expertise in list order, retaining existing contributions. An entry with the same artifact address and canonical bound arguments must not already be composed.
+   * Run and record expertise in list order, retaining existing contributions. An entry with the same artifact address must not already be composed.
    * @param expertise The expertise to run. Each reference retains its source workspace.
    */
   compose = (expertise: Expertise[]): LLM => {
@@ -13885,7 +13872,7 @@ export class LLM extends BaseClient {
   }
 
   /**
-   * Expertise composed into this conversation, in order, with bound arguments. Nested composition belongs to its outer entry and is not recorded separately.
+   * Expertise composed into this conversation, in order. Nested composition belongs to its outer entry and is not recorded separately.
    */
   expertise = async (): Promise<Expertise[]> => {
     type expertise = {
@@ -14015,7 +14002,7 @@ export class LLM extends BaseClient {
   /**
    * Run expertise in list order, replacing contributions of matching recorded entries and preserving compatible tool state. Record and run new entries; leave unmentioned entries untouched.
    *
-   * Entry identity is its artifact address with dimension keys and canonical bound arguments. Contributions made transitively while an entry runs belong to that entry, including nested composition. Contributions made outside an entry are unowned and retained. Keep this LLM's workspace.
+   * Entry identity is its artifact address with dimension keys. Contributions made transitively while an entry runs belong to that entry, including nested composition. Contributions made outside an entry are unowned and retained. Keep this LLM's workspace.
    *
    * A change to a tool binding's version resets its state. Removed bindings, changed identities, and incompatible state are errors.
    * @param expertise The expertise to run. Each reference retains its source workspace.
@@ -14050,6 +14037,7 @@ export class LLM extends BaseClient {
    * The loop is not started: the agent spends nothing until it is prompted or resumed, and any input pending on the conversation is stepped then.
    *
    * With a handle, spawn restores an instance instead of minting one: this conversation becomes the committed history of the agent that handle names, so prompting it continues where it left off — rebuild a conversation's ID from a trace, load it, and spawn it under the handle it belonged to. Fails if that instance already has a runtime entry in this session: a restore must happen before anything else addresses the instance, since by then it may have stepped.
+   * @param opts.expertise Compose these entries after minting the agent's identity and before fixing its seed. Agent arguments receive the newly spawned agent, not the caller.
    * @param opts.name Display label for the agent — telemetry and error messages; carries no identity. Defaults to a short name derived from the conversation.
    * @param opts.handle The runtime handle to restore the instance under, as published on its loop span as dagger.io/agent.id. Omit to mint a fresh instance.
    * @param opts.state The lifecycle state to create the agent in, as facts on the entry: IDLE is ready to be prompted, PAUSED parks it, FAILED holds an error a resume retries past, STOPPED preserves a dormant snapshot that send or resume can relaunch.
