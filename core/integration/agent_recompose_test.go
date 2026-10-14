@@ -1216,7 +1216,17 @@ func (LLMSuite) TestRecomposeWorkerIdentity(ctx context.Context, t *testctx.T) {
 	fixture, err := installAgents(t, c, "staff")
 	require.NoError(t, err)
 	workerScript := recomposeRecordingTurn(core.NewQuery(c).LLM(), "inspect worker", "parentName")
-	workerScript = recomposeRecordingTurn(workerScript, "refresh worker", "reload", "parentName")
+	// Recompose removes the original leading prompt and appends its replacement
+	// during the reload tool call. Record that mid-conversation system message.
+	reloadCall := recomposeTool("refresh_reload", "reload")
+	parentCall := recomposeTool("refresh_parent", "parentName")
+	workerScript = workerScript.WithPrompt("refresh worker").
+		WithResponse([]core.LLMContentBlockInput{reloadCall}).
+		WithSystemPrompt("Updated worker role: helper").
+		WithToolResult(reloadCall.CallID, "", false).
+		WithResponse([]core.LLMContentBlockInput{parentCall}).
+		WithToolResult(parentCall.CallID, "", false).
+		WithResponse([]core.LLMContentBlockInput{{Kind: core.LLMContentBlockKindText, Text: "refresh worker done"}})
 	workerModel := cannedRecordingModel(ctx, t, c, workerScript)
 	source, err := fixture.File("../staff/main.dang").Contents(ctx)
 	require.NoError(t, err)
@@ -1304,7 +1314,7 @@ func (LLMSuite) TestComposeTransformURIIdentity(ctx context.Context, t *testctx.
 type Swapper {
   first(base: LLM!): LLM! { base.withSystemPrompt("first original") }
   second(base: LLM!): LLM! { base.withSystemPrompt("second original") }
-  notATransform: Directory! { directory }
+  invalid: Directory! { directory }
 }
 `
 	ws := recomposeFixture(c, source).AsWorkspace()
@@ -1323,7 +1333,7 @@ type Swapper {
 	require.Len(t, ids, 1)
 	_, err = applyExpertiseIDs(ctx, c, core.NewQuery(c).LLM().WithWorkspace(ws), "compose", []core.ID{ids[0], ids[0]})
 	require.Error(t, err, "duplicates in a single compose batch must fail")
-	_, err = uriExpertiseIDs(ctx, c, ws, "swapper/not-a-transform")
+	_, err = uriExpertiseIDs(ctx, c, ws, "swapper/invalid")
 	require.Error(t, err, "asExpertise must reject non-transform artifacts")
 	llm, err = applyURIExpertise(ctx, c, ws, llm, "compose", "swapper/second")
 	require.NoError(t, err)
@@ -1349,13 +1359,62 @@ type Swapper {
 	})
 }
 
+func (LLMSuite) TestComposeTransformDimensionIdentity(ctx context.Context, t *testctx.T) {
+	c := connect(ctx, t)
+	const source = `
+type Swapper {
+  members: Members! { Members() }
+}
+type Members @collection {
+  names: [String!]! @keys
+  new() {
+    self.names = ["one", "two"]
+    self
+  }
+  member(name: String!): Member! @get { Member(name) }
+}
+type Member {
+  let name: String!
+  new(name: String!) {
+    self.name = name
+    self
+  }
+  transform(base: LLM!): LLM! { base.withSystemPrompt("original member: " + name) }
+}
+`
+	ws := recomposeFixture(c, source).AsWorkspace()
+	artifacts, err := ws.Artifacts().FilterTypes([]string{"LLM"}).Items(ctx)
+	require.NoError(t, err)
+	require.Len(t, artifacts, 2)
+	firstURI, err := artifacts[0].URI(ctx)
+	require.NoError(t, err)
+	secondURI, err := artifacts[1].URI(ctx)
+	require.NoError(t, err)
+	llm, err := applyURIExpertise(ctx, c, ws, core.NewQuery(c).LLM(), "compose", firstURI)
+	require.NoError(t, err)
+	llm, err = applyURIExpertise(ctx, c, ws, llm, "compose", secondURI)
+	require.NoError(t, err)
+	entries := recordedExpertise(ctx, t, c, llm)
+	require.Len(t, entries, 2)
+	require.Contains(t, entries[0].Artifact.URI, "member=one")
+	require.Contains(t, entries[1].Artifact.URI, "member=two")
+	require.ElementsMatch(t, []string{"original member: one", "original member: two"}, recomposeSystemPrompts(ctx, t, c, llm))
+	ws = ws.WithNewFile(recomposeModulePath, strings.ReplaceAll(source, "original member", "updated member"))
+	llm, err = applyURIExpertise(ctx, c, ws, llm, "recompose", entries[0].Artifact.URI)
+	require.NoError(t, err)
+	require.Equal(t, entries, recordedExpertise(ctx, t, c, llm))
+	require.ElementsMatch(t, []string{"updated member: one", "original member: two"}, recomposeSystemPrompts(ctx, t, c, llm))
+	llm = recomposeRecordedExpertise(ctx, t, c, ws, llm)
+	require.ElementsMatch(t, []string{"updated member: one", "updated member: two"}, recomposeSystemPrompts(ctx, t, c, llm))
+}
+
 func (AgentRuntimeSuite) TestParentLineageAndRestore(ctx context.Context, t *testctx.T) {
 	c, sink := connectWithTrace(ctx, t)
 	root := spawnAgent(ctx, t, c, spawnOpts{model: emptyReplayModel, name: "root"})
 	rootInfo := root.mustRun(ctx, t, "handle parent { handle }")
 	require.Nil(t, rootInfo.Get("parent").Value())
 	rootHandle := rootInfo.Get("handle").String()
-	child := spawnAgent(ctx, t, c, spawnOpts{model: emptyReplayModel, name: "child", parentHandle: rootHandle})
+	child := spawnAgent(ctx, t, c, spawnOpts{model: emptyReplayModel, name: "child", handle: rootHandle + "-child", parentHandle: rootHandle})
 	childInfo := child.mustRun(ctx, t, "handle parent { name handle parent { handle } }")
 	require.Equal(t, rootHandle, childInfo.Get("parent.handle").String())
 	require.Equal(t, "root", childInfo.Get("parent.name").String())
@@ -1387,6 +1446,10 @@ type Swapper {
   broken(base: LLM!, me: Agent!): LLM! { raise "composition deliberately failed" }
   ready(base: LLM!, me: Agent!): LLM! { base.withSystemPrompt("ready: " + me.name) }
   fresh(base: LLM!): LLM! { llm(model: "recording/W10=") }
+  family(base: LLM!): LLM! {
+    let child = llm(model: "recording/W10=").withWorkspace(base.workspace).spawn(name: "nested-child", expertise: base.workspace.artifacts.filterUri("swapper/ready").asExpertise.{{ id }}.map { node(id: _.id).{{ ... on Expertise! }} })
+    base.withSystemPrompt("nested child: " + child.handle)
+  }
 }
 `
 	ws := recomposeFixture(c, source).AsWorkspace()
@@ -1405,7 +1468,8 @@ type Swapper {
 	require.NoError(t, err)
 	retry := spawnWithExpertise(ctx, t, c, base, "retry", ready)
 	require.Equal(t, "retry", retry.mustRun(ctx, t, "name").Get("name").String())
-	require.Contains(t, retry.mustRun(ctx, t, "snapshot { transcript }").Get("snapshot.transcript").String(), "ready: retry")
+	retrySnapshot := core.Ref[*core.LLM](core.NewQuery(c), core.ID(retry.mustRun(ctx, t, "snapshot { id }").Get("snapshot.id").String()))
+	require.Contains(t, recomposeSystemPrompts(ctx, t, c, retrySnapshot), "ready: retry")
 
 	t.Run("fresh conversation retains spawn owner", func(ctx context.Context, t *testctx.T) {
 		fresh, err := uriExpertiseIDs(ctx, c, ws, "swapper/fresh")
@@ -1413,7 +1477,25 @@ type Swapper {
 		require.Len(t, fresh, 1)
 		require.Len(t, ready, 1)
 		agent := spawnWithExpertise(ctx, t, c, base, "fresh-agent", []core.ID{fresh[0], ready[0]})
-		require.Contains(t, agent.mustRun(ctx, t, "snapshot { transcript }").Get("snapshot.transcript").String(), "ready: fresh-agent")
+		snapshot := core.Ref[*core.LLM](core.NewQuery(c), core.ID(agent.mustRun(ctx, t, "snapshot { id }").Get("snapshot.id").String()))
+		require.Contains(t, recomposeSystemPrompts(ctx, t, c, snapshot), "ready: fresh-agent")
+	})
+
+	t.Run("nested spawn has its own composition record", func(ctx context.Context, t *testctx.T) {
+		family, err := uriExpertiseIDs(ctx, c, ws, "swapper/family")
+		require.NoError(t, err)
+		parent := spawnWithExpertise(ctx, t, c, base, "family", family)
+		snapshot := core.Ref[*core.LLM](core.NewQuery(c), core.ID(parent.mustRun(ctx, t, "snapshot { id }").Get("snapshot.id").String()))
+		prompts := recomposeSystemPrompts(ctx, t, c, snapshot)
+		require.Len(t, prompts, 1)
+		require.True(t, strings.HasPrefix(prompts[0], "nested child: "))
+		child := unmintedAgent(ctx, t, c, strings.TrimPrefix(prompts[0], "nested child: "), "nested-child")
+		childSnapshot := core.Ref[*core.LLM](core.NewQuery(c), core.ID(child.mustRun(ctx, t, "snapshot { id }").Get("snapshot.id").String()))
+		entries := recordedExpertise(ctx, t, c, childSnapshot)
+		require.Len(t, entries, 1)
+		require.Contains(t, entries[0].Artifact.URI, "swapper/ready")
+		require.Contains(t, recomposeSystemPrompts(ctx, t, c, childSnapshot), "ready: nested-child")
+		require.Equal(t, "family", child.mustRun(ctx, t, "parent { name }").Get("parent.name").String())
 	})
 }
 
