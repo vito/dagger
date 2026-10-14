@@ -858,7 +858,7 @@ func (s *llmSchema) spawn(ctx context.Context, parent dagql.ObjectResult[*core.L
 	if len(args.Expertise) > 0 {
 		if err := srv.Select(ctx, parent, &parent, dagql.Selector{
 			Field: "compose",
-			Args: []dagql.NamedInput{{Name: "expertise", Value: dagql.ArrayInput[dagql.ID[*core.Expertise]](args.Expertise)}},
+			Args:  []dagql.NamedInput{{Name: "expertise", Value: dagql.ArrayInput[dagql.ID[*core.Expertise]](args.Expertise)}},
 		}); err != nil {
 			return fail(err)
 		}

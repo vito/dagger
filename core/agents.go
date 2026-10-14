@@ -96,13 +96,28 @@ func (a *Expertise) Run(ctx context.Context, base dagql.ObjectResult[*LLM]) (dag
 			inputs = append(inputs, dagql.NamedInput{Name: arg.Self().Name, Value: dagql.NewID[*LLM](id)})
 		}
 		if isCoreAgentArg(arg.Self()) && !arg.Self().TypeDef.Self().Optional {
-			// The owning agent, not the caller, is supplied by spawn/recompose.
-			// Agent plumbing installs this input in the follow-up change.
-			return result, fmt.Errorf("expertise %q requires an owning agent", a.Name())
+			// The conversation owner is distinct from the caller during spawn.
+			// A handle-only reference avoids embedding the seed in its own recipe.
+			if base.Self().OwnerAgentHandle == "" {
+				return result, fmt.Errorf("expertise %q requires an owning agent for argument %q; use LLM.spawn(expertise:) or an agent's snapshot", a.Name(), arg.Self().Name)
+			}
+			owner, err := AgentReference(ctx, base.Self().OwnerAgentHandle)
+			if err != nil {
+				return result, fmt.Errorf("expertise %q owning agent: %w", a.Name(), err)
+			}
+			ownerID, err := owner.ID()
+			if err != nil {
+				return result, err
+			}
+			inputs = append(inputs, dagql.NamedInput{Name: arg.Self().Name, Value: dagql.NewID[*Agent](ownerID)})
 		}
 	}
-	err = a.Artifact.Evaluate(ctx, &result, inputs...)
-	return result, err
+	if err := a.Artifact.Evaluate(ctx, &result, inputs...); err != nil {
+		return result, err
+	}
+	// An entry may build a fresh conversation. Keep the owner before the next
+	// entry runs, not just when spawn finalizes the seed.
+	return WithLLMOwnerAgent(ctx, result, base.Self().OwnerAgentHandle)
 }
 
 func (a *Expertise) EncodePersistedObject(ctx context.Context, enc *dagql.PersistEncodeContext) (dagql.PersistedObjectEncoding, error) {
