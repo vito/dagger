@@ -367,10 +367,7 @@ func composeAgents(ctx context.Context, dag *dagger.Client, include []string, cm
 	if err != nil {
 		return "", err
 	}
-	selection, err := defaultAgentExpertise(ctx, dag, all.FilterTypes([]string{"Expertise"}))
-	if err != nil {
-		return "", err
-	}
+	selection := all.FilterTypes([]string{"Expertise"})
 	expertise, err := selection.AsExpertise(ctx)
 	if err != nil {
 		return "", err
@@ -381,53 +378,6 @@ func composeAgents(ctx context.Context, dag *dagger.Client, include []string, cm
 	}
 	id, err := core.NewQuery(dag).LLM().WithWorkspace(workspace).Compose(refs).ID(ctx)
 	return string(id), err
-}
-
-// Default composition inspects generic artifact metadata instead of attempting
-// to bind entrypoints that need caller-supplied arguments. They remain visible
-// to discovery and explicit asExpertise conversion remains strict.
-func defaultAgentExpertise(ctx context.Context, dag *dagger.Client, selection *core.Artifacts) (*core.Artifacts, error) {
-	id, err := selection.ID(ctx)
-	if err != nil {
-		return nil, err
-	}
-	var result struct {
-		Node struct {
-			Items []struct {
-				URI       string
-				Arguments []*modFunctionArg
-			}
-		}
-	}
-	err = dag.Do(ctx, &dagger.Request{
-		Query: `query($selection: ID!) { node(id: $selection) { ... on Artifacts { items {
-			uri arguments { defaultValue defaultPath typeDef { optional kind asObject { name sourceModuleName } } }
-		} } } }`,
-		Variables: map[string]any{"selection": id},
-	}, &dagger.Response{Data: &result})
-	if err != nil {
-		return nil, err
-	}
-	for _, item := range result.Node.Items {
-		if agentRequiresBindings(item.Arguments) {
-			selection = selection.WithoutURI(item.URI)
-		}
-	}
-	return selection, nil
-}
-
-func agentRequiresBindings(args []*modFunctionArg) bool {
-	for _, arg := range args {
-		if !arg.IsCallerRequired() || arg.DefaultPath != "" {
-			continue
-		}
-		typ := arg.TypeDef
-		if typ.Kind == core.TypeDefKindObjectKind && typ.AsObject != nil && typ.AsObject.Name == "LLM" && typ.AsObject.SourceModuleName == "" {
-			continue
-		}
-		return true
-	}
-	return false
 }
 
 // Attempt the effectful capture once before binding or composing tools. Capture

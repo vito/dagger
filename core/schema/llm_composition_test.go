@@ -242,7 +242,7 @@ func TestLLMComposeScopeCacheAndReplay(t *testing.T) {
 					objRes := objectResult(t, srv, "scope-object", obj)
 					rootType := objectResult(t, srv, "scope-root", (&core.TypeDef{}).WithObject(objRes))
 					mod := objectResult(t, srv, "scope-module", &core.Module{NameField: "fixture"})
-					entry := &core.Expertise{Arguments: core.JSON("{}"), Artifact: &core.Artifact{
+					entry := &core.Expertise{Artifact: &core.Artifact{
 						Path: []string{"fixture", "contribute"}, TypeName: "Expertise", Directives: []string{"agent"},
 						Node: &core.ModTreeNode{Name: "contribute", OriginalModule: mod,
 							Parent: &core.ModTreeNode{RootValue: objectResult(t, srv, "scope-root-value", root), Type: rootType}},

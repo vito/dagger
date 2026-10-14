@@ -1,7 +1,6 @@
 package core
 
 import (
-	"strings"
 	"sync"
 	"testing"
 
@@ -87,39 +86,62 @@ func TestRecomposeCannotClaimUnownedTools(t *testing.T) {
 }
 
 func TestExpertiseIdentity(t *testing.T) {
-	entry := &Expertise{Artifact: &Artifact{ModuleName: "staff", Path: []string{"staff", "worker"}}, Arguments: JSON(`{"name":"worker"}`)}
+	entry := &Expertise{Artifact: &Artifact{ModuleName: "staff", Path: []string{"staff", "worker"}}}
 	first, err := entry.Identity()
 	require.NoError(t, err)
+	require.Equal(t, "dag://staff/worker", first)
 	cloned, err := entry.Clone().Identity()
 	require.NoError(t, err)
 	require.Equal(t, first, cloned)
-	entry.Arguments = JSON(`{"name":"other"}`)
+	entry.Artifact.Path = []string{"staff", "agent"}
 	other, err := entry.Identity()
 	require.NoError(t, err)
 	require.NotEqual(t, first, other)
-	entry.Arguments = JSON(`{"name":"` + strings.Repeat("large recipe", 1000) + `"}`)
-	large, err := entry.Identity()
-	require.NoError(t, err)
-	require.Len(t, large, len(first), "owner stamps must not repeat entire object recipes")
 }
 
 func TestExpertiseConversion(t *testing.T) {
 	srv := newCoreDagqlServerForTest(t, &Query{})
+	installTypeDefTestClasses(srv)
 	installModuleObjectTestModuleClass(srv)
 	mod := newTypeDefDetachedResult(t, srv, "agent-module", &Module{NameField: "agent"})
-	artifact := &Artifact{Path: []string{"agent", "configure"}, TypeName: "Expertise", Directives: []string{"agent"},
-		Node: &ModTreeNode{Name: "configure", OriginalModule: mod}}
-	agent, err := NewExpertise(artifact)
-	require.NoError(t, err)
-	require.Equal(t, "agent", agent.OriginalModule().Name())
-	// References keep their own metadata wrappers, independent of the selection.
-	agent.Artifact.Node.Name = "changed"
-	require.Equal(t, "configure", artifact.Node.Name)
-	for _, invalid := range []*Artifact{
-		{Path: []string{"unmarked"}, TypeName: "LLM", Node: artifact.Node},
-		{Path: []string{"wrong-type"}, TypeName: "Container", Directives: []string{"agent"}, Node: artifact.Node},
+	objectType := func(name string) dagql.ObjectResult[*TypeDef] {
+		obj := newTypeDefDetachedResult(t, srv, name, &ObjectTypeDef{Name: name})
+		return newTypeDefDetachedResult(t, srv, name+"-type", (&TypeDef{}).WithObject(obj))
+	}
+	llmType, agentType, wsType := objectType("LLM"), objectType("Agent"), objectType("Workspace")
+	stringType := newTypeDefDetachedResult(t, srv, "string", &TypeDef{Kind: TypeDefKindString})
+	arg := func(name string, typ dagql.ObjectResult[*TypeDef]) dagql.ObjectResult[*FunctionArg] {
+		return newTypeDefDetachedResult(t, srv, name, &FunctionArg{Name: name, TypeDef: typ})
+	}
+	for _, tc := range []struct {
+		name  string
+		ret   dagql.ObjectResult[*TypeDef]
+		args  dagql.ObjectResultArray[*FunctionArg]
+		valid bool
+	}{
+		{"plain transform", llmType, dagql.ObjectResultArray[*FunctionArg]{arg("base", llmType)}, true},
+		{"owned transform", llmType, dagql.ObjectResultArray[*FunctionArg]{arg("base", llmType), arg("me", agentType), arg("ws", wsType)}, true},
+		{"no conversation", llmType, nil, false},
+		{"two conversations", llmType, dagql.ObjectResultArray[*FunctionArg]{arg("base", llmType), arg("other", llmType)}, false},
+		{"caller argument", llmType, dagql.ObjectResultArray[*FunctionArg]{arg("base", llmType), arg("name", stringType)}, false},
+		{"wrong return", stringType, dagql.ObjectResultArray[*FunctionArg]{arg("base", llmType)}, false},
 	} {
-		_, err := NewExpertise(invalid)
-		require.ErrorContains(t, err, "not a source of expertise")
+		t.Run(tc.name, func(t *testing.T) {
+			fn := &Function{Name: "configure", ReturnType: tc.ret, Args: tc.args}
+			fnResult := newTypeDefDetachedResult(t, srv, "configure", fn)
+			obj := newTypeDefDetachedResult(t, srv, "parent", &ObjectTypeDef{Name: "Fixture", Functions: dagql.ObjectResultArray[*Function]{fnResult}})
+			parentType := newTypeDefDetachedResult(t, srv, "parent-type", (&TypeDef{}).WithObject(obj))
+			artifact := &Artifact{Path: []string{"agent", "configure"}, TypeName: "LLM", Node: &ModTreeNode{Name: "configure", OriginalModule: mod, Parent: &ModTreeNode{Type: parentType}}}
+			entry, err := NewExpertise(artifact)
+			if !tc.valid {
+				require.ErrorContains(t, err, "not a source of expertise")
+				return
+			}
+			require.NoError(t, err)
+			require.False(t, functionRequiresCallerArgs(fn), "transforms must remain discoverable without @agent")
+			require.Equal(t, "agent", entry.OriginalModule().Name())
+			entry.Artifact.Node.Name = "changed"
+			require.Equal(t, "configure", artifact.Node.Name)
+		})
 	}
 }

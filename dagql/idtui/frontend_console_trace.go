@@ -139,7 +139,7 @@ func decodeConsoleCheckpoint(db *dagui.DB, agent consoleAgent) (consoleAgentSnap
 				return result, fmt.Errorf("unexpected llm selector within checkpoint")
 			}
 			continue
-		case "withoutDefaultSystemPrompt", "withMCPServer", "withSkills", "withTools", "withWorkspace", "withModel", "withReasoningEffort", "__withExpertise":
+		case "withoutDefaultSystemPrompt", "withMCPServer", "withSkills", "withTools", "withWorkspace", "withModel", "withReasoningEffort", "__withExpertise", "__withOwnerAgent":
 			continue // Binding/configuration, not message data. Do not follow IDs.
 		case "__withCompositionOwner":
 			continue // Legacy recorded checkpoints; no longer emitted or evaluated.

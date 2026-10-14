@@ -2,9 +2,7 @@ package core
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"slices"
 
@@ -33,67 +31,36 @@ func (llm *LLM) WarnToolNameCollisions(ctx context.Context) {
 	}
 }
 
-// Expertise retains a callable @agent field and its bound inputs without
-// evaluating it. The conversation argument is supplied by composition.
-type Expertise struct {
-	Artifact  *Artifact
-	Arguments JSON
-	Inputs    []dagql.AnyObjectResult
+// Expertise retains a conversation-transforming function without evaluating it.
+// The conversation and, when requested, its owning Agent are supplied at run time.
+type Expertise struct{ Artifact *Artifact }
+
+func (*Expertise) Type() *ast.Type         { return &ast.Type{NamedType: "Expertise", NonNull: true} }
+func (*Expertise) TypeDescription() string { return "A function that can modify a conversation." }
+
+func expertiseFunction(artifact *Artifact) *Function {
+	if artifact.Node != nil && artifact.Node.Parent != nil {
+		if obj := artifact.Node.Parent.ObjectType(); obj != nil {
+			if fn, ok := obj.FunctionByName(artifact.Node.Name); ok {
+				return fn
+			}
+		}
+	}
+	return nil
 }
 
-func (*Expertise) Type() *ast.Type { return &ast.Type{NamedType: "Expertise", NonNull: true} }
-func (*Expertise) TypeDescription() string {
-	return "An agent function with bound arguments that can modify a conversation."
-}
-
-var ErrUnboundExpertise = errors.New("unbound required agent argument")
-
-func NewExpertise(artifact *Artifact, arguments ...JSON) (*Expertise, error) {
-	if artifact.TypeName != "Expertise" || !slices.Contains(artifact.Directives, "agent") || artifact.Node == nil || artifact.Node.OriginalModule.Self() == nil {
+func NewExpertise(artifact *Artifact) (*Expertise, error) {
+	fn := expertiseFunction(artifact)
+	if fn == nil || !isExpertiseFunction(fn) || artifact.Node.OriginalModule.Self() == nil {
 		uri, err := artifact.URI(ArtifactURIOpts{DimensionKeys: true})
 		if err != nil {
 			return nil, err
 		}
-		return nil, fmt.Errorf("%s is not a source of expertise", uri)
+		return nil, fmt.Errorf("%s is not a source of expertise: expected one LLM! argument, only auto-filled or optional additional arguments, and an LLM! return", uri)
 	}
-	raw := JSON("{}")
-	if len(arguments) > 0 {
-		raw = arguments[0]
-	}
-	inputs, err := ArtifactInputs(artifact, raw)
-	if err != nil {
-		return nil, err
-	}
-	bound := map[string]bool{}
-	for _, input := range inputs {
-		bound[input.Name] = true
-	}
-	for _, arg := range artifact.Arguments() {
-		a := arg.Self()
-		if isCoreLLMArg(a) && argRequired(a) {
-			if bound[a.Name] {
-				return nil, fmt.Errorf("agent conversation argument %q is supplied by compose", a.Name)
-			}
-			continue
-		}
-		if argRequired(a) && !bound[a.Name] {
-			return nil, fmt.Errorf("agent %q: %w %q", artifact.Node.Name, ErrUnboundExpertise, a.Name)
-		}
-	}
-	var values map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &values); err != nil {
-		return nil, err
-	}
-	canonical, err := json.Marshal(values)
-	if err != nil {
-		return nil, err
-	}
-	return &Expertise{Artifact: artifact.Clone(), Arguments: canonical}, nil
+	return &Expertise{Artifact: artifact.Clone()}, nil
 }
-
-func (a *Expertise) Clone() *Expertise {
-	return &Expertise{Artifact: a.Artifact.Clone(), Arguments: slices.Clone(a.Arguments), Inputs: slices.Clone(a.Inputs)}
-}
+func (a *Expertise) Clone() *Expertise       { return &Expertise{Artifact: a.Artifact.Clone()} }
 func (a *Expertise) Name() string            { return a.Artifact.Node.CommandName() }
 func (a *Expertise) Description() string     { return a.Artifact.Node.Description }
 func (a *Expertise) Path() []string          { return a.Artifact.Node.Path() }
@@ -101,13 +68,7 @@ func (a *Expertise) OriginalModule() *Module { return a.Artifact.Node.OriginalMo
 
 // Identity intentionally excludes the implementation and workspace revision.
 func (a *Expertise) Identity() (string, error) {
-	uri, err := a.Artifact.URI(ArtifactURIOpts{DimensionKeys: true})
-	if err != nil {
-		return "", err
-	}
-	// Object recipes can be large; repeat only their digest on the nested
-	// calls whose cache keys carry this owner, not the entire bound JSON.
-	return fmt.Sprintf("%s#%x", uri, sha256.Sum256(a.Arguments)), nil
+	return a.Artifact.URI(ArtifactURIOpts{DimensionKeys: true})
 }
 
 func (a *Expertise) Run(ctx context.Context, base dagql.ObjectResult[*LLM]) (dagql.ObjectResult[*LLM], error) {
@@ -125,80 +86,37 @@ func (a *Expertise) Run(ctx context.Context, base dagql.ObjectResult[*LLM]) (dag
 	if err != nil {
 		return result, err
 	}
-	inputs, err := ArtifactInputs(a.Artifact, a.Arguments)
-	if err != nil {
-		return result, err
+	fn := expertiseFunction(a.Artifact)
+	if fn == nil || !isExpertiseFunction(fn) {
+		return result, fmt.Errorf("invalid expertise %q", a.Name())
 	}
-	for _, arg := range a.Artifact.Arguments() {
-		if isCoreLLMArg(arg.Self()) && argRequired(arg.Self()) {
+	var inputs []dagql.NamedInput
+	for _, arg := range fn.Args {
+		if isCoreLLMArg(arg.Self()) {
 			inputs = append(inputs, dagql.NamedInput{Name: arg.Self().Name, Value: dagql.NewID[*LLM](id)})
-			err = a.Artifact.Evaluate(ctx, &result, inputs...)
-			return result, err
+		}
+		if isCoreAgentArg(arg.Self()) && !arg.Self().TypeDef.Self().Optional {
+			// The owning agent, not the caller, is supplied by spawn/recompose.
+			// Agent plumbing installs this input in the follow-up change.
+			return result, fmt.Errorf("expertise %q requires an owning agent", a.Name())
 		}
 	}
-	return result, fmt.Errorf("agent %q has no LLM argument", a.Name())
-}
-
-type persistedExpertise struct {
-	persistedArtifacts
-	Arguments JSON
-	Inputs    []uint64
+	err = a.Artifact.Evaluate(ctx, &result, inputs...)
+	return result, err
 }
 
 func (a *Expertise) EncodePersistedObject(ctx context.Context, enc *dagql.PersistEncodeContext) (dagql.PersistedObjectEncoding, error) {
-	artifact, err := a.Artifact.EncodePersistedObject(ctx, enc)
-	if err != nil {
-		return dagql.PersistedObjectEncoding{}, err
-	}
-	payload := persistedExpertise{Arguments: a.Arguments}
-	if err := json.Unmarshal(artifact.JSON, &payload.persistedArtifacts); err != nil {
-		return dagql.PersistedObjectEncoding{}, err
-	}
-	for _, input := range a.Inputs {
-		id, err := encodePersistedObjectRef(enc, input, "expertise argument")
-		if err != nil {
-			return dagql.PersistedObjectEncoding{}, err
-		}
-		payload.Inputs = append(payload.Inputs, id)
-	}
-	return encodePersistedObjectPayload(payload)
+	return a.Artifact.EncodePersistedObject(ctx, enc)
 }
 func (*Expertise) DecodePersistedObject(ctx context.Context, dec *dagql.PersistDecodeContext, raw json.RawMessage) (dagql.Typed, error) {
-	var payload persistedExpertise
-	if err := json.Unmarshal(raw, &payload); err != nil {
-		return nil, err
-	}
-	if len(payload.Arguments) == 0 {
-		payload.Arguments = JSON("{}")
-	}
 	artifact, err := (*Artifact)(nil).DecodePersistedObject(ctx, dec, raw)
 	if err != nil {
 		return nil, err
 	}
-	entry := &Expertise{Artifact: artifact.(*Artifact), Arguments: payload.Arguments}
-	for _, id := range payload.Inputs {
-		input, err := dec.ResultRef(ctx, id)
-		if err != nil {
-			return nil, err
-		}
-		entry.Inputs = append(entry.Inputs, input.(dagql.AnyObjectResult))
-	}
-	return entry, nil
+	return &Expertise{Artifact: artifact.(*Artifact)}, nil
 }
 func (a *Expertise) AttachDependencyResults(ctx context.Context, owner dagql.AnyResult, attach func(dagql.AnyResult) (dagql.AnyResult, error)) ([]dagql.AnyResult, error) {
-	owned, err := a.Artifact.AttachDependencyResults(ctx, owner, attach)
-	if err != nil {
-		return nil, err
-	}
-	for i, input := range a.Inputs {
-		result, err := attach(input)
-		if err != nil {
-			return nil, err
-		}
-		a.Inputs[i] = result.(dagql.AnyObjectResult)
-		owned = append(owned, result)
-	}
-	return owned, nil
+	return a.Artifact.AttachDependencyResults(ctx, owner, attach)
 }
 
 // ComposeExpertise records only the outermost composition. Its nested entries
