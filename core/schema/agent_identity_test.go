@@ -41,7 +41,7 @@ func agentIdentitySession(t *testing.T, cache *dagql.Cache, name string) (contex
 	t.Cleanup(func() { require.NoError(t, agents.KillAll(context.Background(), fmt.Errorf("test complete"))) })
 	server := &agentIdentityTestServer{
 		compositionTestServer: &compositionTestServer{currentTypeDefsTestServer: &currentTypeDefsTestServer{mainClient: md}},
-		agents: agents,
+		agents:                agents,
 	}
 	root := core.NewRoot(server)
 	ctx = core.ContextWithQuery(ctx, root)
