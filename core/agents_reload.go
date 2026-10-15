@@ -10,26 +10,24 @@ import (
 	"github.com/dagger/dagger/engine/slog"
 )
 
-// RecomposeExpertise refreshes the whole composition record, then adds the
-// given entries. Every recorded entry is found again by its address in the
-// bound workspace, or reruns from its recorded source when that workspace does
-// not address it. A given entry already recorded under the same identity
-// replaces it in place; others are appended. All recorded entries' owned
-// contributions are replaced, preserving the state of their tool objects while
-// loading new implementations. Unowned prompts and bindings are retained.
-// Every replacement is recorded as a real selector, including the module-state
-// rebind, rather than an in-memory change to an old object's class.
+// RecomposeExpertise refreshes the whole composition record. Every recorded
+// entry is found again by its address in the bound workspace, or reruns from
+// its recorded source when that workspace does not address it. All recorded
+// entries' owned contributions are replaced, preserving the state of their
+// tool objects while loading new implementations. Unowned prompts and
+// bindings are retained. Every replacement is recorded as a real selector,
+// including the module-state rebind, rather than an in-memory change to an
+// old object's class.
 //
-// Called while an entry runs, only the given entries run, as part of that
-// entry: nested composition is reproduced by rerunning the outer entry.
-func RecomposeExpertise(ctx context.Context, base dagql.ObjectResult[*LLM], expertise dagql.ObjectResultArray[*Expertise]) (dagql.ObjectResult[*LLM], error) {
-	if _, nested := ExpertiseOwner(ctx); nested {
-		return ComposeExpertise(ctx, base, expertise)
+// Recomposition is a top-level operation: an entry composes other expertise
+// with ComposeExpertise, which makes it part of that entry.
+func RecomposeExpertise(ctx context.Context, base dagql.ObjectResult[*LLM]) (dagql.ObjectResult[*LLM], error) {
+	if owner, nested := ExpertiseOwner(ctx); nested {
+		return base, fmt.Errorf("cannot recompose while expertise %q runs; compose the entries instead", owner)
 	}
 	recorded := base.Self().Expertise
-	if len(recorded) == 0 && len(expertise) == 0 {
-		// Nothing to refresh or add. Callers decide whether that is an error.
-		return base, nil
+	if len(recorded) == 0 {
+		return base, errors.New("conversation has no recorded expertise to recompose")
 	}
 	acc := base
 	srv, err := CurrentDagqlServer(ctx)
@@ -40,32 +38,16 @@ func RecomposeExpertise(ctx context.Context, base dagql.ObjectResult[*LLM], expe
 	if err != nil {
 		return base, err
 	}
-	positions := map[string]int{}
-	for i, entry := range recorded {
+	for _, entry := range recorded {
 		key, err := entry.Self().Identity()
 		if err != nil {
 			return base, err
 		}
-		positions[key] = i
 		// Clear every recorded entry's contributions before running any.
-		if err := srv.Select(ctx, acc, &acc, dagql.Selector{
-			Field: "__withoutComposition",
-			Args:  []dagql.NamedInput{{Name: "owner", Value: dagql.String(key)}},
-		}); err != nil {
-			return base, err
-		}
-	}
-	for _, entry := range expertise {
-		key, err := entry.Self().Identity()
+		acc, err = withoutComposition(ctx, srv, acc, key)
 		if err != nil {
 			return base, err
 		}
-		if i, exists := positions[key]; exists {
-			record[i] = entry
-			continue
-		}
-		positions[key] = len(record)
-		record = append(record, entry)
 	}
 	for _, entry := range record {
 		next, err := entry.Self().Run(ctx, acc)
@@ -148,6 +130,16 @@ func refindExpertise(ctx context.Context, srv *dagql.Server, scope dagql.ObjectR
 	}
 	// The path exists but not this entry's keys, e.g. a removed collection item.
 	return entry, nil
+}
+
+// withoutComposition removes one entry's owned contributions, as a recorded
+// selector so replay reproduces the clearing.
+func withoutComposition(ctx context.Context, srv *dagql.Server, llm dagql.ObjectResult[*LLM], key string) (dagql.ObjectResult[*LLM], error) {
+	err := srv.Select(ctx, llm, &llm, dagql.Selector{
+		Field: "__withoutComposition",
+		Args:  []dagql.NamedInput{{Name: "owner", Value: dagql.String(key)}},
+	})
+	return llm, err
 }
 
 // compositionOwnerMatches compares entry identities. Empty owners are always

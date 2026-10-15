@@ -95,11 +95,16 @@ func (a *Expertise) Run(ctx context.Context, base dagql.ObjectResult[*LLM]) (dag
 		if isCoreLLMArg(arg.Self()) {
 			inputs = append(inputs, dagql.NamedInput{Name: arg.Self().Name, Value: dagql.NewID[*LLM](id)})
 		}
-		if isCoreAgentArg(arg.Self()) && !arg.Self().TypeDef.Self().Optional {
-			// The conversation owner is distinct from the caller during spawn.
-			// A handle-only reference avoids embedding the seed in its own recipe.
+		if isCoreAgentArg(arg.Self()) {
+			// Every Agent argument receives the agent composing the
+			// conversation, never the caller. A handle-only reference avoids
+			// embedding the seed in its own recipe.
+			optional := arg.Self().TypeDef.Self().Optional
 			if base.Self().OwnerAgentHandle == "" {
-				return result, fmt.Errorf("expertise %q requires an owning agent for argument %q; use LLM.spawn(expertise:) or an agent's snapshot", a.Name(), arg.Self().Name)
+				if optional {
+					continue
+				}
+				return result, fmt.Errorf("expertise %q requires an owning agent for argument %q; compose it with LLM.spawn(expertise:) or Agent.compose", a.Name(), arg.Self().Name)
 			}
 			owner, err := AgentReference(ctx, base.Self().OwnerAgentHandle)
 			if err != nil {
@@ -109,7 +114,11 @@ func (a *Expertise) Run(ctx context.Context, base dagql.ObjectResult[*LLM]) (dag
 			if err != nil {
 				return result, err
 			}
-			inputs = append(inputs, dagql.NamedInput{Name: arg.Self().Name, Value: dagql.NewID[*Agent](ownerID)})
+			var value dagql.Input = dagql.NewID[*Agent](ownerID)
+			if optional {
+				value = dagql.Opt(dagql.NewID[*Agent](ownerID))
+			}
+			inputs = append(inputs, dagql.NamedInput{Name: arg.Self().Name, Value: value})
 		}
 	}
 	if err := a.Artifact.Evaluate(ctx, &result, inputs...); err != nil {
@@ -134,46 +143,88 @@ func (a *Expertise) AttachDependencyResults(ctx context.Context, owner dagql.Any
 	return a.Artifact.AttachDependencyResults(ctx, owner, attach)
 }
 
-// ComposeExpertise records only the outermost composition. Its nested entries
-// are reproduced by rerunning that outer entry, rather than independently.
+// ComposeExpertise runs the given entries in list order. At top level they are
+// recorded: an entry already recorded under the same identity is refreshed in
+// place, replacing its contributions and preserving compatible tool state,
+// while other recorded entries are untouched; new entries are appended. While
+// an entry runs, composed entries belong to that outer entry and are not
+// recorded: rerunning the outer entry reproduces them.
 func ComposeExpertise(ctx context.Context, base dagql.ObjectResult[*LLM], expertise dagql.ObjectResultArray[*Expertise]) (dagql.ObjectResult[*LLM], error) {
-	_, nested := ExpertiseOwner(ctx)
-	record := slices.Clone(base.Self().Expertise)
-	if !nested {
-		seen := map[string]bool{}
-		for _, entry := range record {
-			key, err := entry.Self().Identity()
-			if err != nil {
-				return base, err
-			}
-			seen[key] = true
-		}
+	if _, nested := ExpertiseOwner(ctx); nested {
+		acc := base
 		for _, entry := range expertise {
-			key, err := entry.Self().Identity()
+			next, err := entry.Self().Run(ctx, acc)
 			if err != nil {
-				return base, err
+				return base, fmt.Errorf("compose agent %q: %w", entry.Self().Name(), err)
 			}
-			if seen[key] {
-				return base, fmt.Errorf("expertise %q is already composed", entry.Self().Name())
-			}
-			seen[key] = true
-			record = append(record, entry)
+			acc = next
 		}
+		acc.Self().WarnToolNameCollisions(ctx)
+		return acc, nil
+	}
+	srv, err := CurrentDagqlServer(ctx)
+	if err != nil {
+		return base, err
+	}
+	record := slices.Clone(base.Self().Expertise)
+	positions := map[string]int{}
+	for i, entry := range record {
+		key, err := entry.Self().Identity()
+		if err != nil {
+			return base, err
+		}
+		positions[key] = i
 	}
 	acc := base
+	refreshed := false
+	cleared := map[string]bool{}
+	// Each identity runs once, at its first position in the list, as the last
+	// entry given for it.
+	var order []string
+	run := map[string]dagql.ObjectResult[*Expertise]{}
 	for _, entry := range expertise {
+		key, err := entry.Self().Identity()
+		if err != nil {
+			return base, err
+		}
+		if _, seen := run[key]; !seen {
+			order = append(order, key)
+		}
+		run[key] = entry
+		i, recorded := positions[key]
+		if !recorded {
+			positions[key] = len(record)
+			record = append(record, entry)
+			continue
+		}
+		record[i] = entry
+		if i < len(base.Self().Expertise) && !cleared[key] {
+			// Clear a recorded entry's contributions before any entry runs.
+			acc, err = withoutComposition(ctx, srv, acc, key)
+			if err != nil {
+				return base, err
+			}
+			cleared[key] = true
+			refreshed = true
+		}
+	}
+	for _, key := range order {
+		entry := run[key]
 		next, err := entry.Self().Run(ctx, acc)
 		if err != nil {
 			return base, fmt.Errorf("compose agent %q: %w", entry.Self().Name(), err)
 		}
 		acc = next
 	}
-	if !nested {
-		var err error
-		acc, err = RecordExpertise(ctx, acc, record)
+	if refreshed {
+		acc, err = preserveRecomposedTools(ctx, srv, base, acc)
 		if err != nil {
 			return base, err
 		}
+	}
+	acc, err = RecordExpertise(ctx, acc, record)
+	if err != nil {
+		return base, err
 	}
 	acc.Self().WarnToolNameCollisions(ctx)
 	return acc, nil

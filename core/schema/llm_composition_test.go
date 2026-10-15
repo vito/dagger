@@ -268,8 +268,9 @@ func newCompositionScopeSession(t *testing.T, runs *int) (context.Context, *dagq
 }
 
 // The fixture entry has no workspace, so refreshing falls back to the recorded
-// entry. Integration tests cover finding entries again in a bound workspace.
-func TestLLMRecomposeRefreshesRecord(t *testing.T) {
+// entry. Integration tests cover Agent.compose/recompose, which supply the
+// owning agent, and finding entries again in a bound workspace.
+func TestComposeRecordsAndRecomposeRefreshes(t *testing.T) {
 	runs := 0
 	ctx, srv := newCompositionScopeSession(t, &runs)
 	var seed dagql.ObjectResult[*core.LLM]
@@ -287,31 +288,35 @@ func TestLLMRecomposeRefreshesRecord(t *testing.T) {
 		require.Equal(t, key, llm.Messages[0].CompositionOwner)
 	}
 
-	var unchanged dagql.ObjectResult[*core.LLM]
-	require.NoError(t, srv.Select(ctx, seed, &unchanged, dagql.Selector{Field: "recompose"}))
-	require.Empty(t, unchanged.Self().Expertise)
-	require.Empty(t, unchanged.Self().Messages)
-	require.Zero(t, runs, "an empty record with no expertise is a no-op")
+	_, err = core.RecomposeExpertise(ctx, seed)
+	require.ErrorContains(t, err, "no recorded expertise")
+	require.Zero(t, runs, "an empty record is an error, before anything runs")
 
-	// Duplicates refresh in place rather than failing.
+	// Duplicates are recorded and run once rather than failing.
 	ids := dagql.ArrayInput[dagql.ID[*core.Expertise]]{dagql.NewID[*core.Expertise](entryID), dagql.NewID[*core.Expertise](entryID)}
 	var composed dagql.ObjectResult[*core.LLM]
-	require.NoError(t, srv.Select(ctx, seed, &composed, dagql.Selector{Field: "recompose", Args: []dagql.NamedInput{{Name: "expertise", Value: ids}}}))
+	require.NoError(t, srv.Select(ctx, seed, &composed, dagql.Selector{Field: "__compose", Args: []dagql.NamedInput{{Name: "expertise", Value: ids}}}))
 	assertComposed(composed.Self())
 	require.Equal(t, 1, runs, "a repeated entry is recorded and run once")
 
-	var refreshed dagql.ObjectResult[*core.LLM]
-	require.NoError(t, srv.Select(ctx, composed, &refreshed, dagql.Selector{Field: "recompose"}))
+	refreshed, err := core.RecomposeExpertise(ctx, composed)
+	require.NoError(t, err)
 	assertComposed(refreshed.Self())
-	require.Equal(t, 2, runs, "recompose() reruns every recorded entry")
+	require.Equal(t, 2, runs, "recompose reruns every recorded entry")
 
-	require.NoError(t, srv.Select(ctx, refreshed, &refreshed, dagql.Selector{Field: "recompose", Args: []dagql.NamedInput{{Name: "expertise", Value: ids[:1]}}}))
+	require.NoError(t, srv.Select(ctx, refreshed, &refreshed, dagql.Selector{Field: "__compose", Args: []dagql.NamedInput{{Name: "expertise", Value: ids[:1]}}}))
 	assertComposed(refreshed.Self())
-	require.Equal(t, 3, runs, "a recorded entry given again refreshes once, in place")
+	require.Equal(t, 3, runs, "composing a recorded entry refreshes it once, in place")
+
+	_, err = core.RecomposeExpertise(core.WithExpertiseOwner(ctx, "outer-entry"), refreshed)
+	require.ErrorContains(t, err, "compose the entries instead", "an entry composes; it cannot recompose")
+	require.Equal(t, 3, runs)
 }
 
 func TestLLMComposeScopeCacheAndReplay(t *testing.T) {
-	for _, field := range []string{"__compose", "recompose"} {
+	// Agent.compose shares this path; it needs a live runtime, so integration
+	// tests cover it.
+	for _, field := range []string{"__compose"} {
 		for _, nestedFirst := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/nestedFirst=%t", field, nestedFirst), func(t *testing.T) {
 				runs := 0

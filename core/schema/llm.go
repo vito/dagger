@@ -78,19 +78,12 @@ func (s llmSchema) Install(srv *dagql.Server) {
 			llm.Expertise = entries
 			return llm, nil
 		}).View(AfterVersion("v1.0.0-0")),
-		// Spawn's initial composition. Hidden: agents are the only thing
-		// composition happens to, and recompose changes them afterwards. The
-		// field remains so composed seeds' recipes replay.
+		// Spawn's initial composition, after minting the agent's identity.
+		// Hidden: Agent.compose and Agent.recompose change an agent's
+		// conversations afterwards. The field remains so composed seeds'
+		// recipes replay.
 		withLLMExpertiseOwner(dagql.NodeFunc("__compose", s.compose)).
 			View(AfterVersion("v1.0.0-0")),
-		withLLMExpertiseOwner(dagql.NodeFunc("recompose", s.recompose)).
-			View(AfterVersion("v1.0.0-0")).
-			Doc("Refresh this conversation's composition, then add expertise. Find every recorded entry again by its artifact address, with dimension keys, in the bound workspace. If the bound workspace does not address an entry, rerun the recorded entry from its own source. Then add each given entry: one already recorded under the same address is refreshed in place, others are recorded after the existing entries.",
-				"Entries run in record order, replacing their contributions and preserving compatible tool state. Contributions made transitively while an entry runs belong to that entry, including nested composition. Contributions made outside an entry are unowned and retained. Keep this LLM's workspace.",
-				"A required Agent! argument receives the agent that owns the conversation. A conversation without an owning agent can be recomposed only with entries that do not require one.",
-				"A change to a tool binding's version resets its state. Removed bindings, changed identities, and incompatible state are errors.",
-				"With no recorded entries and no expertise given, return the conversation unchanged. Called while an entry runs, run only the given entries, as part of that entry.").
-			Args(dagql.Arg("expertise").Doc("Expertise to add, or refresh in place if already recorded. Each reference retains its source workspace.")),
 		dagql.Func("__withoutComposition", func(_ context.Context, llm *core.LLM, args struct {
 			Owner string
 		}) (*core.LLM, error) {
@@ -1072,13 +1065,8 @@ type composeExpertiseArgs struct {
 	Owner     dagql.Optional[dagql.String] `name:"_expertiseOwner" internal:"true"`
 }
 
-type recomposeExpertiseArgs struct {
-	Expertise []dagql.ID[*core.Expertise]  `default:"[]"`
-	Owner     dagql.Optional[dagql.String] `name:"_expertiseOwner" internal:"true"`
-}
-
-// compose is spawn's initial composition: run and record entries after any
-// existing record, rejecting entries already recorded.
+// compose is spawn's initial composition, into a conversation already owned
+// by the new agent: run and record entries after any existing record.
 func (*llmSchema) compose(ctx context.Context, base dagql.ObjectResult[*core.LLM], args composeExpertiseArgs) (dagql.ObjectResult[*core.LLM], error) {
 	ctx = core.RestoreExpertiseOwner(ctx, string(args.Owner.Value))
 	expertise, err := (expertiseArgs{Expertise: args.Expertise}).load(ctx)
@@ -1086,13 +1074,4 @@ func (*llmSchema) compose(ctx context.Context, base dagql.ObjectResult[*core.LLM
 		return base, err
 	}
 	return core.ComposeExpertise(ctx, base, expertise)
-}
-
-func (*llmSchema) recompose(ctx context.Context, base dagql.ObjectResult[*core.LLM], args recomposeExpertiseArgs) (dagql.ObjectResult[*core.LLM], error) {
-	ctx = core.RestoreExpertiseOwner(ctx, string(args.Owner.Value))
-	expertise, err := (expertiseArgs{Expertise: args.Expertise}).load(ctx)
-	if err != nil {
-		return base, err
-	}
-	return core.RecomposeExpertise(ctx, base, expertise)
 }

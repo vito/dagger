@@ -6,6 +6,7 @@ import (
 
 	"github.com/dagger/dagger/core"
 	"github.com/dagger/dagger/dagql"
+	"github.com/dagger/dagger/dagql/call"
 )
 
 // agentSchema installs the Agent type: the async evaluation-loop entity of
@@ -166,6 +167,27 @@ func (s agentSchema) Install(srv *dagql.Server) {
 				`Fails if the instance has no runtime entry in this session (only a spawned or re-hydrated instance holds a conversation to replace), if a step is in flight, or if the agent is stopped.`).
 			Args(
 				dagql.Arg("conversation").Doc(`The conversation that becomes the agent's committed history, replacing the current one.`),
+			),
+
+		withAgentComposition(dagql.NodeFunc("compose", s.compose)).
+			Experimental("Agent APIs are likely to change.").
+			Doc(`Compose expertise into a conversation as this agent. Return the new conversation; the agent itself is unchanged. Apply the result by returning it from a tool, which continues the turn on it, or with reseed.`,
+				`Run the given entries in list order and record them. An entry already recorded under the same artifact address, with dimension keys, is refreshed in place: its contributions are replaced and its compatible tool state is preserved. Other recorded entries are untouched.`,
+				`Every Agent argument of an entry, required or optional, receives this agent. The conversation must be unowned or owned by this agent, and the result is owned by it.`,
+				`While an entry runs, the entries' contributions belong to that outer entry and are not recorded separately: this is how an entry composes other expertise, e.g. me.compose(conversation: base, expertise: [...]). Rerunning the outer entry reproduces them.`).
+			Args(
+				dagql.Arg("expertise").Doc(`The expertise to run. Each reference retains its source workspace.`),
+				dagql.Arg("conversation").Doc(`The conversation to compose into. Defaults to the agent's snapshot.`),
+			),
+
+		withAgentComposition(dagql.NodeFunc("recompose", s.recompose)).
+			Experimental("Agent APIs are likely to change.").
+			Doc(`Refresh every recorded entry of a conversation as this agent. Return the new conversation; the agent itself is unchanged. Apply the result by returning it from a tool, which continues the turn on it, or with reseed.`,
+				`Find each recorded entry again by its artifact address, with dimension keys, in the conversation's bound workspace. If that workspace does not address an entry, rerun the recorded entry from its own source. A recorded module that fails to load there is an error.`,
+				`Entries run in record order, replacing their contributions and preserving compatible tool state. Contributions made outside an entry are unowned and retained. A change to a tool binding's version resets its state. Removed bindings, changed identities, and incompatible state are errors.`,
+				`Every Agent argument of an entry receives this agent. Fails if the conversation has no recorded expertise, is owned by another agent, or if called while an entry runs.`).
+			Args(
+				dagql.Arg("conversation").Doc(`The conversation to recompose. Defaults to the agent's snapshot.`),
 			),
 	}.Install(srv)
 
@@ -531,4 +553,96 @@ func (s agentSchema) reseed(ctx context.Context, parent dagql.ObjectResult[*core
 		return res, err
 	}
 	return agentSelfID(ctx, parent)
+}
+
+// withAgentComposition records the composition scope and the conversation
+// before cache lookup. An omitted conversation is pinned to the agent's
+// current snapshot, so the result's recipe and cache key name the
+// conversation it was composed from rather than whatever the snapshot is later.
+func withAgentComposition(field dagql.Field[*core.Agent]) dagql.Field[*core.Agent] {
+	field.Spec.GetDynamicInput = func(ctx context.Context, self dagql.AnyResult, _ map[string]dagql.Input, _ call.View, req *dagql.CallRequest) error {
+		if err := core.StampExpertiseOwner(ctx, req); err != nil {
+			return err
+		}
+		if req.Replay {
+			return nil
+		}
+		if arg := req.Arg("conversation"); arg != nil && arg.Value != nil && arg.Value.Kind != dagql.ResultCallLiteralKindNull {
+			return nil
+		}
+		agent, ok := self.(dagql.AnyObjectResult)
+		if !ok {
+			return fmt.Errorf("agent composition: unexpected receiver %T", self)
+		}
+		srv, err := core.CurrentDagqlServer(ctx)
+		if err != nil {
+			return err
+		}
+		var snapshot dagql.ObjectResult[*core.LLM]
+		if err := srv.Select(ctx, agent, &snapshot, dagql.Selector{Field: "snapshot"}); err != nil {
+			return fmt.Errorf("agent snapshot: %w", err)
+		}
+		id, err := snapshot.ID()
+		if err != nil {
+			return err
+		}
+		return req.SetArgInput(ctx, "conversation", dagql.Opt(dagql.NewID[*core.LLM](id)), false)
+	}
+	return field
+}
+
+type agentComposeArgs struct {
+	Expertise    []dagql.ID[*core.Expertise]
+	Conversation dagql.Optional[core.LLMID]
+	Owner        dagql.Optional[dagql.String] `name:"_expertiseOwner" internal:"true"`
+}
+
+type agentRecomposeArgs struct {
+	Conversation dagql.Optional[core.LLMID]
+	Owner        dagql.Optional[dagql.String] `name:"_expertiseOwner" internal:"true"`
+}
+
+func (s agentSchema) compose(ctx context.Context, agent dagql.ObjectResult[*core.Agent], args agentComposeArgs) (dagql.ObjectResult[*core.LLM], error) {
+	ctx = core.RestoreExpertiseOwner(ctx, string(args.Owner.Value))
+	conversation, err := agentConversation(ctx, agent, args.Conversation)
+	if err != nil {
+		return conversation, err
+	}
+	expertise, err := (expertiseArgs{Expertise: args.Expertise}).load(ctx)
+	if err != nil {
+		return conversation, err
+	}
+	return core.ComposeExpertise(ctx, conversation, expertise)
+}
+
+func (s agentSchema) recompose(ctx context.Context, agent dagql.ObjectResult[*core.Agent], args agentRecomposeArgs) (dagql.ObjectResult[*core.LLM], error) {
+	ctx = core.RestoreExpertiseOwner(ctx, string(args.Owner.Value))
+	conversation, err := agentConversation(ctx, agent, args.Conversation)
+	if err != nil {
+		return conversation, err
+	}
+	return core.RecomposeExpertise(ctx, conversation)
+}
+
+// agentConversation loads the conversation an agent composes, owned by that
+// agent: the agent is what every entry's Agent arguments receive.
+func agentConversation(ctx context.Context, agent dagql.ObjectResult[*core.Agent], arg dagql.Optional[core.LLMID]) (dagql.ObjectResult[*core.LLM], error) {
+	var llm dagql.ObjectResult[*core.LLM]
+	srv, err := core.CurrentDagqlServer(ctx)
+	if err != nil {
+		return llm, err
+	}
+	if arg.Valid {
+		llm, err = arg.Value.Load(ctx, srv)
+	} else {
+		err = srv.Select(ctx, agent, &llm, dagql.Selector{Field: "snapshot"})
+	}
+	if err != nil {
+		return llm, err
+	}
+	handle := agent.Self().Handle
+	if owner := llm.Self().OwnerAgentHandle; owner != "" && owner != handle {
+		return llm, fmt.Errorf("the conversation belongs to agent handle %q, not agent %q (%s); compose it as its own agent", owner, agent.Self().Name, handle)
+	}
+	return core.WithLLMOwnerAgent(ctx, llm, handle)
 }
