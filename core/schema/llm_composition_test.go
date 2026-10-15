@@ -240,8 +240,11 @@ func newCompositionScopeSession(t *testing.T, runs *int) (context.Context, *dagq
 	optionalMe := objectResult(t, srv, "scope-optional-me", &core.FunctionArg{Name: "me", TypeDef: objectResult(t, srv, "scope-optional-agent", agentType.WithOptional(true))})
 	requiredFn := objectResult(t, srv, "scope-required-function", &core.Function{Name: "contributeAsAgent", ReturnType: llmType, Args: dagql.ObjectResultArray[*core.FunctionArg]{arg, requiredMe}})
 	optionalFn := objectResult(t, srv, "scope-optional-function", &core.Function{Name: "contributeMaybeAgent", ReturnType: llmType, Args: dagql.ObjectResultArray[*core.FunctionArg]{arg, optionalMe}})
+	// An entry reporting how many messages its base already holds, to observe
+	// which contributions were cleared before it ran.
+	observingFn := objectResult(t, srv, "scope-observing-function", &core.Function{Name: "contributeObserving", ReturnType: llmType, Args: dagql.ObjectResultArray[*core.FunctionArg]{arg}})
 	obj := core.NewObjectTypeDef("Query", "", nil)
-	obj.Functions = dagql.ObjectResultArray[*core.Function]{fn, requiredFn, optionalFn}
+	obj.Functions = dagql.ObjectResultArray[*core.Function]{fn, requiredFn, optionalFn, observingFn}
 	objRes := objectResult(t, srv, "scope-object", obj)
 	rootType := objectResult(t, srv, "scope-root", (&core.TypeDef{}).WithObject(objRes))
 	mod := objectResult(t, srv, "scope-module", &core.Module{NameField: "fixture"})
@@ -288,7 +291,17 @@ func newCompositionScopeSession(t *testing.T, runs *int) (context.Context, *dagq
 		}
 		return prompt(ctx, args.Base, args.Owner, text)
 	})
-	for _, field := range []*dagql.Field[*core.Query]{&contribute, &contributeAsAgent, &contributeMaybeAgent} {
+	contributeObserving := dagql.NodeFunc("contributeObserving", func(ctx context.Context, _ dagql.ObjectResult[*core.Query], args struct {
+		Base  dagql.ID[*core.LLM]
+		Owner dagql.Optional[dagql.String] `name:"_expertiseOwner" internal:"true"`
+	}) (dagql.ObjectResult[*core.LLM], error) {
+		base, err := args.Base.Load(ctx, srv)
+		if err != nil {
+			return base, err
+		}
+		return prompt(ctx, args.Base, args.Owner, fmt.Sprintf("observed %d messages", len(base.Self().Messages)))
+	})
+	for _, field := range []*dagql.Field[*core.Query]{&contribute, &contributeAsAgent, &contributeMaybeAgent, &contributeObserving} {
 		field.Spec.GetDynamicInput = func(ctx context.Context, _ dagql.AnyResult, _ map[string]dagql.Input, _ call.View, req *dagql.CallRequest) error {
 			return core.StampExpertiseOwner(ctx, req)
 		}
@@ -297,7 +310,11 @@ func newCompositionScopeSession(t *testing.T, runs *int) (context.Context, *dagq
 		contribute,
 		contributeAsAgent,
 		contributeMaybeAgent,
+		contributeObserving,
 		dagql.Func("fixtureExpertise", func(context.Context, *core.Query, struct{}) (*core.Expertise, error) { return entry.Clone(), nil }),
+		dagql.Func("fixtureObservingExpertise", func(context.Context, *core.Query, struct{}) (*core.Expertise, error) {
+			return newEntry("contributeObserving"), nil
+		}),
 		dagql.Func("fixtureAgentExpertise", func(_ context.Context, _ *core.Query, args struct{ Optional bool }) (*core.Expertise, error) {
 			if args.Optional {
 				return newEntry("contributeMaybeAgent"), nil
@@ -308,9 +325,38 @@ func newCompositionScopeSession(t *testing.T, runs *int) (context.Context, *dagq
 	return ctx, srv
 }
 
-// The fixture entry has no workspace, so refreshing falls back to the recorded
-// entry. Integration tests cover finding entries again in a bound workspace.
-func TestComposeRecordsAndRecomposeRefreshes(t *testing.T) {
+// composeExpertise selects LLM.compose with the given entries.
+func composeExpertise(t *testing.T, ctx context.Context, srv *dagql.Server, llm dagql.ObjectResult[*core.LLM], ids ...dagql.ID[*core.Expertise]) dagql.ObjectResult[*core.LLM] {
+	t.Helper()
+	var out dagql.ObjectResult[*core.LLM]
+	require.NoError(t, srv.Select(ctx, llm, &out, dagql.Selector{Field: "compose", Args: []dagql.NamedInput{{Name: "expertise", Value: dagql.ArrayInput[dagql.ID[*core.Expertise]](ids)}}}))
+	return out
+}
+
+// recordIDs returns the conversation's recorded entries, to compose the whole
+// record again: the reload pattern without a workspace to look them up in.
+func recordIDs(t *testing.T, llm dagql.ObjectResult[*core.LLM]) []dagql.ID[*core.Expertise] {
+	t.Helper()
+	ids := make([]dagql.ID[*core.Expertise], len(llm.Self().Expertise))
+	for i, entry := range llm.Self().Expertise {
+		id, err := entry.ID()
+		require.NoError(t, err)
+		ids[i] = dagql.NewID[*core.Expertise](id)
+	}
+	return ids
+}
+
+func messageTexts(llm *core.LLM) []string {
+	var texts []string
+	for _, msg := range llm.Messages {
+		texts = append(texts, msg.TextContent())
+	}
+	return texts
+}
+
+// The fixture entries have no workspace; integration tests cover looking
+// entries up again in a bound workspace before composing them.
+func TestComposeRecordsAndRefreshes(t *testing.T) {
 	runs := 0
 	ctx, srv := newCompositionScopeSession(t, &runs)
 	var seed dagql.ObjectResult[*core.LLM]
@@ -328,35 +374,72 @@ func TestComposeRecordsAndRecomposeRefreshes(t *testing.T) {
 		require.Equal(t, key, llm.Messages[0].CompositionOwner)
 	}
 
-	// Empty is a no-op: recompose with no record, compose with no entries.
-	var unchanged dagql.ObjectResult[*core.LLM]
-	require.NoError(t, srv.Select(ctx, seed, &unchanged, dagql.Selector{Field: "recompose"}))
+	// Empty is a no-op, including composing an empty record again.
+	unchanged := composeExpertise(t, ctx, srv, seed)
 	require.Empty(t, unchanged.Self().Expertise)
 	require.Empty(t, unchanged.Self().Messages)
-	require.NoError(t, srv.Select(ctx, seed, &unchanged, dagql.Selector{Field: "compose", Args: []dagql.NamedInput{{Name: "expertise", Value: dagql.ArrayInput[dagql.ID[*core.Expertise]]{}}}}))
-	require.Empty(t, unchanged.Self().Expertise)
+	unchanged = composeExpertise(t, ctx, srv, seed, recordIDs(t, seed)...)
 	require.Empty(t, unchanged.Self().Messages)
 	require.Zero(t, runs, "nothing to run")
 
 	// Duplicates are recorded and run once rather than failing.
-	ids := dagql.ArrayInput[dagql.ID[*core.Expertise]]{dagql.NewID[*core.Expertise](entryID), dagql.NewID[*core.Expertise](entryID)}
-	var composed dagql.ObjectResult[*core.LLM]
-	require.NoError(t, srv.Select(ctx, seed, &composed, dagql.Selector{Field: "compose", Args: []dagql.NamedInput{{Name: "expertise", Value: ids}}}))
+	id := dagql.NewID[*core.Expertise](entryID)
+	composed := composeExpertise(t, ctx, srv, seed, id, id)
 	assertComposed(composed.Self())
 	require.Equal(t, 1, runs, "a repeated entry is recorded and run once")
 
-	var refreshed dagql.ObjectResult[*core.LLM]
-	require.NoError(t, srv.Select(ctx, composed, &refreshed, dagql.Selector{Field: "recompose"}))
+	refreshed := composeExpertise(t, ctx, srv, composed, recordIDs(t, composed)...)
 	assertComposed(refreshed.Self())
-	require.Equal(t, 2, runs, "recompose reruns every recorded entry")
+	require.Equal(t, 2, runs, "composing the record reruns every recorded entry")
 
-	require.NoError(t, srv.Select(ctx, refreshed, &refreshed, dagql.Selector{Field: "compose", Args: []dagql.NamedInput{{Name: "expertise", Value: ids[:1]}}}))
+	refreshed = composeExpertise(t, ctx, srv, refreshed, id)
 	assertComposed(refreshed.Self())
 	require.Equal(t, 3, runs, "composing a recorded entry refreshes it once, in place")
+}
 
-	_, err = core.RecomposeExpertise(core.WithExpertiseOwner(ctx, "outer-entry"), refreshed)
-	require.ErrorContains(t, err, "compose the entries instead", "an entry composes; it cannot recompose")
-	require.Equal(t, 3, runs)
+// Composing entries already recorded refreshes them as one batch: all of
+// their contributions are cleared before any of them runs, and they keep their
+// record positions whatever order they are given in.
+func TestComposeRefreshesRecordAsOneBatch(t *testing.T) {
+	runs := 0
+	ctx, srv := newCompositionScopeSession(t, &runs)
+	var seed dagql.ObjectResult[*core.LLM]
+	require.NoError(t, srv.Select(ctx, srv.Root(), &seed, dagql.Selector{Field: "llm", Args: []dagql.NamedInput{{Name: "model", Value: dagql.Opt(dagql.String("test-model"))}}}))
+	entryID := func(field string) dagql.ID[*core.Expertise] {
+		var entry dagql.ObjectResult[*core.Expertise]
+		require.NoError(t, srv.Select(ctx, srv.Root(), &entry, dagql.Selector{Field: field}))
+		id, err := entry.ID()
+		require.NoError(t, err)
+		return dagql.NewID[*core.Expertise](id)
+	}
+	observing, contribute := entryID("fixtureObservingExpertise"), entryID("fixtureExpertise")
+	identities := func(llm dagql.ObjectResult[*core.LLM]) []string {
+		var keys []string
+		for _, entry := range llm.Self().Expertise {
+			key, err := entry.Self().Identity()
+			require.NoError(t, err)
+			keys = append(keys, key)
+		}
+		return keys
+	}
+
+	composed := composeExpertise(t, ctx, srv, seed, observing, contribute)
+	require.Equal(t, []string{"observed 0 messages", "fixture prompt"}, messageTexts(composed.Self()))
+	record := identities(composed)
+	require.Len(t, record, 2)
+
+	// The observing entry runs first and still sees no messages: the other
+	// entry's old contribution was cleared before it ran, not after.
+	refreshed := composeExpertise(t, ctx, srv, composed, recordIDs(t, composed)...)
+	require.Equal(t, []string{"observed 0 messages", "fixture prompt"}, messageTexts(refreshed.Self()))
+	require.Equal(t, record, identities(refreshed))
+	require.Equal(t, 4, runs)
+
+	// Given in another order, the entries run in list order but keep their
+	// record positions.
+	reordered := composeExpertise(t, ctx, srv, composed, contribute, observing)
+	require.Equal(t, []string{"fixture prompt", "observed 1 messages"}, messageTexts(reordered.Self()))
+	require.Equal(t, record, identities(reordered))
 }
 
 // Without an owning agent, an entry requiring one is skipped: it neither runs
@@ -375,30 +458,68 @@ func TestComposeUnownedAgentArguments(t *testing.T) {
 		return dagql.NewID[*core.Expertise](id)
 	}
 	required, optional := entryID(false), entryID(true)
-	prompts := func(llm *core.LLM) []string {
-		var texts []string
-		for _, msg := range llm.Messages {
-			texts = append(texts, msg.TextContent())
-		}
-		return texts
-	}
 
-	var skipped dagql.ObjectResult[*core.LLM]
-	require.NoError(t, srv.Select(ctx, seed, &skipped, dagql.Selector{Field: "compose", Args: []dagql.NamedInput{{Name: "expertise", Value: dagql.ArrayInput[dagql.ID[*core.Expertise]]{required}}}}))
+	skipped := composeExpertise(t, ctx, srv, seed, required)
 	require.Zero(t, runs, "a required-Agent entry does not run without an owner")
 	require.Empty(t, skipped.Self().Expertise, "a skipped entry is not recorded")
 	require.Empty(t, skipped.Self().Messages)
 
-	var composed dagql.ObjectResult[*core.LLM]
-	require.NoError(t, srv.Select(ctx, seed, &composed, dagql.Selector{Field: "compose", Args: []dagql.NamedInput{{Name: "expertise", Value: dagql.ArrayInput[dagql.ID[*core.Expertise]]{required, optional}}}}))
+	composed := composeExpertise(t, ctx, srv, seed, required, optional)
 	require.Equal(t, 1, runs, "only the optional-Agent entry runs")
 	require.Len(t, composed.Self().Expertise, 1)
-	require.Equal(t, []string{"maybe agent: null"}, prompts(composed.Self()))
+	require.Equal(t, []string{"maybe agent: null"}, messageTexts(composed.Self()))
 
-	require.NoError(t, srv.Select(ctx, composed, &composed, dagql.Selector{Field: "recompose"}))
+	composed = composeExpertise(t, ctx, srv, composed, recordIDs(t, composed)...)
 	require.Equal(t, 2, runs)
 	require.Len(t, composed.Self().Expertise, 1)
-	require.Equal(t, []string{"maybe agent: null"}, prompts(composed.Self()))
+	require.Equal(t, []string{"maybe agent: null"}, messageTexts(composed.Self()))
+}
+
+// A recorded entry requiring an Agent, composed again into a conversation
+// that has no owner (e.g. by the reload pattern), keeps its record position
+// and contributions instead of being stripped: a worker stays a worker.
+func TestComposeKeepsRecordedEntrySkippedWithoutOwner(t *testing.T) {
+	runs := 0
+	ctx, srv := newCompositionScopeSession(t, &runs)
+	var seed dagql.ObjectResult[*core.LLM]
+	require.NoError(t, srv.Select(ctx, srv.Root(), &seed, dagql.Selector{Field: "llm", Args: []dagql.NamedInput{{Name: "model", Value: dagql.Opt(dagql.String("test-model"))}}}))
+	var required, optional dagql.ObjectResult[*core.Expertise]
+	require.NoError(t, srv.Select(ctx, srv.Root(), &required, dagql.Selector{Field: "fixtureAgentExpertise", Args: []dagql.NamedInput{{Name: "optional", Value: dagql.Boolean(false)}}}))
+	require.NoError(t, srv.Select(ctx, srv.Root(), &optional, dagql.Selector{Field: "fixtureAgentExpertise", Args: []dagql.NamedInput{{Name: "optional", Value: dagql.Boolean(true)}}}))
+	requiredKey, err := required.Self().Identity()
+	require.NoError(t, err)
+	requiredID, err := required.ID()
+	require.NoError(t, err)
+	optionalID, err := optional.ID()
+	require.NoError(t, err)
+
+	// The state an owned composition leaves: the required entry recorded,
+	// owning its contribution. Its owner is then gone.
+	var recorded dagql.ObjectResult[*core.LLM]
+	require.NoError(t, srv.Select(ctx, seed, &recorded,
+		dagql.Selector{Field: "withSystemPrompt", Args: []dagql.NamedInput{
+			{Name: "prompt", Value: dagql.String("worker role")},
+			{Name: "owner", Value: dagql.Opt(dagql.String(requiredKey))},
+		}},
+		dagql.Selector{Field: "__withExpertise", Args: []dagql.NamedInput{{Name: "expertise", Value: dagql.ArrayInput[dagql.ID[*core.Expertise]]{dagql.NewID[*core.Expertise](requiredID)}}}},
+	))
+	require.Empty(t, recorded.Self().OwnerAgentHandle)
+
+	// Composing the whole record, plus a new entry, leaves the required entry
+	// in place: not cleared, not rerun, still first in the record.
+	composed := composeExpertise(t, ctx, srv, recorded, append(recordIDs(t, recorded), dagql.NewID[*core.Expertise](optionalID))...)
+	require.Equal(t, 1, runs, "only the new optional-Agent entry runs")
+	require.Equal(t, []string{"worker role", "maybe agent: null"}, messageTexts(composed.Self()))
+	require.Len(t, composed.Self().Expertise, 2)
+	key, err := composed.Self().Expertise[0].Self().Identity()
+	require.NoError(t, err)
+	require.Equal(t, requiredKey, key)
+
+	// Composing only the skipped recorded entry leaves the conversation as is.
+	again := composeExpertise(t, ctx, srv, recorded, recordIDs(t, recorded)...)
+	require.Equal(t, 1, runs)
+	require.Equal(t, []string{"worker role"}, messageTexts(again.Self()))
+	require.Len(t, again.Self().Expertise, 1)
 }
 
 func TestLLMComposeScopeCacheAndReplay(t *testing.T) {

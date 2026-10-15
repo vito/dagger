@@ -446,7 +446,7 @@ func (*artifactsSchema) value(ctx context.Context, parent dagql.AnyResult, args 
 		return result, err
 	case "Expertise":
 		if len(inputs) != 0 {
-			return nil, fmt.Errorf("artifacts of type Expertise receive their LLM through LLM.spawn(expertise:), LLM.compose, or LLM.recompose; artifact arguments are not supported")
+			return nil, fmt.Errorf("artifacts of type Expertise receive their LLM through LLM.spawn(expertise:) or LLM.compose; artifact arguments are not supported")
 		}
 		err = srv.Select(ctx, parent.(dagql.AnyObjectResult), &result, dagql.Selector{Field: "__expertise"})
 		return result, err
