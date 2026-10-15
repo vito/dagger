@@ -23,7 +23,7 @@ class Artifacts extends Client\AbstractObject implements Client\IdAble, Node
     }
 
     /**
-     * Convert conversation-transforming functions to expertise without running them. Each must return LLM! and take exactly one LLM! argument, with only auto-filled or optional additional arguments. An Agent! argument receives the conversation's owning agent when composed. The @agent directive nominates entries for default composition but is not required for explicit conversion. A module load failure fails with its load error.
+     * Convert conversation-transforming functions to expertise without running them. Each must return LLM! and take exactly one LLM! argument, with only auto-filled or optional additional arguments. Agent arguments receive the agent that owns the conversation being composed (with LLM.spawn(expertise:), the newly spawned agent). On a conversation without an owner, an optional Agent argument receives null, and an entry with a required one is skipped: it does not run and is not recorded. The @agent directive nominates entries for default composition but is not required for explicit conversion. A module load failure fails with its load error.
      */
     public function asExpertise(): array
     {

@@ -65,6 +65,26 @@ defmodule Dagger.LLM do
   end
 
   @doc """
+  Run expertise in list order, passing this conversation through each function, and record the entries in expertise. Retain existing contributions.
+
+  An entry already recorded under the same artifact address, with dimension keys, is refreshed in place: its contributions are replaced and its compatible tool state is preserved. Other recorded entries are untouched. With no expertise given, return the conversation unchanged.
+
+  Every Agent argument of an entry receives the agent that owns this conversation. Without an owner, an optional Agent argument receives null, and an entry with a required one is skipped: it does not run and is not recorded.
+
+  When called while an entry runs (nested composition), the given entries' contributions belong to the running entry and are not recorded separately: rerunning it reproduces them, e.g. `base.compose(expertise: [...])`.
+  """
+  @spec compose(t(), [String.t()]) :: Dagger.LLM.t()
+  def compose(%__MODULE__{} = llm, expertise) do
+    query_builder =
+      llm.query_builder |> QB.select("compose") |> QB.put_arg("expertise", expertise)
+
+    %Dagger.LLM{
+      query_builder: query_builder,
+      client: llm.client
+    }
+  end
+
+  @doc """
   estimated number of tokens currently occupying the context window; unlike tokenUsage this is not cumulative over the session
   """
   @spec context_tokens(t()) :: {:ok, integer()} | {:error, term()}
@@ -228,6 +248,26 @@ defmodule Dagger.LLM do
       llm.query_builder |> QB.select("reasoningEffort")
 
     Client.execute(llm.client, query_builder)
+  end
+
+  @doc """
+  Refresh every recorded entry of this conversation. Keep this LLM's workspace.
+
+  Find each recorded entry again by its artifact address, with dimension keys, in the bound workspace. If the bound workspace does not address an entry, rerun the recorded entry from its own source. A recorded module that fails to load there is an error.
+
+  Entries run in record order, replacing their contributions and preserving compatible tool state. Contributions made outside an entry are unowned and retained. A change to a tool binding's version resets its state. Removed bindings, changed identities, and incompatible state are errors.
+
+  Agent arguments receive the agent that owns this conversation, as with compose. With no recorded expertise, return the conversation unchanged. Fails if called while an entry runs.
+  """
+  @spec recompose(t()) :: Dagger.LLM.t()
+  def recompose(%__MODULE__{} = llm) do
+    query_builder =
+      llm.query_builder |> QB.select("recompose")
+
+    %Dagger.LLM{
+      query_builder: query_builder,
+      client: llm.client
+    }
   end
 
   @doc """
