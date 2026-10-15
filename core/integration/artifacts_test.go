@@ -1489,7 +1489,9 @@ func composeArtifactAgents(ctx context.Context, c *dagger.Client, ws *core.Works
 	if len(base) > 0 {
 		llm = base[0]
 	}
-	composed := llm.Compose(refs)
+	// A plain conversation with no record: recompose runs and records the
+	// entries, which must not require an owning agent.
+	composed := llm.Recompose(core.LLMRecomposeOpts{Expertise: refs})
 	id, err := composed.ID(ctx)
 	if err != nil {
 		return nil, err

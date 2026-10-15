@@ -30,13 +30,6 @@ type Peers {
   }
 
   reload(llm: LLM!): LLM! {
-    let entries = llm.expertise.{{ id }}.map { entry =>
-      let uri = node(id: entry.id).{{ ... on Expertise! }}.artifact.uri
-      let refreshed = llm.workspace.artifacts.filterUri(uri).asExpertise.{{ id }}
-      let id = refreshed[0].id
-      if (id == null) { raise "recorded entry is missing" }
-      node(id: id).{{ ... on Expertise! }}
-    }
-    llm.recompose(expertise: entries)
+    llm.recompose
   }
 }
