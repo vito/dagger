@@ -32,26 +32,22 @@ class LLM extends Client\AbstractObject implements Client\IdAble, Node, Syncer
     }
 
     /**
-     * Run and record expertise in list order, retaining existing contributions. An entry with the same artifact address must not already be composed.
-     */
-    public function compose(array $expertise): LLM
-    {
-        $innerQueryBuilder = new \Dagger\Client\QueryBuilder('compose');
-        $innerQueryBuilder->setArgument('expertise', $expertise);
-        return new \Dagger\LLM($this->client, $this->queryBuilderChain->chain($innerQueryBuilder));
-    }
-
-    /**
-     * Run expertise in list order, replacing contributions of matching recorded entries and preserving compatible tool state. Record and run new entries; leave unmentioned entries untouched.
+     * Refresh this conversation's composition, then add expertise. Find every recorded entry again by its artifact address, with dimension keys, in the bound workspace. If the bound workspace does not address an entry, rerun the recorded entry from its own source. Then add each given entry: one already recorded under the same address is refreshed in place, others are recorded after the existing entries.
      *
-     * Entry identity is its artifact address with dimension keys. Contributions made transitively while an entry runs belong to that entry, including nested composition. Contributions made outside an entry are unowned and retained. Keep this LLM's workspace.
+     * Entries run in record order, replacing their contributions and preserving compatible tool state. Contributions made transitively while an entry runs belong to that entry, including nested composition. Contributions made outside an entry are unowned and retained. Keep this LLM's workspace.
+     *
+     * A required Agent! argument receives the agent that owns the conversation. A conversation without an owning agent can be recomposed only with entries that do not require one.
      *
      * A change to a tool binding's version resets its state. Removed bindings, changed identities, and incompatible state are errors.
+     *
+     * With no recorded entries and no expertise given, return the conversation unchanged. Called while an entry runs, run only the given entries, as part of that entry.
      */
-    public function recompose(array $expertise): LLM
+    public function recompose(?array $expertise = null): LLM
     {
         $innerQueryBuilder = new \Dagger\Client\QueryBuilder('recompose');
+        if (null !== $expertise) {
         $innerQueryBuilder->setArgument('expertise', $expertise);
+        }
         return new \Dagger\LLM($this->client, $this->queryBuilderChain->chain($innerQueryBuilder));
     }
 

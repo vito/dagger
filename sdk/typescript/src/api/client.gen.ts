@@ -2865,6 +2865,13 @@ export type LLMLoopOpts = {
   maxTokens?: number
 }
 
+export type LLMRecomposeOpts = {
+  /**
+   * Expertise to add, or refresh in place if already recorded. Each reference retains its source workspace.
+   */
+  expertise?: Expertise[]
+}
+
 export type LLMSpawnOpts = {
   /**
    * Compose these entries after minting the agent's identity and before fixing its seed. Agent arguments receive the newly spawned agent, not the caller.
@@ -13833,15 +13840,6 @@ export class LLM extends BaseClient {
   }
 
   /**
-   * Run and record expertise in list order, retaining existing contributions. An entry with the same artifact address must not already be composed.
-   * @param expertise The expertise to run. Each reference retains its source workspace.
-   */
-  compose = (expertise: Expertise[]): LLM => {
-    const ctx = this._ctx.select("compose", { expertise })
-    return new LLM(ctx)
-  }
-
-  /**
    * estimated number of tokens currently occupying the context window; unlike tokenUsage this is not cumulative over the session
    */
   contextTokens = async (): Promise<number> => {
@@ -14000,15 +13998,19 @@ export class LLM extends BaseClient {
   }
 
   /**
-   * Run expertise in list order, replacing contributions of matching recorded entries and preserving compatible tool state. Record and run new entries; leave unmentioned entries untouched.
+   * Refresh this conversation's composition, then add expertise. Find every recorded entry again by its artifact address, with dimension keys, in the bound workspace. If the bound workspace does not address an entry, rerun the recorded entry from its own source. Then add each given entry: one already recorded under the same address is refreshed in place, others are recorded after the existing entries.
    *
-   * Entry identity is its artifact address with dimension keys. Contributions made transitively while an entry runs belong to that entry, including nested composition. Contributions made outside an entry are unowned and retained. Keep this LLM's workspace.
+   * Entries run in record order, replacing their contributions and preserving compatible tool state. Contributions made transitively while an entry runs belong to that entry, including nested composition. Contributions made outside an entry are unowned and retained. Keep this LLM's workspace.
+   *
+   * A required Agent! argument receives the agent that owns the conversation. A conversation without an owning agent can be recomposed only with entries that do not require one.
    *
    * A change to a tool binding's version resets its state. Removed bindings, changed identities, and incompatible state are errors.
-   * @param expertise The expertise to run. Each reference retains its source workspace.
+   *
+   * With no recorded entries and no expertise given, return the conversation unchanged. Called while an entry runs, run only the given entries, as part of that entry.
+   * @param opts.expertise Expertise to add, or refresh in place if already recorded. Each reference retains its source workspace.
    */
-  recompose = (expertise: Expertise[]): LLM => {
-    const ctx = this._ctx.select("recompose", { expertise })
+  recompose = (opts?: LLMRecomposeOpts): LLM => {
+    const ctx = this._ctx.select("recompose", { ...opts })
     return new LLM(ctx)
   }
 

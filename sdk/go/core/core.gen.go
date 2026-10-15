@@ -14079,17 +14079,6 @@ func (r *LLM) Artifacts(opts ...LLMArtifactsOpts) *Artifacts {
 	}
 }
 
-// Run and record expertise in list order, retaining existing contributions. An entry with the same artifact address must not already be composed.
-func (r *LLM) Compose(expertise []*Expertise) *LLM {
-	q := r.query.Select("compose")
-	q = q.Arg("expertise", expertise)
-
-	return &LLM{
-		query:     q,
-		refetchID: r.refetchID,
-	}
-}
-
 // estimated number of tokens currently occupying the context window; unlike tokenUsage this is not cumulative over the session
 func (r *LLM) ContextTokens(ctx context.Context) (int, error) {
 	if r.contextTokens != nil {
@@ -14332,14 +14321,29 @@ func (r *LLM) ReasoningEffort(ctx context.Context) (string, error) {
 	return response, q.Execute(ctx)
 }
 
-// Run expertise in list order, replacing contributions of matching recorded entries and preserving compatible tool state. Record and run new entries; leave unmentioned entries untouched.
+// LLMRecomposeOpts contains options for LLM.Recompose
+type LLMRecomposeOpts struct {
+	// Expertise to add, or refresh in place if already recorded. Each reference retains its source workspace.
+	Expertise []*Expertise
+}
+
+// Refresh this conversation's composition, then add expertise. Find every recorded entry again by its artifact address, with dimension keys, in the bound workspace. If the bound workspace does not address an entry, rerun the recorded entry from its own source. Then add each given entry: one already recorded under the same address is refreshed in place, others are recorded after the existing entries.
 //
-// Entry identity is its artifact address with dimension keys. Contributions made transitively while an entry runs belong to that entry, including nested composition. Contributions made outside an entry are unowned and retained. Keep this LLM's workspace.
+// Entries run in record order, replacing their contributions and preserving compatible tool state. Contributions made transitively while an entry runs belong to that entry, including nested composition. Contributions made outside an entry are unowned and retained. Keep this LLM's workspace.
+//
+// A required Agent! argument receives the agent that owns the conversation. A conversation without an owning agent can be recomposed only with entries that do not require one.
 //
 // A change to a tool binding's version resets its state. Removed bindings, changed identities, and incompatible state are errors.
-func (r *LLM) Recompose(expertise []*Expertise) *LLM {
+//
+// With no recorded entries and no expertise given, return the conversation unchanged. Called while an entry runs, run only the given entries, as part of that entry.
+func (r *LLM) Recompose(opts ...LLMRecomposeOpts) *LLM {
 	q := r.query.Select("recompose")
-	q = q.Arg("expertise", expertise)
+	for i := len(opts) - 1; i >= 0; i-- {
+		// `expertise` optional argument
+		if !querybuilder.IsZeroValue(opts[i].Expertise) {
+			q = q.Arg("expertise", opts[i].Expertise)
+		}
+	}
 
 	return &LLM{
 		query:     q,
