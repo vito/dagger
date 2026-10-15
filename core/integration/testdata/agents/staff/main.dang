@@ -29,7 +29,7 @@ type Peers {
     "original parent: " + parent.name
   }
 
-  reload(llm: LLM!): LLM! {
-    llm.recompose
+  reload(llm: LLM!, me: Agent!): LLM! {
+    me.recompose(conversation: llm)
   }
 }
