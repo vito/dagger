@@ -1975,9 +1975,9 @@ type Swapper {
     base.withTools(currentNode)
   }
 
-  reload(llm: LLM!, me: Agent!): LLM! {
+  reload(llm: LLM!): LLM! {
     let ws = llm.workspace.withNewFile("` + modulePath + `", llm.workspace.file("next-source.txt").contents)
-    me.recompose(conversation: llm.withWorkspace(ws))
+    llm.withWorkspace(ws).recompose
   }
 
   advance: Swapper! {
@@ -1993,7 +1993,9 @@ type Swapper {
     "new tool state: " + toString(state)
   }
 `)
-	ws := recomposeFixture(c, initialSource).WithNewFile("next-source.txt", reloadedSource).AsWorkspace()
+	base := workspaceFixture(t, c, "workspace-tool-return").
+		WithNewFile(modulePath, initialSource).
+		WithNewFile("next-source.txt", reloadedSource)
 
 	toolCall := func(id, name string) core.LLMContentBlockInput {
 		return core.LLMContentBlockInput{Kind: core.LLMContentBlockKindToolCall, CallID: id, ToolName: name}
@@ -2026,32 +2028,35 @@ type Swapper {
 	}
 	script = script.WithResponse([]core.LLMContentBlockInput{{Kind: core.LLMContentBlockKindText, Text: "second turn done"}})
 	model := cannedRecordingModel(ctx, t, c, script)
-	// Serve the original module, as a shell in the workspace would: the
-	// client's schema then holds the old Swapper definitions while state is
-	// rebound to the new ones. Reload recomposes as the agent running the
-	// loop, so it runs in an agent.
-	require.NoError(t, ws.ModuleSource(".dagger/modules/swapper").AsModule().Serve(ctx))
-	ids, err := discoverExpertise(ctx, c, ws)
-	require.NoError(t, err)
-	agent := spawnWithExpertise(ctx, t, c, core.NewQuery(c).LLM(core.LLMOpts{Model: model}).WithWorkspace(ws), "reloader", ids)
-	tools := func() string {
+	// The shell starts with the original module installed in its schema. A
+	// core-only client would not exercise collisions between old and new
+	// definitions of the same Swapper type when state is rebound. Compose the
+	// agent entry rather than binding Swapper directly: reload refreshes the
+	// recorded entry, which may only replace the binding it owns. No entry
+	// needs an Agent, so a synchronous loop can reload too.
+	query := fmt.Sprintf(`llm --model="%s" | with-workspace --workspace $(current-workspace) | compose --expertise $(current-workspace | artifacts | filter-types Expertise | one | value)`, model)
+	run := func(query string) string {
 		t.Helper()
-		return agent.mustRun(ctx, t, "snapshot { tools }").Get("snapshot.tools").String()
+		out, err := base.With(daggerShell(query)).Stdout(ctx)
+		require.NoError(t, err)
+		return out
 	}
-	require.NotContains(t, tools(), "## added\n")
-	_, _, err = agent.sendAndWait(ctx, t, "reload and use the new tool")
-	require.NoError(t, err)
-	require.Contains(t, tools(), "## added\n")
-	transcript, _ := agent.snapshot(ctx, t)
+	require.NotContains(t, run(query+" | tools"), "## added\n")
+	query += ` | with-prompt "reload and use the new tool"`
+	for _, block := range calls {
+		query += " | step"
+		require.Contains(t, run(query+" | tools"), "## added\n", block.CallID)
+	}
+	query += " | loop"
+	transcript := run(query + " | transcript")
 	require.Contains(t, transcript, "Tools added: added")
 	require.Contains(t, transcript, "new tool state: 0")
 	require.Equal(t, 2, strings.Count(transcript, "new tool state: 1"))
 	require.Contains(t, transcript, "first turn done")
 
-	_, _, err = agent.sendAndWait(ctx, t, "use it again")
-	require.NoError(t, err)
-	require.Contains(t, tools(), "## added\n")
-	transcript, _ = agent.snapshot(ctx, t)
+	query += ` | with-prompt "use it again" | loop`
+	require.Contains(t, run(query+" | tools"), "## added\n")
+	transcript = run(query + " | transcript")
 	require.Equal(t, 2, strings.Count(transcript, "new tool state: 2"))
 	require.Contains(t, transcript, "second turn done")
 	require.NotContains(t, transcript, "is not available")
