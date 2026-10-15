@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 
@@ -9,53 +10,64 @@ import (
 	"github.com/dagger/dagger/engine/slog"
 )
 
-// RecomposeExpertise replaces the selected expertise's owned contributions, preserving
-// the state of its tool objects while loading new implementations. Unowned
-// prompts and bindings, and contributions from other expertise, are retained.
+// RecomposeExpertise refreshes the whole composition record, then adds the
+// given entries. Every recorded entry is found again by its address in the
+// bound workspace, or reruns from its recorded source when that workspace does
+// not address it. A given entry already recorded under the same identity
+// replaces it in place; others are appended. All recorded entries' owned
+// contributions are replaced, preserving the state of their tool objects while
+// loading new implementations. Unowned prompts and bindings are retained.
 // Every replacement is recorded as a real selector, including the module-state
 // rebind, rather than an in-memory change to an old object's class.
+//
+// Called while an entry runs, only the given entries run, as part of that
+// entry: nested composition is reproduced by rerunning the outer entry.
 func RecomposeExpertise(ctx context.Context, base dagql.ObjectResult[*LLM], expertise dagql.ObjectResultArray[*Expertise]) (dagql.ObjectResult[*LLM], error) {
 	if _, nested := ExpertiseOwner(ctx); nested {
 		return ComposeExpertise(ctx, base, expertise)
+	}
+	recorded := base.Self().Expertise
+	if len(recorded) == 0 && len(expertise) == 0 {
+		// Nothing to refresh or add. Callers decide whether that is an error.
+		return base, nil
 	}
 	acc := base
 	srv, err := CurrentDagqlServer(ctx)
 	if err != nil {
 		return base, err
 	}
-	record := slices.Clone(base.Self().Expertise)
+	record, err := refreshRecordedExpertise(ctx, srv, base.Self().Workspace(), recorded)
+	if err != nil {
+		return base, err
+	}
 	positions := map[string]int{}
-	for i, entry := range record {
+	for i, entry := range recorded {
 		key, err := entry.Self().Identity()
 		if err != nil {
 			return base, err
 		}
 		positions[key] = i
+		// Clear every recorded entry's contributions before running any.
+		if err := srv.Select(ctx, acc, &acc, dagql.Selector{
+			Field: "__withoutComposition",
+			Args:  []dagql.NamedInput{{Name: "owner", Value: dagql.String(key)}},
+		}); err != nil {
+			return base, err
+		}
 	}
-	selected := map[string]bool{}
-	// Validate and clear all matching entries before running any replacements.
 	for _, entry := range expertise {
-		owner, err := entry.Self().Identity()
+		key, err := entry.Self().Identity()
 		if err != nil {
 			return base, err
 		}
-		if selected[owner] {
-			return base, fmt.Errorf("duplicate expertise %q in recompose", entry.Self().Name())
-		}
-		selected[owner] = true
-		if i, exists := positions[owner]; exists {
+		if i, exists := positions[key]; exists {
 			record[i] = entry
-			if err := srv.Select(ctx, acc, &acc, dagql.Selector{
-				Field: "__withoutComposition",
-				Args:  []dagql.NamedInput{{Name: "owner", Value: dagql.String(owner)}},
-			}); err != nil {
-				return base, err
-			}
-		} else {
-			record = append(record, entry)
+			continue
 		}
+		positions[key] = len(record)
+		record = append(record, entry)
 	}
-	for _, entry := range expertise {
+	for _, entry := range record {
 		next, err := entry.Self().Run(ctx, acc)
 		if err != nil {
 			return base, fmt.Errorf("recompose agent %q: %w", entry.Self().Name(), err)
@@ -72,6 +84,70 @@ func RecomposeExpertise(ctx context.Context, base dagql.ObjectResult[*LLM], expe
 	}
 	acc.Self().WarnToolNameCollisions(ctx)
 	return acc, nil
+}
+
+// refreshRecordedExpertise finds each recorded entry again by its address,
+// with dimension keys, in the conversation's bound workspace. An entry the
+// workspace does not address (e.g. after switching to another repository)
+// keeps its recorded artifact and source. A module of the entry that fails to
+// load in the workspace is an error rather than a silent fallback.
+func refreshRecordedExpertise(ctx context.Context, srv *dagql.Server, ws dagql.ObjectResult[*Workspace], record dagql.ObjectResultArray[*Expertise]) (dagql.ObjectResultArray[*Expertise], error) {
+	refreshed := slices.Clone(record)
+	if len(record) == 0 || ws.Self() == nil {
+		return refreshed, nil
+	}
+	srv = srv.Canonical()
+	var scope dagql.ObjectResult[*Artifacts]
+	if err := srv.Select(ctx, ws, &scope, dagql.Selector{View: srv.View, Field: "artifacts"}); err != nil {
+		return nil, fmt.Errorf("workspace artifacts: %w", err)
+	}
+	for i, entry := range record {
+		next, err := refindExpertise(ctx, srv, scope, entry)
+		if err != nil {
+			return nil, fmt.Errorf("refresh expertise %q: %w", entry.Self().Name(), err)
+		}
+		refreshed[i] = next
+	}
+	return refreshed, nil
+}
+
+func refindExpertise(ctx context.Context, srv *dagql.Server, scope dagql.ObjectResult[*Artifacts], entry dagql.ObjectResult[*Expertise]) (dagql.ObjectResult[*Expertise], error) {
+	recorded := entry.Self().Artifact
+	key, err := entry.Self().Identity()
+	if err != nil {
+		return entry, err
+	}
+	// Check the schema path first: filtering by an address whose dimensions
+	// this workspace lacks is an error, not an empty selection.
+	addressed := false
+	for _, candidate := range scope.Self().Entries {
+		if candidate.ModuleName != recorded.ModuleName {
+			continue
+		}
+		if candidate.LoadFailure != nil {
+			return entry, errors.New(candidate.LoadFailure.Message)
+		}
+		if slices.Equal(candidate.Path, recorded.Path) {
+			addressed = true
+		}
+	}
+	if !addressed {
+		return entry, nil
+	}
+	var found dagql.ObjectResultArray[*Expertise]
+	if err := srv.Select(ctx, scope, &found,
+		dagql.Selector{View: srv.View, Field: "filterUri", Args: []dagql.NamedInput{{Name: "uri", Value: dagql.String(key)}}},
+		dagql.Selector{View: srv.View, Field: "asExpertise"},
+	); err != nil {
+		return entry, err
+	}
+	for _, candidate := range found {
+		if id, err := candidate.Self().Identity(); err == nil && id == key {
+			return candidate, nil
+		}
+	}
+	// The path exists but not this entry's keys, e.g. a removed collection item.
+	return entry, nil
 }
 
 // compositionOwnerMatches compares entry identities. Empty owners are always

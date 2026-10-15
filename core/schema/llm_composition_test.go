@@ -210,64 +210,113 @@ func TestLLMCompositionOwnerSelectorsRoundTrip(t *testing.T) {
 	}
 }
 
+// newCompositionScopeSession serves a native fixture entry, fixtureExpertise,
+// that exercises the real Expertise.Run path without a container runtime. Its
+// schema matches a module call; each execution increments runs.
+func newCompositionScopeSession(t *testing.T, runs *int) (context.Context, *dagql.Server) {
+	t.Helper()
+	md := &engine.ClientMetadata{ClientID: "compose-scope", SessionID: "compose-scope"}
+	ctx := engine.ContextWithClientMetadata(t.Context(), md)
+	cache, err := dagql.NewCache(ctx, "", nil, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, cache.Close(context.Background())) })
+	ctx = dagql.ContextWithCache(ctx, cache)
+	server := &compositionTestServer{currentTypeDefsTestServer: &currentTypeDefsTestServer{mainClient: md}}
+	root := core.NewRoot(server)
+	ctx = core.ContextWithQuery(ctx, root)
+	base, err := NewCoreSchemaBase(ctx, server)
+	require.NoError(t, err)
+	srv, err := base.Fork(ctx, root, "")
+	require.NoError(t, err)
+	server.dag = srv
+	server.deps = core.NewSchemaBuilder(root, nil)
+
+	llmType := objectResult(t, srv, "scope-llm", objectTypeDef(t, srv, "LLM"))
+	arg := objectResult(t, srv, "scope-base", &core.FunctionArg{Name: "base", TypeDef: llmType})
+	fn := objectResult(t, srv, "scope-function", &core.Function{Name: "contribute", ReturnType: llmType, Args: dagql.ObjectResultArray[*core.FunctionArg]{arg}})
+	obj := core.NewObjectTypeDef("Query", "", nil)
+	obj.Functions = dagql.ObjectResultArray[*core.Function]{fn}
+	objRes := objectResult(t, srv, "scope-object", obj)
+	rootType := objectResult(t, srv, "scope-root", (&core.TypeDef{}).WithObject(objRes))
+	mod := objectResult(t, srv, "scope-module", &core.Module{NameField: "fixture"})
+	entry := &core.Expertise{Artifact: &core.Artifact{
+		Path: []string{"fixture", "contribute"}, TypeName: "Expertise", Directives: []string{"agent"},
+		Node: &core.ModTreeNode{Name: "contribute", OriginalModule: mod,
+			Parent: &core.ModTreeNode{RootValue: objectResult(t, srv, "scope-root-value", root), Type: rootType}},
+	}}
+	contribute := dagql.NodeFunc("contribute", func(ctx context.Context, _ dagql.ObjectResult[*core.Query], args struct {
+		Base  dagql.ID[*core.LLM]
+		Owner dagql.Optional[dagql.String] `name:"_expertiseOwner" internal:"true"`
+	}) (dagql.ObjectResult[*core.LLM], error) {
+		*runs++
+		ctx = core.RestoreExpertiseOwner(ctx, string(args.Owner.Value))
+		llm, err := args.Base.Load(ctx, srv)
+		if err != nil {
+			return llm, err
+		}
+		err = srv.Select(ctx, llm, &llm, dagql.Selector{Field: "withSystemPrompt", Args: []dagql.NamedInput{{Name: "prompt", Value: dagql.String("fixture prompt")}}})
+		return llm, err
+	})
+	contribute.Spec.GetDynamicInput = func(ctx context.Context, _ dagql.AnyResult, _ map[string]dagql.Input, _ call.View, req *dagql.CallRequest) error {
+		return core.StampExpertiseOwner(ctx, req)
+	}
+	dagql.Fields[*core.Query]{
+		contribute,
+		dagql.Func("fixtureExpertise", func(context.Context, *core.Query, struct{}) (*core.Expertise, error) { return entry.Clone(), nil }),
+	}.Install(srv)
+	return ctx, srv
+}
+
+// The fixture entry has no workspace, so refreshing falls back to the recorded
+// entry. Integration tests cover finding entries again in a bound workspace.
+func TestLLMRecomposeRefreshesRecord(t *testing.T) {
+	runs := 0
+	ctx, srv := newCompositionScopeSession(t, &runs)
+	var seed dagql.ObjectResult[*core.LLM]
+	require.NoError(t, srv.Select(ctx, srv.Root(), &seed, dagql.Selector{Field: "llm", Args: []dagql.NamedInput{{Name: "model", Value: dagql.Opt(dagql.String("test-model"))}}}))
+	var entry dagql.ObjectResult[*core.Expertise]
+	require.NoError(t, srv.Select(ctx, srv.Root(), &entry, dagql.Selector{Field: "fixtureExpertise"}))
+	entryID, err := entry.ID()
+	require.NoError(t, err)
+	key, err := entry.Self().Identity()
+	require.NoError(t, err)
+	assertComposed := func(llm *core.LLM) {
+		t.Helper()
+		require.Len(t, llm.Expertise, 1)
+		require.Len(t, llm.Messages, 1, "a refreshed entry replaces its contributions")
+		require.Equal(t, key, llm.Messages[0].CompositionOwner)
+	}
+
+	var unchanged dagql.ObjectResult[*core.LLM]
+	require.NoError(t, srv.Select(ctx, seed, &unchanged, dagql.Selector{Field: "recompose"}))
+	require.Empty(t, unchanged.Self().Expertise)
+	require.Empty(t, unchanged.Self().Messages)
+	require.Zero(t, runs, "an empty record with no expertise is a no-op")
+
+	// Duplicates refresh in place rather than failing.
+	ids := dagql.ArrayInput[dagql.ID[*core.Expertise]]{dagql.NewID[*core.Expertise](entryID), dagql.NewID[*core.Expertise](entryID)}
+	var composed dagql.ObjectResult[*core.LLM]
+	require.NoError(t, srv.Select(ctx, seed, &composed, dagql.Selector{Field: "recompose", Args: []dagql.NamedInput{{Name: "expertise", Value: ids}}}))
+	assertComposed(composed.Self())
+	require.Equal(t, 1, runs, "a repeated entry is recorded and run once")
+
+	var refreshed dagql.ObjectResult[*core.LLM]
+	require.NoError(t, srv.Select(ctx, composed, &refreshed, dagql.Selector{Field: "recompose"}))
+	assertComposed(refreshed.Self())
+	require.Equal(t, 2, runs, "recompose() reruns every recorded entry")
+
+	require.NoError(t, srv.Select(ctx, refreshed, &refreshed, dagql.Selector{Field: "recompose", Args: []dagql.NamedInput{{Name: "expertise", Value: ids[:1]}}}))
+	assertComposed(refreshed.Self())
+	require.Equal(t, 3, runs, "a recorded entry given again refreshes once, in place")
+}
+
 func TestLLMComposeScopeCacheAndReplay(t *testing.T) {
-	for _, field := range []string{"compose", "recompose"} {
+	for _, field := range []string{"__compose", "recompose"} {
 		for _, nestedFirst := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/nestedFirst=%t", field, nestedFirst), func(t *testing.T) {
 				runs := 0
 				newSession := func() (context.Context, *dagql.Server) {
-					md := &engine.ClientMetadata{ClientID: "compose-scope", SessionID: "compose-scope"}
-					ctx := engine.ContextWithClientMetadata(t.Context(), md)
-					cache, err := dagql.NewCache(ctx, "", nil, nil)
-					require.NoError(t, err)
-					t.Cleanup(func() { require.NoError(t, cache.Close(context.Background())) })
-					ctx = dagql.ContextWithCache(ctx, cache)
-					server := &compositionTestServer{currentTypeDefsTestServer: &currentTypeDefsTestServer{mainClient: md}}
-					root := core.NewRoot(server)
-					ctx = core.ContextWithQuery(ctx, root)
-					base, err := NewCoreSchemaBase(ctx, server)
-					require.NoError(t, err)
-					srv, err := base.Fork(ctx, root, "")
-					require.NoError(t, err)
-					server.dag = srv
-					server.deps = core.NewSchemaBuilder(root, nil)
-
-					// A native fixture entry exercises the real Expertise.Run path
-					// without a container runtime. Its schema matches a module call.
-					llmType := objectResult(t, srv, "scope-llm", objectTypeDef(t, srv, "LLM"))
-					arg := objectResult(t, srv, "scope-base", &core.FunctionArg{Name: "base", TypeDef: llmType})
-					fn := objectResult(t, srv, "scope-function", &core.Function{Name: "contribute", ReturnType: llmType, Args: dagql.ObjectResultArray[*core.FunctionArg]{arg}})
-					obj := core.NewObjectTypeDef("Query", "", nil)
-					obj.Functions = dagql.ObjectResultArray[*core.Function]{fn}
-					objRes := objectResult(t, srv, "scope-object", obj)
-					rootType := objectResult(t, srv, "scope-root", (&core.TypeDef{}).WithObject(objRes))
-					mod := objectResult(t, srv, "scope-module", &core.Module{NameField: "fixture"})
-					entry := &core.Expertise{Artifact: &core.Artifact{
-						Path: []string{"fixture", "contribute"}, TypeName: "Expertise", Directives: []string{"agent"},
-						Node: &core.ModTreeNode{Name: "contribute", OriginalModule: mod,
-							Parent: &core.ModTreeNode{RootValue: objectResult(t, srv, "scope-root-value", root), Type: rootType}},
-					}}
-					contribute := dagql.NodeFunc("contribute", func(ctx context.Context, _ dagql.ObjectResult[*core.Query], args struct {
-						Base  dagql.ID[*core.LLM]
-						Owner dagql.Optional[dagql.String] `name:"_expertiseOwner" internal:"true"`
-					}) (dagql.ObjectResult[*core.LLM], error) {
-						runs++
-						ctx = core.RestoreExpertiseOwner(ctx, string(args.Owner.Value))
-						llm, err := args.Base.Load(ctx, srv)
-						if err != nil {
-							return llm, err
-						}
-						err = srv.Select(ctx, llm, &llm, dagql.Selector{Field: "withSystemPrompt", Args: []dagql.NamedInput{{Name: "prompt", Value: dagql.String("fixture prompt")}}})
-						return llm, err
-					})
-					contribute.Spec.GetDynamicInput = func(ctx context.Context, _ dagql.AnyResult, _ map[string]dagql.Input, _ call.View, req *dagql.CallRequest) error {
-						return core.StampExpertiseOwner(ctx, req)
-					}
-					dagql.Fields[*core.Query]{
-						contribute,
-						dagql.Func("fixtureExpertise", func(context.Context, *core.Query, struct{}) (*core.Expertise, error) { return entry.Clone(), nil }),
-					}.Install(srv)
-					return ctx, srv
+					return newCompositionScopeSession(t, &runs)
 				}
 
 				ctx, srv := newSession()
