@@ -208,7 +208,7 @@ func TestComposedLLMCredentialIsolatedAcrossSessions(t *testing.T) {
 					var llm dagql.ObjectResult[*core.LLM]
 					require.NoError(t, dag.Select(ctx, dag.Root(), &llm,
 						dagql.Selector{Field: "llm"},
-						dagql.Selector{Field: "__compose", Args: []dagql.NamedInput{{
+						dagql.Selector{Field: "compose", Args: []dagql.NamedInput{{
 							Name:  "expertise",
 							Value: dagql.ArrayInput[dagql.ID[*core.Expertise]]{},
 						}}}))

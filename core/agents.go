@@ -8,6 +8,8 @@ import (
 
 	"github.com/dagger/dagger/dagql"
 	"github.com/vektah/gqlparser/v2/ast"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/dagger/dagger/engine/slog"
 )
@@ -71,6 +73,41 @@ func (a *Expertise) Identity() (string, error) {
 	return a.Artifact.URI(ArtifactURIOpts{DimensionKeys: true})
 }
 
+// requiresAgent reports whether the entry has a required Agent argument.
+// Composed into a conversation without an owning agent, such an entry is
+// skipped.
+func (a *Expertise) requiresAgent() bool {
+	fn := expertiseFunction(a.Artifact)
+	if fn == nil {
+		return false
+	}
+	for _, arg := range fn.Args {
+		if isCoreAgentArg(arg.Self()) && !arg.Self().TypeDef.Self().Optional {
+			return true
+		}
+	}
+	return false
+}
+
+// skipsUnowned reports whether entry is skipped when composed into base: it
+// requires an Agent and base has no owning agent to supply.
+func skipsUnowned(base dagql.ObjectResult[*LLM], entry dagql.ObjectResult[*Expertise]) bool {
+	return base.Self().OwnerAgentHandle == "" && entry.Self().requiresAgent()
+}
+
+// expertiseSkippedAttr lists, on the composition's span, the entries skipped
+// because they require an Agent and the conversation has no owning agent.
+// Skipping is expected (e.g. installing an agent's expertise into a plain
+// conversation), so it is recorded as span state rather than a warning.
+const expertiseSkippedAttr = "dagger.io/expertise.skipped"
+
+func recordSkippedExpertise(ctx context.Context, skipped []string) {
+	if len(skipped) == 0 {
+		return
+	}
+	trace.SpanFromContext(ctx).SetAttributes(attribute.StringSlice(expertiseSkippedAttr, skipped))
+}
+
 func (a *Expertise) Run(ctx context.Context, base dagql.ObjectResult[*LLM]) (dagql.ObjectResult[*LLM], error) {
 	var result dagql.ObjectResult[*LLM]
 	key, err := a.Identity()
@@ -96,7 +133,7 @@ func (a *Expertise) Run(ctx context.Context, base dagql.ObjectResult[*LLM]) (dag
 			inputs = append(inputs, dagql.NamedInput{Name: arg.Self().Name, Value: dagql.NewID[*LLM](id)})
 		}
 		if isCoreAgentArg(arg.Self()) {
-			// Every Agent argument receives the agent composing the
+			// Every Agent argument receives the agent that owns the
 			// conversation, never the caller. A handle-only reference avoids
 			// embedding the seed in its own recipe.
 			optional := arg.Self().TypeDef.Self().Optional
@@ -104,7 +141,8 @@ func (a *Expertise) Run(ctx context.Context, base dagql.ObjectResult[*LLM]) (dag
 				if optional {
 					continue
 				}
-				return result, fmt.Errorf("expertise %q requires an owning agent for argument %q; compose it with LLM.spawn(expertise:) or Agent.compose", a.Name(), arg.Self().Name)
+				// Composition skips such entries before running them.
+				return result, fmt.Errorf("expertise %q requires an owning agent for argument %q", a.Name(), arg.Self().Name)
 			}
 			owner, err := AgentReference(ctx, base.Self().OwnerAgentHandle)
 			if err != nil {
@@ -149,10 +187,26 @@ func (a *Expertise) AttachDependencyResults(ctx context.Context, owner dagql.Any
 // while other recorded entries are untouched; new entries are appended. While
 // an entry runs, composed entries belong to that outer entry and are not
 // recorded: rerunning the outer entry reproduces them.
+//
+// An entry requiring an Agent is skipped on a conversation without an owning
+// agent: it neither runs nor is recorded. No entries is a no-op.
 func ComposeExpertise(ctx context.Context, base dagql.ObjectResult[*LLM], expertise dagql.ObjectResultArray[*Expertise]) (dagql.ObjectResult[*LLM], error) {
+	if len(expertise) == 0 {
+		return base, nil
+	}
+	var skipped []string
+	defer func() { recordSkippedExpertise(ctx, skipped) }()
 	if _, nested := ExpertiseOwner(ctx); nested {
 		acc := base
 		for _, entry := range expertise {
+			if skipsUnowned(acc, entry) {
+				key, err := entry.Self().Identity()
+				if err != nil {
+					return base, err
+				}
+				skipped = append(skipped, key)
+				continue
+			}
 			next, err := entry.Self().Run(ctx, acc)
 			if err != nil {
 				return base, fmt.Errorf("compose agent %q: %w", entry.Self().Name(), err)
@@ -187,6 +241,12 @@ func ComposeExpertise(ctx context.Context, base dagql.ObjectResult[*LLM], expert
 		if err != nil {
 			return base, err
 		}
+		if skipsUnowned(base, entry) {
+			if !slices.Contains(skipped, key) {
+				skipped = append(skipped, key)
+			}
+			continue
+		}
 		if _, seen := run[key]; !seen {
 			order = append(order, key)
 		}
@@ -207,6 +267,10 @@ func ComposeExpertise(ctx context.Context, base dagql.ObjectResult[*LLM], expert
 			cleared[key] = true
 			refreshed = true
 		}
+	}
+	if len(order) == 0 {
+		// Every given entry was skipped.
+		return base, nil
 	}
 	for _, key := range order {
 		entry := run[key]

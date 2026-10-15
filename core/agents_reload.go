@@ -20,14 +20,17 @@ import (
 // old object's class.
 //
 // Recomposition is a top-level operation: an entry composes other expertise
-// with ComposeExpertise, which makes it part of that entry.
+// with ComposeExpertise, which makes it part of that entry. With no recorded
+// entries it is a no-op. An entry requiring an Agent is skipped on a
+// conversation without an owning agent, as in ComposeExpertise: it keeps its
+// record and contributions untouched.
 func RecomposeExpertise(ctx context.Context, base dagql.ObjectResult[*LLM]) (dagql.ObjectResult[*LLM], error) {
 	if owner, nested := ExpertiseOwner(ctx); nested {
 		return base, fmt.Errorf("cannot recompose while expertise %q runs; compose the entries instead", owner)
 	}
 	recorded := base.Self().Expertise
 	if len(recorded) == 0 {
-		return base, errors.New("conversation has no recorded expertise to recompose")
+		return base, nil
 	}
 	acc := base
 	srv, err := CurrentDagqlServer(ctx)
@@ -38,18 +41,33 @@ func RecomposeExpertise(ctx context.Context, base dagql.ObjectResult[*LLM]) (dag
 	if err != nil {
 		return base, err
 	}
-	for _, entry := range recorded {
+	var skipped []string
+	defer func() { recordSkippedExpertise(ctx, skipped) }()
+	runs := make([]bool, len(record))
+	for i, entry := range recorded {
 		key, err := entry.Self().Identity()
 		if err != nil {
 			return base, err
 		}
-		// Clear every recorded entry's contributions before running any.
+		if skipsUnowned(base, entry) || skipsUnowned(base, record[i]) {
+			skipped = append(skipped, key)
+			record[i] = entry
+			continue
+		}
+		runs[i] = true
+		// Clear every refreshed entry's contributions before running any.
 		acc, err = withoutComposition(ctx, srv, acc, key)
 		if err != nil {
 			return base, err
 		}
 	}
-	for _, entry := range record {
+	if len(skipped) == len(record) {
+		return base, nil
+	}
+	for i, entry := range record {
+		if !runs[i] {
+			continue
+		}
 		next, err := entry.Self().Run(ctx, acc)
 		if err != nil {
 			return base, fmt.Errorf("recompose agent %q: %w", entry.Self().Name(), err)
