@@ -558,7 +558,7 @@ func objectToolEligible(field *ast.FieldDefinition, except []string, implicit im
 			// MCP supplies this argument; the model does not need an object handle.
 			continue
 		}
-		required := arg.Type.NonNull && arg.DefaultValue == nil
+		required := toolArgRequired(arg)
 		if required && isObjectArg(arg) {
 			if _, ok := liftableObjectArg(arg); !ok {
 				return false
@@ -775,7 +775,9 @@ func liftHint(typeName string) string {
 // left unset. Agent is filled from the agent loop dispatching the call (see
 // AgentFromContext), which exists only when an agent drives the conversation,
 // not under a synchronous LLM.loop/step or a standalone server: without one, a
-// method requiring an Agent is hidden rather than offered and then failing.
+// method requiring an Agent is hidden rather than offered and then failing, and
+// an optional Agent argument is passed as null. Either way an Agent argument
+// never appears in the model's tool schema.
 type implicitToolArgs struct {
 	// llm reports whether a conversation is available to fill LLM arguments.
 	llm bool
@@ -794,11 +796,23 @@ var (
 	standaloneToolArgs = implicitToolArgs{}
 )
 
-// supplies reports whether MCP fills arg itself under this policy.
+// supplies reports whether MCP fills arg itself under this policy. An Agent
+// argument is never the model's to supply: inside an agent loop MCP fills it
+// with the running agent, and without one an optional Agent argument is left
+// null (a required one hides its method, see objectToolEligible). This mirrors
+// an optional me on an expertise entry composed without an owning agent.
 func (p implicitToolArgs) supplies(arg *ast.ArgumentDefinition) bool {
+	if isExpectedTypeArg(arg, agentTypeName) {
+		return p.agent || !toolArgRequired(arg)
+	}
 	return isExpectedTypeArg(arg, workspaceTypeName) ||
-		(p.llm && isExpectedTypeArg(arg, llmTypeName)) ||
-		(p.agent && isExpectedTypeArg(arg, agentTypeName))
+		(p.llm && isExpectedTypeArg(arg, llmTypeName))
+}
+
+// toolArgRequired reports whether a tool argument must be given: non-null with
+// no default.
+func toolArgRequired(arg *ast.ArgumentDefinition) bool {
+	return arg.Type.NonNull && arg.DefaultValue == nil
 }
 
 // implicitArgs returns the policy this MCP serves tools under: standalone when
@@ -1013,6 +1027,11 @@ func (m *MCP) buildObjectMethodSelector(ctx context.Context, srv *dagql.Server, 
 			continue
 		}
 		val, ok := args[arg.Name]
+		if astArg := astField.Arguments.ForName(arg.Name); ok && astArg != nil && isExpectedTypeArg(astArg, agentTypeName) {
+			// An Agent is never the model's to name, so a value given for one
+			// is left in provided and reported as an unknown argument.
+			ok = false
+		}
 		if !ok {
 			implicit, found, err := m.implicitToolInput(ctx, astField, arg)
 			if err != nil {

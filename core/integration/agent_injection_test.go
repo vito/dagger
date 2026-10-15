@@ -58,46 +58,54 @@ func (AgentRuntimeSuite) TestAgentArgInjection(ctx context.Context, t *testctx.T
 	c := connect(ctx, t)
 	pokerID := servePokerModule(ctx, t, c)
 
-	model := cannedRecordingModel(ctx, t, c, core.NewQuery(c).LLM().
-		WithPrompt(pokePrompt).
-		WithResponse([]core.LLMContentBlockInput{
-			{Kind: core.LLMContentBlockKindText, Text: "Poking the parent."},
-			{Kind: core.LLMContentBlockKindToolCall, CallID: "call_1", ToolName: "poke",
-				Arguments: core.JSON(fmt.Sprintf(`{"note":%q}`, pokeNote))},
-		}).
-		// Placeholder result: the real module tool runs during replay (tool
-		// results are excluded from the replayer's history matching), so its
-		// live confirmation flows through.
-		WithToolResult("call_1", "", false).
-		// The self-send joins the in-flight turn and drains at the step
-		// boundary right after the tool result lands — the loop records it
-		// as a prompt exactly here.
-		WithPrompt(pokeNote).
-		WithResponse([]core.LLMContentBlockInput{
-			{Kind: core.LLMContentBlockKindText, Text: pokeReply},
-		}))
+	// A required caller and an optional one are both filled with the calling
+	// agent inside its loop.
+	for _, tool := range []string{"poke", "maybePoke"} {
+		t.Run(tool, func(ctx context.Context, t *testctx.T) {
+			model := cannedRecordingModel(ctx, t, c, core.NewQuery(c).LLM().
+				WithPrompt(pokePrompt).
+				WithResponse([]core.LLMContentBlockInput{
+					{Kind: core.LLMContentBlockKindText, Text: "Poking the parent."},
+					{Kind: core.LLMContentBlockKindToolCall, CallID: "call_1", ToolName: tool,
+						Arguments: core.JSON(fmt.Sprintf(`{"note":%q}`, pokeNote))},
+				}).
+				// Placeholder result: the real module tool runs during replay (tool
+				// results are excluded from the replayer's history matching), so its
+				// live confirmation flows through.
+				WithToolResult("call_1", "", false).
+				// The self-send joins the in-flight turn and drains at the step
+				// boundary right after the tool result lands — the loop records it
+				// as a prompt exactly here.
+				WithPrompt(pokeNote).
+				WithResponse([]core.LLMContentBlockInput{
+					{Kind: core.LLMContentBlockKindText, Text: pokeReply},
+				}))
 
-	h := spawnAgent(ctx, t, c, spawnOpts{model: model, name: "poked", toolIDs: []core.ID{pokerID}})
+			h := spawnAgent(ctx, t, c, spawnOpts{model: model, name: "poked-" + tool, toolIDs: []core.ID{pokerID}})
 
-	delivery, reply, err := h.sendAndWait(ctx, t, pokePrompt)
-	require.NoError(t, err)
-	require.Equal(t, "STARTED", delivery)
-	require.Equal(t, pokeReply, reply)
+			delivery, reply, err := h.sendAndWait(ctx, t, pokePrompt)
+			require.NoError(t, err)
+			require.Equal(t, "STARTED", delivery)
+			require.Equal(t, pokeReply, reply)
 
-	// The tool confirms it sent through the MCP-supplied handle, and the note
-	// itself is on the record: influence ⇔ append.
-	transcript, lastReply := h.snapshot(ctx, t)
-	require.Contains(t, transcript, "sent")
-	require.Contains(t, transcript, pokeNote)
-	require.Equal(t, pokeReply, lastReply)
+			// The tool confirms it sent through the MCP-supplied handle, and the
+			// note itself is on the record: influence ⇔ append.
+			transcript, lastReply := h.snapshot(ctx, t)
+			require.Contains(t, transcript, "sent")
+			require.NotContains(t, transcript, "no caller")
+			require.Contains(t, transcript, pokeNote)
+			require.Equal(t, pokeReply, lastReply)
+		})
+	}
 }
 
-// TestAgentArgHiddenFromToolSchema locks in that an Agent! argument never
+// TestAgentArgHiddenFromToolSchema locks in that an Agent argument never
 // reaches the model, and that a method requiring one is offered only where an
 // agent can supply it. Inside an agent loop, TestAgentArgInjection's recorded
-// call passes only the note: MCP fills the caller during object-tool dispatch.
+// calls pass only the note: MCP fills the caller during object-tool dispatch.
 // The synchronous toolset rendered here has no agent, so poke is hidden
-// entirely rather than offered and then failing.
+// entirely rather than offered and then failing, and maybePoke is offered
+// without its optional caller, which it receives as null.
 func (AgentRuntimeSuite) TestAgentArgHiddenFromToolSchema(ctx context.Context, t *testctx.T) {
 	c := connect(ctx, t)
 	pokerID := servePokerModule(ctx, t, c)
@@ -118,13 +126,16 @@ func (AgentRuntimeSuite) TestAgentArgHiddenFromToolSchema(ctx context.Context, t
 
 	doc := res.LLM.WithTools.Tools
 	require.NotContains(t, doc, "## poke")
+	require.Contains(t, doc, "## maybePoke")
+	require.Contains(t, doc, `"note"`)
 	require.NotContains(t, doc, `"caller"`)
 }
 
 // TestAgentArgRequiresAgentLoop covers the no-agent behavior without weakening
 // the module schema. A direct GraphQL call still has to supply the declared
 // Agent! argument; only the MCP object-tool adapter fills it. A synchronous
-// LLM loop has no agent to pass, so the tool is not offered at all.
+// LLM loop has no agent to pass, so a tool requiring one is not offered at
+// all, and one taking an optional caller receives null.
 func (AgentRuntimeSuite) TestAgentArgRequiresAgentLoop(ctx context.Context, t *testctx.T) {
 	c := connect(ctx, t)
 	pokerID := servePokerModule(ctx, t, c)
@@ -138,17 +149,17 @@ func (AgentRuntimeSuite) TestAgentArgRequiresAgentLoop(ctx context.Context, t *t
 		require.ErrorContains(t, err, `is required, but it was not provided`)
 	})
 
-	t.Run("synchronous loop", func(ctx context.Context, t *testctx.T) {
-		// The tool is hidden under a sync loop, so a call to it is a call to
-		// an unavailable tool: the error becomes the tool's errored result and
-		// the recorded turn still closes.
+	// syncLoop runs one recorded synchronous turn calling tool, and returns
+	// the transcript.
+	syncLoop := func(ctx context.Context, t *testctx.T, tool string, errored bool) string {
+		t.Helper()
 		model := cannedRecordingModel(ctx, t, c, core.NewQuery(c).LLM().
 			WithPrompt(pokePrompt).
 			WithResponse([]core.LLMContentBlockInput{
-				{Kind: core.LLMContentBlockKindToolCall, CallID: "call_1", ToolName: "poke",
+				{Kind: core.LLMContentBlockKindToolCall, CallID: "call_1", ToolName: tool,
 					Arguments: core.JSON(fmt.Sprintf(`{"note":%q}`, pokeNote))},
 			}).
-			WithToolResult("call_1", "", true).
+			WithToolResult("call_1", "", errored).
 			WithResponse([]core.LLMContentBlockInput{
 				{Kind: core.LLMContentBlockKindText, Text: pokeReply},
 			}))
@@ -171,8 +182,23 @@ func (AgentRuntimeSuite) TestAgentArgRequiresAgentLoop(ctx context.Context, t *t
 			"prompt": pokePrompt,
 		}})
 		require.NoError(t, err)
-		transcript := res.LLM.WithTools.WithPrompt.Loop.Transcript
+		return res.LLM.WithTools.WithPrompt.Loop.Transcript
+	}
+
+	t.Run("synchronous loop", func(ctx context.Context, t *testctx.T) {
+		// The tool is hidden under a sync loop, so a call to it is a call to
+		// an unavailable tool: the error becomes the tool's errored result and
+		// the recorded turn still closes.
+		transcript := syncLoop(ctx, t, "poke", true)
 		require.Contains(t, transcript, `tool "poke" is not available`)
 		require.NotContains(t, transcript, "function requires the calling agent")
+	})
+
+	t.Run("synchronous loop with an optional caller", func(ctx context.Context, t *testctx.T) {
+		// The tool is offered without its caller argument, which it receives
+		// as null.
+		transcript := syncLoop(ctx, t, "maybePoke", false)
+		require.Contains(t, transcript, "no caller for "+pokeNote)
+		require.NotContains(t, transcript, "is not available")
 	})
 }

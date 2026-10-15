@@ -26,3 +26,18 @@ func (m *Poker) Poke(ctx context.Context, caller *dagger.Agent, note string) (st
 	}
 	return "sent", nil
 }
+
+// MaybePoke is Poke with an optional caller: inside an agent loop MCP passes
+// the calling agent, and without one (a synchronous loop, dagger mcp) it
+// passes null. Either way the argument never reaches the model's schema.
+func (m *Poker) MaybePoke(
+	ctx context.Context,
+	// +optional
+	caller *dagger.Agent,
+	note string,
+) (string, error) {
+	if caller == nil {
+		return "no caller for " + note, nil
+	}
+	return m.Poke(ctx, caller, note)
+}

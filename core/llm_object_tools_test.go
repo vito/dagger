@@ -84,6 +84,12 @@ type Doug {
     note: String!,
   ): String!
 
+  "Nudge the calling agent, if there is one — an optional Agent argument."
+  nudge(
+    caller: ID @expectedType(name: "Agent"),
+    note: String!,
+  ): String!
+
   "Apply a changeset — requires a non-liftable object arg, so ineligible."
   apply(changes: ID! @expectedType(name: "Changeset")): Doug!
 
@@ -207,6 +213,11 @@ func TestObjectToolEligible(t *testing.T) {
 	require.True(t, objectToolEligible(fieldByName(doug, "annotate"), nil, standaloneToolArgs))
 	require.False(t, objectToolEligible(fieldByName(doug, "poke"), nil, standaloneToolArgs))
 
+	// An optional Agent argument never disqualifies: without an agent it is
+	// passed as null, under every policy.
+	for _, policy := range []implicitToolArgs{agentToolArgs, conversationToolArgs, standaloneToolArgs} {
+		require.True(t, objectToolEligible(fieldByName(doug, "nudge"), nil, policy), "%+v", policy)
+	}
 	// ...or when the type is LIFTABLE: a required Container arg renders as an
 	// address string and is lifted via the core Address API at dispatch time.
 	require.True(t, objectToolEligible(fieldByName(doug, "exec"), nil, conversationToolArgs))
@@ -277,6 +288,14 @@ func TestObjectMethodSchema(t *testing.T) {
 	require.NotContains(t, pokeSchema["properties"], "caller")
 	require.Contains(t, pokeSchema["properties"], "note")
 
+	// An Agent argument is never the model's to supply, required or optional,
+	// whether or not an agent will fill it.
+	for _, policy := range []implicitToolArgs{agentToolArgs, conversationToolArgs, standaloneToolArgs} {
+		nudgeSchema, err := objectMethodSchema(schema, fieldByName(doug, "nudge"), policy)
+		require.NoError(t, err)
+		require.NotContains(t, nudgeSchema["properties"], "caller", "%+v", policy)
+		require.Contains(t, nudgeSchema["properties"], "note")
+	}
 	// Served without a conversation, MCP has nothing to fill an LLM argument
 	// from, so an optional one is exposed by ID like any other object.
 	annotateSchema, err = objectMethodSchema(schema, fieldByName(doug, "annotate"), standaloneToolArgs)
@@ -733,6 +752,69 @@ func TestStandaloneToolsTreatLLMArgsAsUnsatisfiable(t *testing.T) {
 	// dispatching conversation is then a bug, not a silent null.
 	_, err = conversation.buildObjectMethodSelector(ctx, srv, runner.ObjectType(), annotateField, map[string]any{})
 	require.ErrorContains(t, err, "requires the current conversation")
+}
+
+// TestAgentToolArgsWithoutAgent covers Agent arguments where no agent loop
+// drives the tools: a synchronous conversation or a standalone server. An
+// Agent argument never reaches the model's tool schema. A method requiring one
+// is not offered; an optional one is passed as null.
+func TestAgentToolArgsWithoutAgent(t *testing.T) {
+	ctx := engine.ContextWithClientMetadata(t.Context(), &engine.ClientMetadata{
+		ClientID:  "agent-args-test",
+		SessionID: "agent-args-test",
+	})
+	cache, err := dagql.NewCache(ctx, "", nil, nil)
+	require.NoError(t, err)
+	ctx = dagql.ContextWithCache(ctx, cache)
+	srv := newAddressLiftTestServer(t)
+	srv.InstallObject(dagql.NewClass(srv, dagql.ClassOpts[*Agent]{Typed: &Agent{}}))
+	dagql.Fields[*liftTestRunner]{
+		dagql.Func("poke", func(_ context.Context, _ *liftTestRunner, _ struct {
+			Caller dagql.ID[*Agent]
+		}) (dagql.String, error) {
+			return "poked", nil
+		}),
+		dagql.Func("nudge", func(_ context.Context, _ *liftTestRunner, args struct {
+			Caller dagql.Optional[dagql.ID[*Agent]]
+			Note   dagql.String
+		}) (dagql.String, error) {
+			if !args.Caller.Valid {
+				return dagql.String("no agent: " + args.Note.String()), nil
+			}
+			return "agent", nil
+		}),
+	}.Install(srv)
+	var runner dagql.AnyObjectResult
+	require.NoError(t, srv.Select(ctx, srv.Root(), &runner, dagql.Selector{Field: "runner"}))
+	nudgeField := fieldByName(srv.Schema().Types["LiftTestRunner"], "nudge")
+	require.NotNil(t, nudgeField)
+
+	conversation := newMCP().WithTools(runner, srv.Schema(), nil)
+	for name, m := range map[string]*MCP{"synchronous": conversation, "standalone": conversation.Standalone()} {
+		t.Run(name, func(t *testing.T) {
+			toolsets, err := m.boundToolsets(ctx, srv)
+			require.NoError(t, err)
+			require.Len(t, toolsets, 1)
+			tools := map[string]LLMTool{}
+			for _, tool := range toolsets[0].tools {
+				tools[tool.Name] = tool
+			}
+			require.NotContains(t, tools, "poke", "a required Agent hides its method")
+			require.Contains(t, tools, "nudge")
+			props := tools["nudge"].Schema["properties"].(map[string]any)
+			require.NotContains(t, props, "caller", "an optional Agent is not the model's to supply")
+			require.Contains(t, props, "note")
+
+			sel, err := m.buildObjectMethodSelector(ctx, srv, runner.ObjectType(), nudgeField, map[string]any{"note": "hi"})
+			require.NoError(t, err)
+			var out dagql.String
+			require.NoError(t, srv.Select(ctx, runner, &out, sel))
+			require.Equal(t, "no agent: hi", out.String())
+
+			_, err = m.buildObjectMethodSelector(ctx, srv, runner.ObjectType(), nudgeField, map[string]any{"note": "hi", "caller": "forged"})
+			require.ErrorContains(t, err, "unknown arguments: caller")
+		})
+	}
 }
 
 func TestLazyToolReplacementDoesNotLoadSupersededObject(t *testing.T) {

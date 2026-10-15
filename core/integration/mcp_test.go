@@ -44,6 +44,19 @@ func (MCPSuite) TestModuleWithoutPrivilegedExposesModuleMethods(ctx context.Cont
 	require.NotContains(t, tools, "compact")
 	require.Contains(t, tools, "annotate")
 	require.Equal(t, "no conversation", callToolText(ctx, t, cli, "annotate", map[string]any{}))
+
+	// Nor is there an agent. A method requiring one is not offered either; an
+	// optional Agent argument is never in the tool's schema and receives null.
+	require.NotContains(t, tools, "wave")
+	require.Contains(t, tools, "nudge")
+	res, err := cli.ListTools(ctx, mcp.ListToolsRequest{})
+	require.NoError(t, err)
+	for _, tool := range res.Tools {
+		if tool.Name == "nudge" {
+			require.NotContains(t, tool.InputSchema.Properties, "me")
+		}
+	}
+	require.Equal(t, "no agent", callToolText(ctx, t, cli, "nudge", map[string]any{}))
 }
 
 func (MCPSuite) TestWithoutModuleAndWithoutPrivilegedFails(ctx context.Context, t *testctx.T) {
