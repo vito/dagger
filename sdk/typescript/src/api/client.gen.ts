@@ -13835,9 +13835,11 @@ export class LLM extends BaseClient {
   /**
    * Run expertise in list order, passing this conversation through each function, and record the entries in expertise. Retain existing contributions.
    *
-   * An entry already recorded under the same artifact address, with dimension keys, is refreshed in place: its contributions are replaced and its compatible tool state is preserved. Other recorded entries are untouched. With no expertise given, return the conversation unchanged.
+   * Entries already recorded under the same artifact address, with dimension keys, are refreshed in place: all of their contributions are cleared before any entry runs, they keep their record positions, and their compatible tool state is preserved. A change to a tool binding's version resets its state; removed bindings, changed identities, and incompatible state are errors. Other recorded entries are untouched. With no expertise given, return the conversation unchanged.
    *
-   * Every Agent argument of an entry receives the agent that owns this conversation. Without an owner, an optional Agent argument receives null, and an entry with a required one is skipped: it does not run and is not recorded.
+   * Every Agent argument of an entry receives the agent that owns this conversation. Without an owner, an optional Agent argument receives null, and an entry with a required one is skipped: it does not run, a new one is not recorded, and a recorded one keeps its record and contributions.
+   *
+   * To refresh a conversation's record, e.g. after its modules changed, look each recorded entry up again in the workspace and compose them all, falling back to the recorded entry where the workspace does not address it. In Dang, with `ws` bound to `llm.workspace.withUserConfig`: `llm.withWorkspace(ws).compose(expertise: llm.expertise.{{ id, artifact.{{ uri }} }}.map { e => let found = ws.artifacts.filterUri(uri: e.artifact.uri).asExpertise.{{ id }}.map { f => f.id }; node(id: found[0] ?? e.id).{{ ... on Expertise! }} })`. A module that fails to load in the workspace makes the lookup fail with its load error.
    *
    * When called while an entry runs (nested composition), the given entries' contributions belong to the running entry and are not recorded separately: rerunning it reproduces them, e.g. `base.compose(expertise: [...])`.
    * @param expertise The expertise to run. Each reference retains its source workspace.
@@ -14003,20 +14005,6 @@ export class LLM extends BaseClient {
     const response: Awaited<string> = await ctx.execute()
 
     return response
-  }
-
-  /**
-   * Refresh every recorded entry of this conversation. Keep this LLM's workspace.
-   *
-   * Find each recorded entry again by its artifact address, with dimension keys, in the bound workspace. If the bound workspace does not address an entry, rerun the recorded entry from its own source. A recorded module that fails to load there is an error.
-   *
-   * Entries run in record order, replacing their contributions and preserving compatible tool state. Contributions made outside an entry are unowned and retained. A change to a tool binding's version resets its state. Removed bindings, changed identities, and incompatible state are errors.
-   *
-   * Agent arguments receive the agent that owns this conversation, as with compose. With no recorded expertise, return the conversation unchanged. Fails if called while an entry runs.
-   */
-  recompose = (): LLM => {
-    const ctx = this._ctx.select("recompose")
-    return new LLM(ctx)
   }
 
   /**
