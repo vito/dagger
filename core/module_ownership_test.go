@@ -493,7 +493,7 @@ func TestBoundToolsOwnCompositionClassModule(t *testing.T) {
 			f.release(publisher)
 			require.NoError(t, loadable(consumer, f.dag, mod), "the LLM row keeps the class's module alive")
 
-			toolsets, err := held.Self().mcp.boundToolsets(f.dag)
+			toolsets, err := held.Self().mcp.boundToolsets(t.Context(), f.dag)
 			require.NoError(t, err)
 			require.Len(t, toolsets, 1)
 			var check LLMTool

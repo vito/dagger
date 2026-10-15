@@ -192,10 +192,15 @@ func TestObjectToolEligible(t *testing.T) {
 	// these required arguments do not disqualify the methods...
 	require.True(t, objectToolEligible(fieldByName(doug, "compact"), nil, conversationToolArgs))
 	require.True(t, objectToolEligible(fieldByName(doug, "annotate"), nil, conversationToolArgs))
-	require.True(t, objectToolEligible(fieldByName(doug, "poke"), nil, conversationToolArgs))
+	require.True(t, objectToolEligible(fieldByName(doug, "poke"), nil, agentToolArgs))
 
-	// ...unless the tools are served without a conversation to fill them from
-	// (dagger mcp). Then an LLM or Agent argument is unsatisfiable like any
+	// ...but an Agent only exists in an agent loop: a synchronous
+	// conversation (LLM.loop/step) hides a method requiring one rather than
+	// offering it and failing.
+	require.False(t, objectToolEligible(fieldByName(doug, "poke"), nil, conversationToolArgs))
+
+	// Served without a conversation to fill them from (dagger mcp), an LLM or
+	// Agent argument is unsatisfiable like any
 	// other object argument: a required one disqualifies the method, an
 	// optional one is left to the caller.
 	require.False(t, objectToolEligible(fieldByName(doug, "compact"), nil, standaloneToolArgs))
@@ -267,7 +272,7 @@ func TestObjectMethodSchema(t *testing.T) {
 	annotateSchema, err := objectMethodSchema(schema, fieldByName(doug, "annotate"), conversationToolArgs)
 	require.NoError(t, err)
 	require.NotContains(t, annotateSchema["properties"], "llm")
-	pokeSchema, err := objectMethodSchema(schema, fieldByName(doug, "poke"), conversationToolArgs)
+	pokeSchema, err := objectMethodSchema(schema, fieldByName(doug, "poke"), agentToolArgs)
 	require.NoError(t, err)
 	require.NotContains(t, pokeSchema["properties"], "caller")
 	require.Contains(t, pokeSchema["properties"], "note")
@@ -696,7 +701,7 @@ func TestStandaloneToolsTreatLLMArgsAsUnsatisfiable(t *testing.T) {
 
 	toolNames := func(t *testing.T, m *MCP) []string {
 		t.Helper()
-		toolsets, err := m.boundToolsets(srv)
+		toolsets, err := m.boundToolsets(ctx, srv)
 		require.NoError(t, err)
 		require.Len(t, toolsets, 1)
 		names := make([]string, 0, len(toolsets[0].tools))
@@ -770,7 +775,7 @@ func TestLazyToolReplacementDoesNotLoadSupersededObject(t *testing.T) {
 				require.Len(t, mcp.boundTools, 1)
 				require.Equal(t, "owner-B", mcp.boundTools[0].Owner)
 				require.Equal(t, 2, mcp.boundTools[0].Version)
-				toolsets, err := mcp.boundToolsets(srv)
+				toolsets, err := mcp.boundToolsets(t.Context(), srv)
 				require.NoError(t, err)
 				require.Empty(t, calls, "listing must not load either object")
 				require.Len(t, toolsets, 1)
@@ -815,7 +820,7 @@ func TestBoundToolsUseTheirDefiningSchemaAuthoritatively(t *testing.T) {
 
 	assertDefiningTools := func(t *testing.T, mcp *MCP) []LLMTool {
 		t.Helper()
-		toolsets, err := mcp.boundToolsets(current)
+		toolsets, err := mcp.boundToolsets(t.Context(), current)
 		require.NoError(t, err)
 		require.Len(t, toolsets, 1)
 		require.Equal(t, "LiftTestRunner", toolsets[0].typeName)
@@ -947,7 +952,7 @@ func TestBoundToolDescribesObjectOutsideCurrentSchema(t *testing.T) {
 
 	var runner dagql.AnyObjectResult
 	require.NoError(t, defining.Select(ctx, defining.Root(), &runner, dagql.Selector{Field: "runner"}))
-	toolsets, err := newMCP().WithTools(runner, defining.Schema(), nil).boundToolsets(current)
+	toolsets, err := newMCP().WithTools(runner, defining.Schema(), nil).boundToolsets(ctx, current)
 	require.NoError(t, err)
 	require.Len(t, toolsets, 1)
 	for _, tool := range toolsets[0].tools {
@@ -1336,7 +1341,7 @@ func TestObjectToolPurity(t *testing.T) {
 	require.True(t, ok)
 
 	m := newMCP().WithLazyTools(nil, objType, srv.Schema(), nil)
-	toolsets, err := m.boundToolsets(srv)
+	toolsets, err := m.boundToolsets(t.Context(), srv)
 	require.NoError(t, err)
 	require.Len(t, toolsets, 1)
 	pure := map[string]bool{}

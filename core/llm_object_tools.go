@@ -351,8 +351,8 @@ func (m *MCP) bindWorkspaceModuleTools(ctx context.Context) (*MCP, error) {
 // builtin of the same name. When a tool name is contributed by more than one
 // bound object, ALL tools of every object involved are served under namespaced
 // names instead (see namespacedTypes) — nothing is silently shadowed.
-func (m *MCP) loadObjectTools(_ context.Context, srv *dagql.Server, allTools *LLMToolSet) error {
-	toolsets, err := m.boundToolsets(srv)
+func (m *MCP) loadObjectTools(ctx context.Context, srv *dagql.Server, allTools *LLMToolSet) error {
+	toolsets, err := m.boundToolsets(ctx, srv)
 	if err != nil {
 		return err
 	}
@@ -375,8 +375,9 @@ type bindingToolset struct {
 	tools    []LLMTool
 }
 
-// boundToolsets generates each binding's tools, in binding order.
-func (m *MCP) boundToolsets(srv *dagql.Server) ([]bindingToolset, error) {
+// boundToolsets generates each binding's tools, in binding order. Which tools
+// exist depends on ctx: methods requiring an Agent need an agent loop.
+func (m *MCP) boundToolsets(ctx context.Context, srv *dagql.Server) ([]bindingToolset, error) {
 	m.mu.Lock()
 	bindings := slices.Clone(m.boundTools)
 	m.mu.Unlock()
@@ -385,7 +386,7 @@ func (m *MCP) boundToolsets(srv *dagql.Server) ([]bindingToolset, error) {
 	}
 	toolsets := make([]bindingToolset, 0, len(bindings))
 	for _, b := range bindings {
-		tools, err := m.toolsForBoundObject(srv, b)
+		tools, err := m.toolsForBoundObject(ctx, srv, b)
 		if err != nil {
 			return nil, err
 		}
@@ -455,7 +456,7 @@ func (m *MCP) ToolNameCollisions(ctx context.Context) (map[string][]string, erro
 	if err != nil {
 		return nil, err
 	}
-	toolsets, err := m.boundToolsets(srv)
+	toolsets, err := m.boundToolsets(ctx, srv)
 	if err != nil {
 		return nil, err
 	}
@@ -478,7 +479,7 @@ func (m *MCP) ToolNameCollisions(ctx context.Context) (map[string][]string, erro
 
 // toolsForBoundObject generates the tools for a single bound object: one per
 // eligible field of its schema type.
-func (m *MCP) toolsForBoundObject(srv *dagql.Server, b boundTool) ([]LLMTool, error) {
+func (m *MCP) toolsForBoundObject(ctx context.Context, srv *dagql.Server, b boundTool) ([]LLMTool, error) {
 	typeName := b.typeName()
 	toolSchema := b.definingSchema
 	if toolSchema == nil {
@@ -488,7 +489,7 @@ func (m *MCP) toolsForBoundObject(srv *dagql.Server, b boundTool) ([]LLMTool, er
 	if def == nil || (def.Kind != ast.Object && def.Kind != ast.Interface) {
 		return nil, fmt.Errorf("bound object type %q is not an object in its defining schema", typeName)
 	}
-	implicit := m.implicitArgs()
+	implicit := m.implicitArgs(ctx)
 	var tools []LLMTool
 	for _, field := range def.Fields {
 		if !objectToolEligible(field, b.Except, implicit) {
@@ -772,16 +773,22 @@ func liftHint(typeName string) string {
 // satisfy: a required one disqualifies its method (objectToolEligible), and an
 // optional one is exposed by ID like any other object, so it can at least be
 // left unset. Agent is filled from the agent loop dispatching the call (see
-// AgentFromContext), which likewise only exists under a conversation, so it
-// follows the same policy as LLM.
+// AgentFromContext), which exists only when an agent drives the conversation,
+// not under a synchronous LLM.loop/step or a standalone server: without one, a
+// method requiring an Agent is hidden rather than offered and then failing.
 type implicitToolArgs struct {
-	// llm reports whether a conversation is available to fill LLM and Agent
-	// arguments.
+	// llm reports whether a conversation is available to fill LLM arguments.
 	llm bool
+	// agent reports whether an agent loop is available to fill Agent
+	// arguments.
+	agent bool
 }
 
 var (
-	// conversationToolArgs is the policy of tools driven by an LLM.
+	// agentToolArgs is the policy of tools driven by an agent loop.
+	agentToolArgs = implicitToolArgs{llm: true, agent: true}
+	// conversationToolArgs is the policy of tools driven by a synchronous
+	// conversation (LLM.loop/step), with no agent.
 	conversationToolArgs = implicitToolArgs{llm: true}
 	// standaloneToolArgs is the policy of tools served without a conversation.
 	standaloneToolArgs = implicitToolArgs{}
@@ -790,15 +797,19 @@ var (
 // supplies reports whether MCP fills arg itself under this policy.
 func (p implicitToolArgs) supplies(arg *ast.ArgumentDefinition) bool {
 	return isExpectedTypeArg(arg, workspaceTypeName) ||
-		(p.llm && (isExpectedTypeArg(arg, llmTypeName) ||
-			isExpectedTypeArg(arg, agentTypeName)))
+		(p.llm && isExpectedTypeArg(arg, llmTypeName)) ||
+		(p.agent && isExpectedTypeArg(arg, agentTypeName))
 }
 
 // implicitArgs returns the policy this MCP serves tools under: standalone when
-// no conversation will ever drive it (see MCP.Standalone), else conversation.
-func (m *MCP) implicitArgs() implicitToolArgs {
+// no conversation will ever drive it (see MCP.Standalone), agent when ctx
+// descends from an agent loop, else a synchronous conversation.
+func (m *MCP) implicitArgs(ctx context.Context) implicitToolArgs {
 	if m == nil || m.standalone {
 		return standaloneToolArgs
+	}
+	if _, ok := AgentFromContext(ctx); ok {
+		return agentToolArgs
 	}
 	return conversationToolArgs
 }
@@ -1054,9 +1065,10 @@ func (m *MCP) implicitToolInput(ctx context.Context, astField *ast.FieldDefiniti
 	}
 
 	var obj dagql.IDable
+	implicit := m.implicitArgs(ctx)
 	switch {
 	case isExpectedTypeArg(astArg, llmTypeName):
-		if !m.implicitArgs().llm {
+		if !implicit.llm {
 			return nil, false, nil
 		}
 		llm := m.currentLLM()
@@ -1065,12 +1077,12 @@ func (m *MCP) implicitToolInput(ctx context.Context, astField *ast.FieldDefiniti
 		}
 		obj = llm
 	case isExpectedTypeArg(astArg, agentTypeName):
-		if !m.implicitArgs().llm {
+		if !implicit.agent {
 			return nil, false, nil
 		}
 		agent, ok := AgentFromContext(ctx)
 		if !ok {
-			return nil, true, errors.New("function requires the calling agent; invoke it from an agent loop (LLM.spawn) — synchronous loop support is planned")
+			return nil, true, errors.New("function requires the calling agent; invoke it from an agent loop (LLM.spawn)")
 		}
 		obj = agent
 	default:

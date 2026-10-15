@@ -75,9 +75,8 @@ func composingAgentHandle(ctx context.Context) string {
 //
 // It is only ever set by the agent loop (AgentRuntime.loop), on the context
 // every Step — and therefore every tool dispatch within it — descends from.
-// A synchronous LLM.loop or a direct function call never carries an agent,
-// so such calls fail loudly rather than silently receiving nothing (see
-// ModuleFunction.loadAgentArg).
+// A synchronous LLM.loop or a direct function call never carries an agent, so
+// tools requiring one are not offered there (see implicitToolArgs).
 func AgentToContext(ctx context.Context, agent dagql.ObjectResult[*Agent]) context.Context {
 	return context.WithValue(ctx, agentContextKey{}, agent)
 }

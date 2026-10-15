@@ -93,9 +93,11 @@ func (AgentRuntimeSuite) TestAgentArgInjection(ctx context.Context, t *testctx.T
 }
 
 // TestAgentArgHiddenFromToolSchema locks in that an Agent! argument never
-// reaches the model: the rendered toolset documents poke with its note
-// parameter, but no caller parameter — MCP supplies it during object-tool
-// dispatch alongside the Workspace and LLM arguments it owns.
+// reaches the model, and that a method requiring one is offered only where an
+// agent can supply it. Inside an agent loop, TestAgentArgInjection's recorded
+// call passes only the note: MCP fills the caller during object-tool dispatch.
+// The synchronous toolset rendered here has no agent, so poke is hidden
+// entirely rather than offered and then failing.
 func (AgentRuntimeSuite) TestAgentArgHiddenFromToolSchema(ctx context.Context, t *testctx.T) {
 	c := connect(ctx, t)
 	pokerID := servePokerModule(ctx, t, c)
@@ -115,15 +117,14 @@ func (AgentRuntimeSuite) TestAgentArgHiddenFromToolSchema(ctx context.Context, t
 	require.NoError(t, err)
 
 	doc := res.LLM.WithTools.Tools
-	require.Contains(t, doc, "## poke")
-	require.Contains(t, doc, `"note"`)
+	require.NotContains(t, doc, "## poke")
 	require.NotContains(t, doc, `"caller"`)
 }
 
 // TestAgentArgRequiresAgentLoop covers the no-agent behavior without weakening
 // the module schema. A direct GraphQL call still has to supply the declared
 // Agent! argument; only the MCP object-tool adapter fills it. A synchronous
-// LLM tool call has no agent to pass and returns a clear tool error.
+// LLM loop has no agent to pass, so the tool is not offered at all.
 func (AgentRuntimeSuite) TestAgentArgRequiresAgentLoop(ctx context.Context, t *testctx.T) {
 	c := connect(ctx, t)
 	pokerID := servePokerModule(ctx, t, c)
@@ -138,9 +139,9 @@ func (AgentRuntimeSuite) TestAgentArgRequiresAgentLoop(ctx context.Context, t *t
 	})
 
 	t.Run("synchronous loop", func(ctx context.Context, t *testctx.T) {
-		// The tool call fails (no agent in context under a sync loop); the
-		// error becomes the tool's errored result and the recorded turn
-		// still closes, so the message is asserted from the transcript.
+		// The tool is hidden under a sync loop, so a call to it is a call to
+		// an unavailable tool: the error becomes the tool's errored result and
+		// the recorded turn still closes.
 		model := cannedRecordingModel(ctx, t, c, core.NewQuery(c).LLM().
 			WithPrompt(pokePrompt).
 			WithResponse([]core.LLMContentBlockInput{
@@ -170,7 +171,8 @@ func (AgentRuntimeSuite) TestAgentArgRequiresAgentLoop(ctx context.Context, t *t
 			"prompt": pokePrompt,
 		}})
 		require.NoError(t, err)
-		require.Contains(t, res.LLM.WithTools.WithPrompt.Loop.Transcript,
-			"function requires the calling agent")
+		transcript := res.LLM.WithTools.WithPrompt.Loop.Transcript
+		require.Contains(t, transcript, `tool "poke" is not available`)
+		require.NotContains(t, transcript, "function requires the calling agent")
 	})
 }
