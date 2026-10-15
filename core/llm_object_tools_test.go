@@ -3,6 +3,8 @@ package core
 import (
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -24,6 +26,7 @@ func objectToolsTestSchema(t *testing.T) *ast.Schema {
 		Name: "test.graphql",
 		Input: `
 directive @expectedType(name: String!) on ARGUMENT_DEFINITION
+directive @internal on ARGUMENT_DEFINITION
 
 type Query { doug: Doug! }
 
@@ -152,6 +155,13 @@ type Doug {
   checkAll(targets: [ID!]! @expectedType(name: "Artifacts")): String!
 
   old: String! @deprecated(reason: "gone")
+
+  "Tag something — the engine fills its internal arguments."
+  tag(
+    label: String!,
+    _expertiseOwner: String @internal,
+    _composingAgent: String @internal,
+  ): Doug!
 }
 `,
 	})
@@ -295,6 +305,15 @@ func TestObjectMethodSchema(t *testing.T) {
 		require.NoError(t, err)
 		require.NotContains(t, nudgeSchema["properties"], "caller", "%+v", policy)
 		require.Contains(t, nudgeSchema["properties"], "note")
+	}
+	// Engine-internal arguments (an expertise entry's owner, the composing
+	// agent) are filled by the engine and skipped at dispatch, so no policy
+	// shows them to the model.
+	for _, policy := range []implicitToolArgs{agentToolArgs, conversationToolArgs, standaloneToolArgs} {
+		require.True(t, objectToolEligible(fieldByName(doug, "tag"), nil, policy))
+		tagSchema, err := objectMethodSchema(schema, fieldByName(doug, "tag"), policy)
+		require.NoError(t, err)
+		require.Equal(t, []string{"label"}, slices.Collect(maps.Keys(tagSchema["properties"].(map[string]any))), "%+v", policy)
 	}
 	// Served without a conversation, MCP has nothing to fill an LLM argument
 	// from, so an optional one is exposed by ID like any other object.

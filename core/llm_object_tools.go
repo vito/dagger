@@ -553,7 +553,7 @@ func objectToolEligible(field *ast.FieldDefinition, except []string, implicit im
 		return false
 	}
 	for _, arg := range field.Arguments {
-		if implicit.supplies(arg) {
+		if implicit.supplies(arg) || isInternalToolArg(arg) {
 			// MCP supplies this argument; the model does not need an object handle.
 			continue
 		}
@@ -813,6 +813,13 @@ func toolArgRequired(arg *ast.ArgumentDefinition) bool {
 	return arg.Type.NonNull && arg.DefaultValue == nil
 }
 
+// isInternalToolArg reports whether an argument is engine-internal (e.g.
+// _expertiseOwner, _composingAgent): the engine fills it, dispatch skips it
+// (see buildObjectMethodSelector), so it never belongs in a tool schema.
+func isInternalToolArg(arg *ast.ArgumentDefinition) bool {
+	return arg.Directives.ForName("internal") != nil
+}
+
 // implicitArgs returns the policy this MCP serves tools under: standalone when
 // no conversation will ever drive it (see MCP.Standalone), owned when the
 // conversation has an owning agent, else an unowned conversation.
@@ -845,7 +852,7 @@ func objectMethodSchema(schema *ast.Schema, field *ast.FieldDefinition, implicit
 	properties := map[string]any{}
 	var required []string
 	for _, arg := range field.Arguments {
-		if implicit.supplies(arg) {
+		if implicit.supplies(arg) || isInternalToolArg(arg) {
 			continue
 		}
 		argSchema, err := argTypeToJSONSchema(schema, arg.Type)
