@@ -18,6 +18,39 @@ defmodule Dagger.Agent do
   @type t() :: %__MODULE__{}
 
   @doc """
+  Compose expertise into a conversation as this agent. Return the new conversation; the agent itself is unchanged. Apply the result by returning it from a tool, which continues the turn on it, or with reseed.
+
+  Run the given entries in list order and record them. An entry already recorded under the same artifact address, with dimension keys, is refreshed in place: its contributions are replaced and its compatible tool state is preserved. Other recorded entries are untouched.
+
+  Every Agent argument of an entry, required or optional, receives this agent. The conversation must be unowned or owned by this agent, and the result is owned by it.
+
+  While an entry runs, the entries' contributions belong to that outer entry and are not recorded separately: this is how an entry composes other expertise, e.g. me.compose(conversation: base, expertise: [...]). Rerunning the outer entry reproduces them.
+
+  > #### Experimental {: .warning}
+  >
+  > "Agent APIs are likely to change."
+  """
+  @spec compose(t(), [String.t()], [{:conversation, Dagger.LLM.t() | nil}]) :: Dagger.LLM.t()
+  def compose(%__MODULE__{} = agent, expertise, optional_args \\ []) do
+    query_builder =
+      agent.query_builder
+      |> QB.select("compose")
+      |> QB.put_arg("expertise", expertise)
+      |> QB.maybe_put_arg(
+        "conversation",
+        if(optional_args[:conversation],
+          do: Dagger.ID.id!(optional_args[:conversation]),
+          else: nil
+        )
+      )
+
+    %Dagger.LLM{
+      query_builder: query_builder,
+      client: agent.client
+    }
+  end
+
+  @doc """
   Why the loop failed, for a FAILED agent; empty otherwise.
 
   The snapshot holds the completed prefix — send or resume retries from it.
@@ -197,6 +230,38 @@ defmodule Dagger.Agent do
          client: agent.client
        }}
     end
+  end
+
+  @doc """
+  Refresh every recorded entry of a conversation as this agent. Return the new conversation; the agent itself is unchanged. Apply the result by returning it from a tool, which continues the turn on it, or with reseed.
+
+  Find each recorded entry again by its artifact address, with dimension keys, in the conversation's bound workspace. If that workspace does not address an entry, rerun the recorded entry from its own source. A recorded module that fails to load there is an error.
+
+  Entries run in record order, replacing their contributions and preserving compatible tool state. Contributions made outside an entry are unowned and retained. A change to a tool binding's version resets its state. Removed bindings, changed identities, and incompatible state are errors.
+
+  Every Agent argument of an entry receives this agent. Fails if the conversation has no recorded expertise, is owned by another agent, or if called while an entry runs.
+
+  > #### Experimental {: .warning}
+  >
+  > "Agent APIs are likely to change."
+  """
+  @spec recompose(t(), [{:conversation, Dagger.LLM.t() | nil}]) :: Dagger.LLM.t()
+  def recompose(%__MODULE__{} = agent, optional_args \\ []) do
+    query_builder =
+      agent.query_builder
+      |> QB.select("recompose")
+      |> QB.maybe_put_arg(
+        "conversation",
+        if(optional_args[:conversation],
+          do: Dagger.ID.id!(optional_args[:conversation]),
+          else: nil
+        )
+      )
+
+    %Dagger.LLM{
+      query_builder: query_builder,
+      client: agent.client
+    }
   end
 
   @doc """

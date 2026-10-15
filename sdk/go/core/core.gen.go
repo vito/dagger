@@ -484,6 +484,37 @@ func (r *Agent) WithGraphQLQuery(q *querybuilder.Selection) *Agent {
 	}
 }
 
+// AgentComposeOpts contains options for Agent.Compose
+type AgentComposeOpts struct {
+	// The conversation to compose into. Defaults to the agent's snapshot.
+	Conversation *LLM
+}
+
+// Compose expertise into a conversation as this agent. Return the new conversation; the agent itself is unchanged. Apply the result by returning it from a tool, which continues the turn on it, or with reseed.
+//
+// Run the given entries in list order and record them. An entry already recorded under the same artifact address, with dimension keys, is refreshed in place: its contributions are replaced and its compatible tool state is preserved. Other recorded entries are untouched.
+//
+// Every Agent argument of an entry, required or optional, receives this agent. The conversation must be unowned or owned by this agent, and the result is owned by it.
+//
+// While an entry runs, the entries' contributions belong to that outer entry and are not recorded separately: this is how an entry composes other expertise, e.g. me.compose(conversation: base, expertise: [...]). Rerunning the outer entry reproduces them.
+//
+// Experimental: Agent APIs are likely to change.
+func (r *Agent) Compose(expertise []*Expertise, opts ...AgentComposeOpts) *LLM {
+	q := r.query.Select("compose")
+	for i := len(opts) - 1; i >= 0; i-- {
+		// `conversation` optional argument
+		if !querybuilder.IsZeroValue(opts[i].Conversation) {
+			q = q.Arg("conversation", opts[i].Conversation)
+		}
+	}
+	q = q.Arg("expertise", expertise)
+
+	return &LLM{
+		query:     q,
+		refetchID: r.refetchID,
+	}
+}
+
 // Why the loop failed, for a FAILED agent; empty otherwise.
 //
 // The snapshot holds the completed prefix — send or resume retries from it.
@@ -683,6 +714,36 @@ func (r *Agent) Pause(ctx context.Context, opts ...AgentPauseOpts) (*Agent, erro
 	return &Agent{
 		query: selectNode(q.Root(), id, "Agent"),
 	}, nil
+}
+
+// AgentRecomposeOpts contains options for Agent.Recompose
+type AgentRecomposeOpts struct {
+	// The conversation to recompose. Defaults to the agent's snapshot.
+	Conversation *LLM
+}
+
+// Refresh every recorded entry of a conversation as this agent. Return the new conversation; the agent itself is unchanged. Apply the result by returning it from a tool, which continues the turn on it, or with reseed.
+//
+// Find each recorded entry again by its artifact address, with dimension keys, in the conversation's bound workspace. If that workspace does not address an entry, rerun the recorded entry from its own source. A recorded module that fails to load there is an error.
+//
+// Entries run in record order, replacing their contributions and preserving compatible tool state. Contributions made outside an entry are unowned and retained. A change to a tool binding's version resets its state. Removed bindings, changed identities, and incompatible state are errors.
+//
+// Every Agent argument of an entry receives this agent. Fails if the conversation has no recorded expertise, is owned by another agent, or if called while an entry runs.
+//
+// Experimental: Agent APIs are likely to change.
+func (r *Agent) Recompose(opts ...AgentRecomposeOpts) *LLM {
+	q := r.query.Select("recompose")
+	for i := len(opts) - 1; i >= 0; i-- {
+		// `conversation` optional argument
+		if !querybuilder.IsZeroValue(opts[i].Conversation) {
+			q = q.Arg("conversation", opts[i].Conversation)
+		}
+	}
+
+	return &LLM{
+		query:     q,
+		refetchID: r.refetchID,
+	}
 }
 
 // Replace this instance's committed conversation with the given one, keeping the entry: identity, mailbox, and lifecycle state are untouched. A paused suspended turn is abandoned and its consumed messages are resolved before replacement.
@@ -14319,36 +14380,6 @@ func (r *LLM) ReasoningEffort(ctx context.Context) (string, error) {
 
 	q = q.Bind(&response)
 	return response, q.Execute(ctx)
-}
-
-// LLMRecomposeOpts contains options for LLM.Recompose
-type LLMRecomposeOpts struct {
-	// Expertise to add, or refresh in place if already recorded. Each reference retains its source workspace.
-	Expertise []*Expertise
-}
-
-// Refresh this conversation's composition, then add expertise. Find every recorded entry again by its artifact address, with dimension keys, in the bound workspace. If the bound workspace does not address an entry, rerun the recorded entry from its own source. Then add each given entry: one already recorded under the same address is refreshed in place, others are recorded after the existing entries.
-//
-// Entries run in record order, replacing their contributions and preserving compatible tool state. Contributions made transitively while an entry runs belong to that entry, including nested composition. Contributions made outside an entry are unowned and retained. Keep this LLM's workspace.
-//
-// A required Agent! argument receives the agent that owns the conversation. A conversation without an owning agent can be recomposed only with entries that do not require one.
-//
-// A change to a tool binding's version resets its state. Removed bindings, changed identities, and incompatible state are errors.
-//
-// With no recorded entries and no expertise given, return the conversation unchanged. Called while an entry runs, run only the given entries, as part of that entry.
-func (r *LLM) Recompose(opts ...LLMRecomposeOpts) *LLM {
-	q := r.query.Select("recompose")
-	for i := len(opts) - 1; i >= 0; i-- {
-		// `expertise` optional argument
-		if !querybuilder.IsZeroValue(opts[i].Expertise) {
-			q = q.Arg("expertise", opts[i].Expertise)
-		}
-	}
-
-	return &LLM{
-		query:     q,
-		refetchID: r.refetchID,
-	}
 }
 
 // The skills visible to the model, exactly as the ListSkills tool serves them: engine-embedded skills, skills installed with withSkills, and skills discovered in the workspace.

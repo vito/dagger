@@ -954,6 +954,49 @@ class Agent(Type):
     conversation itself remains observable at any time as an immutable LLM
     value."""
 
+    def compose(
+        self,
+        expertise: list["Expertise"],
+        *,
+        conversation: "LLM | None" = None,
+    ) -> "LLM":
+        """Compose expertise into a conversation as this agent. Return the new
+        conversation; the agent itself is unchanged. Apply the result by
+        returning it from a tool, which continues the turn on it, or with
+        reseed.
+
+        Run the given entries in list order and record them. An entry already
+        recorded under the same artifact address, with dimension keys, is
+        refreshed in place: its contributions are replaced and its compatible
+        tool state is preserved. Other recorded entries are untouched.
+
+        Every Agent argument of an entry, required or optional, receives this
+        agent. The conversation must be unowned or owned by this agent, and
+        the result is owned by it.
+
+        While an entry runs, the entries' contributions belong to that outer
+        entry and are not recorded separately: this is how an entry composes
+        other expertise, e.g. me.compose(conversation: base, expertise:
+        [...]). Rerunning the outer entry reproduces them.
+
+        .. caution::
+            Experimental: Agent APIs are likely to change.
+
+        Parameters
+        ----------
+        expertise:
+            The expertise to run. Each reference retains its source workspace.
+        conversation:
+            The conversation to compose into. Defaults to the agent's
+            snapshot.
+        """
+        _args = [
+            Arg("expertise", expertise),
+            Arg("conversation", conversation, None),
+        ]
+        _ctx = self._select("compose", _args)
+        return LLM(_ctx)
+
     async def error(self) -> str:
         """Why the loop failed, for a FAILED agent; empty otherwise.
 
@@ -1191,6 +1234,41 @@ class Agent(Type):
             Arg("interrupt", interrupt, False),
         ]
         return await self._ctx.execute_sync(self, "pause", _args)
+
+    def recompose(self, *, conversation: "LLM | None" = None) -> "LLM":
+        """Refresh every recorded entry of a conversation as this agent. Return
+        the new conversation; the agent itself is unchanged. Apply the result
+        by returning it from a tool, which continues the turn on it, or with
+        reseed.
+
+        Find each recorded entry again by its artifact address, with dimension
+        keys, in the conversation's bound workspace. If that workspace does
+        not address an entry, rerun the recorded entry from its own source. A
+        recorded module that fails to load there is an error.
+
+        Entries run in record order, replacing their contributions and
+        preserving compatible tool state. Contributions made outside an entry
+        are unowned and retained. A change to a tool binding's version resets
+        its state. Removed bindings, changed identities, and incompatible
+        state are errors.
+
+        Every Agent argument of an entry receives this agent. Fails if the
+        conversation has no recorded expertise, is owned by another agent, or
+        if called while an entry runs.
+
+        .. caution::
+            Experimental: Agent APIs are likely to change.
+
+        Parameters
+        ----------
+        conversation:
+            The conversation to recompose. Defaults to the agent's snapshot.
+        """
+        _args = [
+            Arg("conversation", conversation, None),
+        ]
+        _ctx = self._select("recompose", _args)
+        return LLM(_ctx)
 
     async def reseed(self, conversation: "LLM") -> Self:
         """Replace this instance's committed conversation with the given one,
@@ -12815,47 +12893,6 @@ class LLM(Type):
         _args: list[Arg] = []
         _ctx = self._select("reasoningEffort", _args)
         return await _ctx.execute(str)
-
-    def recompose(
-        self,
-        *,
-        expertise: list[Expertise] | None = None,
-    ) -> Self:
-        """Refresh this conversation's composition, then add expertise. Find
-        every recorded entry again by its artifact address, with dimension
-        keys, in the bound workspace. If the bound workspace does not address
-        an entry, rerun the recorded entry from its own source. Then add each
-        given entry: one already recorded under the same address is refreshed
-        in place, others are recorded after the existing entries.
-
-        Entries run in record order, replacing their contributions and
-        preserving compatible tool state. Contributions made transitively
-        while an entry runs belong to that entry, including nested
-        composition. Contributions made outside an entry are unowned and
-        retained. Keep this LLM's workspace.
-
-        A required Agent! argument receives the agent that owns the
-        conversation. A conversation without an owning agent can be recomposed
-        only with entries that do not require one.
-
-        A change to a tool binding's version resets its state. Removed
-        bindings, changed identities, and incompatible state are errors.
-
-        With no recorded entries and no expertise given, return the
-        conversation unchanged. Called while an entry runs, run only the given
-        entries, as part of that entry.
-
-        Parameters
-        ----------
-        expertise:
-            Expertise to add, or refresh in place if already recorded. Each
-            reference retains its source workspace.
-        """
-        _args = [
-            Arg("expertise", [] if expertise is None else expertise, []),
-        ]
-        _ctx = self._select("recompose", _args)
-        return LLM(_ctx)
 
     async def skills(self) -> list["LLMSkill"]:
         """The skills visible to the model, exactly as the ListSkills tool serves

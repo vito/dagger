@@ -649,6 +649,18 @@ pub struct AgentStopOpts {
     #[builder(setter(into, strip_option), default)]
     pub kill: Option<bool>,
 }
+#[derive(Builder, Debug, PartialEq)]
+pub struct AgentComposeOpts {
+    /// The conversation to compose into. Defaults to the agent's snapshot.
+    #[builder(setter(into, strip_option), default)]
+    pub conversation: Option<Id>,
+}
+#[derive(Builder, Debug, PartialEq)]
+pub struct AgentRecomposeOpts {
+    /// The conversation to recompose. Defaults to the agent's snapshot.
+    #[builder(setter(into, strip_option), default)]
+    pub conversation: Option<Id>,
+}
 impl IntoID<Id> for Agent {
     fn into_id(
         self,
@@ -1017,6 +1029,80 @@ impl Agent {
                 .inline_fragment("Agent"),
             graphql_client: self.graphql_client.clone(),
         })
+    }
+    /// Compose expertise into a conversation as this agent. Return the new conversation; the agent itself is unchanged. Apply the result by returning it from a tool, which continues the turn on it, or with reseed.
+    /// Run the given entries in list order and record them. An entry already recorded under the same artifact address, with dimension keys, is refreshed in place: its contributions are replaced and its compatible tool state is preserved. Other recorded entries are untouched.
+    /// Every Agent argument of an entry, required or optional, receives this agent. The conversation must be unowned or owned by this agent, and the result is owned by it.
+    /// While an entry runs, the entries' contributions belong to that outer entry and are not recorded separately: this is how an entry composes other expertise, e.g. me.compose(conversation: base, expertise: [...]). Rerunning the outer entry reproduces them.
+    ///
+    /// # Arguments
+    ///
+    /// * `expertise` - The expertise to run. Each reference retains its source workspace.
+    /// * `opt` - optional argument, see inner type for documentation, use <func>_opts to use
+    pub fn compose(&self, expertise: Vec<Id>) -> Llm {
+        let mut query = self.selection.select("compose");
+        query = query.arg("expertise", expertise);
+        Llm {
+            proc: self.proc.clone(),
+            selection: query,
+            graphql_client: self.graphql_client.clone(),
+        }
+    }
+    /// Compose expertise into a conversation as this agent. Return the new conversation; the agent itself is unchanged. Apply the result by returning it from a tool, which continues the turn on it, or with reseed.
+    /// Run the given entries in list order and record them. An entry already recorded under the same artifact address, with dimension keys, is refreshed in place: its contributions are replaced and its compatible tool state is preserved. Other recorded entries are untouched.
+    /// Every Agent argument of an entry, required or optional, receives this agent. The conversation must be unowned or owned by this agent, and the result is owned by it.
+    /// While an entry runs, the entries' contributions belong to that outer entry and are not recorded separately: this is how an entry composes other expertise, e.g. me.compose(conversation: base, expertise: [...]). Rerunning the outer entry reproduces them.
+    ///
+    /// # Arguments
+    ///
+    /// * `expertise` - The expertise to run. Each reference retains its source workspace.
+    /// * `opt` - optional argument, see inner type for documentation, use <func>_opts to use
+    pub fn compose_opts(&self, expertise: Vec<Id>, opts: AgentComposeOpts) -> Llm {
+        let mut query = self.selection.select("compose");
+        query = query.arg("expertise", expertise);
+        if let Some(conversation) = opts.conversation {
+            query = query.arg("conversation", conversation);
+        }
+        Llm {
+            proc: self.proc.clone(),
+            selection: query,
+            graphql_client: self.graphql_client.clone(),
+        }
+    }
+    /// Refresh every recorded entry of a conversation as this agent. Return the new conversation; the agent itself is unchanged. Apply the result by returning it from a tool, which continues the turn on it, or with reseed.
+    /// Find each recorded entry again by its artifact address, with dimension keys, in the conversation's bound workspace. If that workspace does not address an entry, rerun the recorded entry from its own source. A recorded module that fails to load there is an error.
+    /// Entries run in record order, replacing their contributions and preserving compatible tool state. Contributions made outside an entry are unowned and retained. A change to a tool binding's version resets its state. Removed bindings, changed identities, and incompatible state are errors.
+    /// Every Agent argument of an entry receives this agent. Fails if the conversation has no recorded expertise, is owned by another agent, or if called while an entry runs.
+    ///
+    /// # Arguments
+    ///
+    /// * `opt` - optional argument, see inner type for documentation, use <func>_opts to use
+    pub fn recompose(&self) -> Llm {
+        let query = self.selection.select("recompose");
+        Llm {
+            proc: self.proc.clone(),
+            selection: query,
+            graphql_client: self.graphql_client.clone(),
+        }
+    }
+    /// Refresh every recorded entry of a conversation as this agent. Return the new conversation; the agent itself is unchanged. Apply the result by returning it from a tool, which continues the turn on it, or with reseed.
+    /// Find each recorded entry again by its artifact address, with dimension keys, in the conversation's bound workspace. If that workspace does not address an entry, rerun the recorded entry from its own source. A recorded module that fails to load there is an error.
+    /// Entries run in record order, replacing their contributions and preserving compatible tool state. Contributions made outside an entry are unowned and retained. A change to a tool binding's version resets its state. Removed bindings, changed identities, and incompatible state are errors.
+    /// Every Agent argument of an entry receives this agent. Fails if the conversation has no recorded expertise, is owned by another agent, or if called while an entry runs.
+    ///
+    /// # Arguments
+    ///
+    /// * `opt` - optional argument, see inner type for documentation, use <func>_opts to use
+    pub fn recompose_opts(&self, opts: AgentRecomposeOpts) -> Llm {
+        let mut query = self.selection.select("recompose");
+        if let Some(conversation) = opts.conversation {
+            query = query.arg("conversation", conversation);
+        }
+        Llm {
+            proc: self.proc.clone(),
+            selection: query,
+            graphql_client: self.graphql_client.clone(),
+        }
     }
 }
 impl Node for Agent {
@@ -12812,12 +12898,6 @@ pub struct Llm {
     pub graphql_client: DynGraphQLClient,
 }
 #[derive(Builder, Debug, PartialEq)]
-pub struct LlmRecomposeOpts {
-    /// Expertise to add, or refresh in place if already recorded. Each reference retains its source workspace.
-    #[builder(setter(into, strip_option), default)]
-    pub expertise: Option<Vec<Id>>,
-}
-#[derive(Builder, Debug, PartialEq)]
 pub struct LlmArtifactsOpts<'a> {
     /// Only include artifacts matching these path patterns, as with Workspace.artifacts. A path selects that path and its children.
     #[builder(setter(into, strip_option), default)]
@@ -12962,43 +13042,6 @@ impl Llm {
                 graphql_client: self.graphql_client.clone(),
             })
             .collect())
-    }
-    /// Refresh this conversation's composition, then add expertise. Find every recorded entry again by its artifact address, with dimension keys, in the bound workspace. If the bound workspace does not address an entry, rerun the recorded entry from its own source. Then add each given entry: one already recorded under the same address is refreshed in place, others are recorded after the existing entries.
-    /// Entries run in record order, replacing their contributions and preserving compatible tool state. Contributions made transitively while an entry runs belong to that entry, including nested composition. Contributions made outside an entry are unowned and retained. Keep this LLM's workspace.
-    /// A required Agent! argument receives the agent that owns the conversation. A conversation without an owning agent can be recomposed only with entries that do not require one.
-    /// A change to a tool binding's version resets its state. Removed bindings, changed identities, and incompatible state are errors.
-    /// With no recorded entries and no expertise given, return the conversation unchanged. Called while an entry runs, run only the given entries, as part of that entry.
-    ///
-    /// # Arguments
-    ///
-    /// * `opt` - optional argument, see inner type for documentation, use <func>_opts to use
-    pub fn recompose(&self) -> Llm {
-        let query = self.selection.select("recompose");
-        Llm {
-            proc: self.proc.clone(),
-            selection: query,
-            graphql_client: self.graphql_client.clone(),
-        }
-    }
-    /// Refresh this conversation's composition, then add expertise. Find every recorded entry again by its artifact address, with dimension keys, in the bound workspace. If the bound workspace does not address an entry, rerun the recorded entry from its own source. Then add each given entry: one already recorded under the same address is refreshed in place, others are recorded after the existing entries.
-    /// Entries run in record order, replacing their contributions and preserving compatible tool state. Contributions made transitively while an entry runs belong to that entry, including nested composition. Contributions made outside an entry are unowned and retained. Keep this LLM's workspace.
-    /// A required Agent! argument receives the agent that owns the conversation. A conversation without an owning agent can be recomposed only with entries that do not require one.
-    /// A change to a tool binding's version resets its state. Removed bindings, changed identities, and incompatible state are errors.
-    /// With no recorded entries and no expertise given, return the conversation unchanged. Called while an entry runs, run only the given entries, as part of that entry.
-    ///
-    /// # Arguments
-    ///
-    /// * `opt` - optional argument, see inner type for documentation, use <func>_opts to use
-    pub fn recompose_opts(&self, opts: LlmRecomposeOpts) -> Llm {
-        let mut query = self.selection.select("recompose");
-        if let Some(expertise) = opts.expertise {
-            query = query.arg("expertise", expertise);
-        }
-        Llm {
-            proc: self.proc.clone(),
-            selection: query,
-            graphql_client: self.graphql_client.clone(),
-        }
     }
     /// The model the conversation is running against, after resolving any configured default.
     pub async fn model(&self) -> Result<String, DaggerError> {

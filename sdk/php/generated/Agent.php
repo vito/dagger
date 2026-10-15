@@ -237,4 +237,41 @@ class Agent extends Client\AbstractObject implements Client\IdAble, Node
         $id = $this->queryLeaf($leafQueryBuilder, 'reseed');
         return $this->client->loadObjectFromId(\Dagger\Agent::class, new \Dagger\Id((string)$id), 'Agent');
     }
+
+    /**
+     * Compose expertise into a conversation as this agent. Return the new conversation; the agent itself is unchanged. Apply the result by returning it from a tool, which continues the turn on it, or with reseed.
+     *
+     * Run the given entries in list order and record them. An entry already recorded under the same artifact address, with dimension keys, is refreshed in place: its contributions are replaced and its compatible tool state is preserved. Other recorded entries are untouched.
+     *
+     * Every Agent argument of an entry, required or optional, receives this agent. The conversation must be unowned or owned by this agent, and the result is owned by it.
+     *
+     * While an entry runs, the entries' contributions belong to that outer entry and are not recorded separately: this is how an entry composes other expertise, e.g. me.compose(conversation: base, expertise: [...]). Rerunning the outer entry reproduces them.
+     */
+    public function compose(array $expertise, ?LLM $conversation = null): LLM
+    {
+        $innerQueryBuilder = new \Dagger\Client\QueryBuilder('compose');
+        $innerQueryBuilder->setArgument('expertise', $expertise);
+        if (null !== $conversation) {
+        $innerQueryBuilder->setArgument('conversation', $conversation);
+        }
+        return new \Dagger\LLM($this->client, $this->queryBuilderChain->chain($innerQueryBuilder));
+    }
+
+    /**
+     * Refresh every recorded entry of a conversation as this agent. Return the new conversation; the agent itself is unchanged. Apply the result by returning it from a tool, which continues the turn on it, or with reseed.
+     *
+     * Find each recorded entry again by its artifact address, with dimension keys, in the conversation's bound workspace. If that workspace does not address an entry, rerun the recorded entry from its own source. A recorded module that fails to load there is an error.
+     *
+     * Entries run in record order, replacing their contributions and preserving compatible tool state. Contributions made outside an entry are unowned and retained. A change to a tool binding's version resets its state. Removed bindings, changed identities, and incompatible state are errors.
+     *
+     * Every Agent argument of an entry receives this agent. Fails if the conversation has no recorded expertise, is owned by another agent, or if called while an entry runs.
+     */
+    public function recompose(?LLM $conversation = null): LLM
+    {
+        $innerQueryBuilder = new \Dagger\Client\QueryBuilder('recompose');
+        if (null !== $conversation) {
+        $innerQueryBuilder->setArgument('conversation', $conversation);
+        }
+        return new \Dagger\LLM($this->client, $this->queryBuilderChain->chain($innerQueryBuilder));
+    }
 }

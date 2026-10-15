@@ -231,36 +231,6 @@ defmodule Dagger.LLM do
   end
 
   @doc """
-  Refresh this conversation's composition, then add expertise. Find every recorded entry again by its artifact address, with dimension keys, in the bound workspace. If the bound workspace does not address an entry, rerun the recorded entry from its own source. Then add each given entry: one already recorded under the same address is refreshed in place, others are recorded after the existing entries.
-
-  Entries run in record order, replacing their contributions and preserving compatible tool state. Contributions made transitively while an entry runs belong to that entry, including nested composition. Contributions made outside an entry are unowned and retained. Keep this LLM's workspace.
-
-  A required Agent! argument receives the agent that owns the conversation. A conversation without an owning agent can be recomposed only with entries that do not require one.
-
-  A change to a tool binding's version resets its state. Removed bindings, changed identities, and incompatible state are errors.
-
-  With no recorded entries and no expertise given, return the conversation unchanged. Called while an entry runs, run only the given entries, as part of that entry.
-  """
-  @spec recompose(t(), [{:expertise, [Dagger.Expertise.t()]}]) :: Dagger.LLM.t()
-  def recompose(%__MODULE__{} = llm, optional_args \\ []) do
-    query_builder =
-      llm.query_builder
-      |> QB.select("recompose")
-      |> QB.maybe_put_arg(
-        "expertise",
-        if(optional_args[:expertise],
-          do: Enum.map(optional_args[:expertise], &Dagger.ID.id!/1),
-          else: nil
-        )
-      )
-
-    %Dagger.LLM{
-      query_builder: query_builder,
-      client: llm.client
-    }
-  end
-
-  @doc """
   The skills visible to the model, exactly as the ListSkills tool serves them: engine-embedded skills, skills installed with withSkills, and skills discovered in the workspace.
   """
   @spec skills(t()) :: {:ok, [Dagger.LLMSkill.t()]} | {:error, term()}

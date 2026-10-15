@@ -106,6 +106,13 @@ export type AddressGitRefOpts = {
   noLock?: boolean
 }
 
+export type AgentComposeOpts = {
+  /**
+   * The conversation to compose into. Defaults to the agent's snapshot.
+   */
+  conversation?: LLM
+}
+
 export type AgentNotifyOpts = {
   /**
    * The lifecycle states that fire an event. IDLE events carry the turn's final reply; FAILED events carry the loop error.
@@ -118,6 +125,13 @@ export type AgentPauseOpts = {
    * Preempt the in-flight step instead of letting it finish. All completed steps are kept and the interrupted turn stays open: messages it consumed remain pending, while unconsumed mailbox messages are discarded. Resume continues the turn from the last committed step. On an idle, never-started, or failed agent there is nothing to preempt, so this is a plain pause.
    */
   interrupt?: boolean
+}
+
+export type AgentRecomposeOpts = {
+  /**
+   * The conversation to recompose. Defaults to the agent's snapshot.
+   */
+  conversation?: LLM
 }
 
 export type AgentSendOpts = {
@@ -2865,13 +2879,6 @@ export type LLMLoopOpts = {
   maxTokens?: number
 }
 
-export type LLMRecomposeOpts = {
-  /**
-   * Expertise to add, or refresh in place if already recorded. Each reference retains its source workspace.
-   */
-  expertise?: Expertise[]
-}
-
 export type LLMSpawnOpts = {
   /**
    * Compose these entries after minting the agent's identity and before fixing its seed. Agent arguments receive the newly spawned agent, not the caller.
@@ -4878,6 +4885,23 @@ export class Agent extends BaseClient {
   }
 
   /**
+   * Compose expertise into a conversation as this agent. Return the new conversation; the agent itself is unchanged. Apply the result by returning it from a tool, which continues the turn on it, or with reseed.
+   *
+   * Run the given entries in list order and record them. An entry already recorded under the same artifact address, with dimension keys, is refreshed in place: its contributions are replaced and its compatible tool state is preserved. Other recorded entries are untouched.
+   *
+   * Every Agent argument of an entry, required or optional, receives this agent. The conversation must be unowned or owned by this agent, and the result is owned by it.
+   *
+   * While an entry runs, the entries' contributions belong to that outer entry and are not recorded separately: this is how an entry composes other expertise, e.g. me.compose(conversation: base, expertise: [...]). Rerunning the outer entry reproduces them.
+   * @param expertise The expertise to run. Each reference retains its source workspace.
+   * @param opts.conversation The conversation to compose into. Defaults to the agent's snapshot.
+   * @experimental
+   */
+  compose = (expertise: Expertise[], opts?: AgentComposeOpts): LLM => {
+    const ctx = this._ctx.select("compose", { expertise, ...opts })
+    return new LLM(ctx)
+  }
+
+  /**
    * Why the loop failed, for a FAILED agent; empty otherwise.
    *
    * The snapshot holds the completed prefix — send or resume retries from it.
@@ -4998,6 +5022,22 @@ export class Agent extends BaseClient {
     const response: Awaited<ID> = await ctx.execute()
 
     return new Agent(ctx.copy().selectNode(response, "Agent"))
+  }
+
+  /**
+   * Refresh every recorded entry of a conversation as this agent. Return the new conversation; the agent itself is unchanged. Apply the result by returning it from a tool, which continues the turn on it, or with reseed.
+   *
+   * Find each recorded entry again by its artifact address, with dimension keys, in the conversation's bound workspace. If that workspace does not address an entry, rerun the recorded entry from its own source. A recorded module that fails to load there is an error.
+   *
+   * Entries run in record order, replacing their contributions and preserving compatible tool state. Contributions made outside an entry are unowned and retained. A change to a tool binding's version resets its state. Removed bindings, changed identities, and incompatible state are errors.
+   *
+   * Every Agent argument of an entry receives this agent. Fails if the conversation has no recorded expertise, is owned by another agent, or if called while an entry runs.
+   * @param opts.conversation The conversation to recompose. Defaults to the agent's snapshot.
+   * @experimental
+   */
+  recompose = (opts?: AgentRecomposeOpts): LLM => {
+    const ctx = this._ctx.select("recompose", { ...opts })
+    return new LLM(ctx)
   }
 
   /**
@@ -13995,23 +14035,6 @@ export class LLM extends BaseClient {
     const response: Awaited<string> = await ctx.execute()
 
     return response
-  }
-
-  /**
-   * Refresh this conversation's composition, then add expertise. Find every recorded entry again by its artifact address, with dimension keys, in the bound workspace. If the bound workspace does not address an entry, rerun the recorded entry from its own source. Then add each given entry: one already recorded under the same address is refreshed in place, others are recorded after the existing entries.
-   *
-   * Entries run in record order, replacing their contributions and preserving compatible tool state. Contributions made transitively while an entry runs belong to that entry, including nested composition. Contributions made outside an entry are unowned and retained. Keep this LLM's workspace.
-   *
-   * A required Agent! argument receives the agent that owns the conversation. A conversation without an owning agent can be recomposed only with entries that do not require one.
-   *
-   * A change to a tool binding's version resets its state. Removed bindings, changed identities, and incompatible state are errors.
-   *
-   * With no recorded entries and no expertise given, return the conversation unchanged. Called while an entry runs, run only the given entries, as part of that entry.
-   * @param opts.expertise Expertise to add, or refresh in place if already recorded. Each reference retains its source workspace.
-   */
-  recompose = (opts?: LLMRecomposeOpts): LLM => {
-    const ctx = this._ctx.select("recompose", { ...opts })
-    return new LLM(ctx)
   }
 
   /**
