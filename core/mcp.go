@@ -136,6 +136,11 @@ type MCP struct {
 	// addresses resolve in this conversation's scope instead (see
 	// MCP.scopeLLM). Like standalone, it survives Clone.
 	scopeBase dagql.ObjectResult[*LLM]
+	// ownerAgent mirrors the served conversation's OwnerAgentHandle (see
+	// LLM.WithOwnerAgent). Agent tool arguments receive this agent, whoever
+	// drives the tools; without one, tools requiring an Agent are hidden.
+	// Like standalone, it survives Clone.
+	ownerAgent string
 	// Configured MCP servers.
 	mcpServers map[string]*MCPServerConfig
 	// Persistent MCP sessions.
@@ -261,6 +266,21 @@ func (m *MCP) currentLLM() dagql.ObjectResult[*LLM] {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.selfLLM
+}
+
+// owningAgent resolves the agent that owns the served conversation, which
+// Agent tool arguments receive. Inside that agent's own loop it is the agent
+// bound into ctx; otherwise the seed-free reference to its runtime, which must
+// be running in this session.
+func (m *MCP) owningAgent(ctx context.Context) (dagql.ObjectResult[*Agent], error) {
+	if agent, ok := AgentFromContext(ctx); ok && agent.Self().Handle == m.ownerAgent {
+		return agent, nil
+	}
+	agent, err := AgentReference(ctx, m.ownerAgent)
+	if err != nil {
+		return agent, fmt.Errorf("conversation's owning agent: %w", err)
+	}
+	return agent, nil
 }
 
 func (m *MCP) Returned() bool {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/dagger/dagger/dagql"
@@ -200,9 +201,8 @@ func TestObjectToolEligible(t *testing.T) {
 	require.True(t, objectToolEligible(fieldByName(doug, "annotate"), nil, conversationToolArgs))
 	require.True(t, objectToolEligible(fieldByName(doug, "poke"), nil, agentToolArgs))
 
-	// ...but an Agent only exists in an agent loop: a synchronous
-	// conversation (LLM.loop/step) hides a method requiring one rather than
-	// offering it and failing.
+	// ...but only an owned conversation has an Agent to supply: an unowned
+	// one hides a method requiring one rather than offering it and failing.
 	require.False(t, objectToolEligible(fieldByName(doug, "poke"), nil, conversationToolArgs))
 
 	// Served without a conversation to fill them from (dagger mcp), an LLM or
@@ -720,7 +720,7 @@ func TestStandaloneToolsTreatLLMArgsAsUnsatisfiable(t *testing.T) {
 
 	toolNames := func(t *testing.T, m *MCP) []string {
 		t.Helper()
-		toolsets, err := m.boundToolsets(ctx, srv)
+		toolsets, err := m.boundToolsets(srv)
 		require.NoError(t, err)
 		require.Len(t, toolsets, 1)
 		names := make([]string, 0, len(toolsets[0].tools))
@@ -754,11 +754,13 @@ func TestStandaloneToolsTreatLLMArgsAsUnsatisfiable(t *testing.T) {
 	require.ErrorContains(t, err, "requires the current conversation")
 }
 
-// TestAgentToolArgsWithoutAgent covers Agent arguments where no agent loop
-// drives the tools: a synchronous conversation or a standalone server. An
-// Agent argument never reaches the model's tool schema. A method requiring one
-// is not offered; an optional one is passed as null.
-func TestAgentToolArgsWithoutAgent(t *testing.T) {
+// TestAgentToolArgsFollowOwner covers Agent tool arguments, which follow the
+// conversation's owning agent whoever drives the tools. An Agent argument
+// never reaches the model's tool schema. An owned conversation lists methods
+// requiring one and passes its owner, also outside any agent loop. An unowned
+// conversation or a standalone server does not offer them, and passes null to
+// an optional one.
+func TestAgentToolArgsFollowOwner(t *testing.T) {
 	ctx := engine.ContextWithClientMetadata(t.Context(), &engine.ClientMetadata{
 		ClientID:  "agent-args-test",
 		SessionID: "agent-args-test",
@@ -767,54 +769,111 @@ func TestAgentToolArgsWithoutAgent(t *testing.T) {
 	require.NoError(t, err)
 	ctx = dagql.ContextWithCache(ctx, cache)
 	srv := newAddressLiftTestServer(t)
+	ctx = dagql.ContextWithServer(ctx, srv)
 	srv.InstallObject(dagql.NewClass(srv, dagql.ClassOpts[*Agent]{Typed: &Agent{}}))
+	agentHandle := func(ctx context.Context, id dagql.ID[*Agent]) (string, error) {
+		agent, err := id.Load(ctx, srv)
+		if err != nil {
+			return "", err
+		}
+		return agent.Self().Handle, nil
+	}
+	dagql.Fields[*Query]{
+		// The seed-free agent reference, as core/schema installs it, refusing
+		// a handle with no runtime in this session.
+		dagql.Func("__agentReference", func(_ context.Context, _ *Query, args struct{ Handle string }) (*Agent, error) {
+			if args.Handle != "owner" {
+				return nil, fmt.Errorf("agent %q has no runtime entry in this session", args.Handle)
+			}
+			return &Agent{Handle: args.Handle}, nil
+		}),
+	}.Install(srv)
 	dagql.Fields[*liftTestRunner]{
-		dagql.Func("poke", func(_ context.Context, _ *liftTestRunner, _ struct {
+		dagql.Func("poke", func(ctx context.Context, _ *liftTestRunner, args struct {
 			Caller dagql.ID[*Agent]
 		}) (dagql.String, error) {
-			return "poked", nil
+			handle, err := agentHandle(ctx, args.Caller)
+			return dagql.String("poked " + handle), err
 		}),
-		dagql.Func("nudge", func(_ context.Context, _ *liftTestRunner, args struct {
+		dagql.Func("nudge", func(ctx context.Context, _ *liftTestRunner, args struct {
 			Caller dagql.Optional[dagql.ID[*Agent]]
 			Note   dagql.String
 		}) (dagql.String, error) {
 			if !args.Caller.Valid {
 				return dagql.String("no agent: " + args.Note.String()), nil
 			}
-			return "agent", nil
+			handle, err := agentHandle(ctx, args.Caller.Value)
+			return dagql.String("agent " + handle + ": " + args.Note.String()), err
 		}),
 	}.Install(srv)
 	var runner dagql.AnyObjectResult
 	require.NoError(t, srv.Select(ctx, srv.Root(), &runner, dagql.Selector{Field: "runner"}))
-	nudgeField := fieldByName(srv.Schema().Types["LiftTestRunner"], "nudge")
-	require.NotNil(t, nudgeField)
+	recvType := runner.ObjectType()
+	runnerType := srv.Schema().Types["LiftTestRunner"]
+	pokeField, nudgeField := fieldByName(runnerType, "poke"), fieldByName(runnerType, "nudge")
+	call := func(t *testing.T, m *MCP, field *ast.FieldDefinition, args map[string]any) (string, error) {
+		t.Helper()
+		sel, err := m.buildObjectMethodSelector(ctx, srv, recvType, field, args)
+		if err != nil {
+			return "", err
+		}
+		var out dagql.String
+		err = srv.Select(ctx, runner, &out, sel)
+		return out.String(), err
+	}
+	listed := func(t *testing.T, m *MCP) map[string]LLMTool {
+		t.Helper()
+		toolsets, err := m.boundToolsets(srv)
+		require.NoError(t, err)
+		require.Len(t, toolsets, 1)
+		tools := map[string]LLMTool{}
+		for _, tool := range toolsets[0].tools {
+			require.NotContains(t, tool.Schema["properties"], "caller", "an Agent is never the model's to supply")
+			tools[tool.Name] = tool
+		}
+		return tools
+	}
 
-	conversation := newMCP().WithTools(runner, srv.Schema(), nil)
-	for name, m := range map[string]*MCP{"synchronous": conversation, "standalone": conversation.Standalone()} {
+	unowned := newMCP().WithTools(runner, srv.Schema(), nil)
+	for name, m := range map[string]*MCP{"unowned": unowned, "standalone": unowned.Standalone()} {
 		t.Run(name, func(t *testing.T) {
-			toolsets, err := m.boundToolsets(ctx, srv)
-			require.NoError(t, err)
-			require.Len(t, toolsets, 1)
-			tools := map[string]LLMTool{}
-			for _, tool := range toolsets[0].tools {
-				tools[tool.Name] = tool
-			}
+			tools := listed(t, m)
 			require.NotContains(t, tools, "poke", "a required Agent hides its method")
 			require.Contains(t, tools, "nudge")
-			props := tools["nudge"].Schema["properties"].(map[string]any)
-			require.NotContains(t, props, "caller", "an optional Agent is not the model's to supply")
-			require.Contains(t, props, "note")
-
-			sel, err := m.buildObjectMethodSelector(ctx, srv, runner.ObjectType(), nudgeField, map[string]any{"note": "hi"})
+			require.Contains(t, tools["nudge"].Schema["properties"], "note")
+			out, err := call(t, m, nudgeField, map[string]any{"note": "hi"})
 			require.NoError(t, err)
-			var out dagql.String
-			require.NoError(t, srv.Select(ctx, runner, &out, sel))
-			require.Equal(t, "no agent: hi", out.String())
-
-			_, err = m.buildObjectMethodSelector(ctx, srv, runner.ObjectType(), nudgeField, map[string]any{"note": "hi", "caller": "forged"})
+			require.Equal(t, "no agent: hi", out)
+			_, err = call(t, m, nudgeField, map[string]any{"note": "hi", "caller": "forged"})
 			require.ErrorContains(t, err, "unknown arguments: caller")
 		})
 	}
+
+	t.Run("owned", func(t *testing.T) {
+		// No agent loop is involved: ownership alone supplies the agent.
+		owned := (&LLM{mcp: unowned, endpointMtx: &sync.Mutex{}}).WithOwnerAgent("owner").mcp
+		tools := listed(t, owned)
+		require.Contains(t, tools, "poke")
+		require.Contains(t, tools, "nudge")
+		out, err := call(t, owned, pokeField, map[string]any{})
+		require.NoError(t, err)
+		require.Equal(t, "poked owner", out)
+		out, err = call(t, owned, nudgeField, map[string]any{"note": "hi"})
+		require.NoError(t, err)
+		require.Equal(t, "agent owner: hi", out)
+		_, err = call(t, owned, pokeField, map[string]any{"caller": "forged"})
+		require.ErrorContains(t, err, "unknown arguments: caller")
+		// Standalone serving never supplies an agent, owned or not.
+		require.NotContains(t, listed(t, owned.Standalone()), "poke")
+	})
+
+	t.Run("owner not running", func(t *testing.T) {
+		gone := (&LLM{mcp: unowned, endpointMtx: &sync.Mutex{}}).WithOwnerAgent("gone").mcp
+		require.Contains(t, listed(t, gone), "poke", "listing does not resolve the owner")
+		_, err := call(t, gone, pokeField, map[string]any{})
+		require.ErrorContains(t, err, `conversation's owning agent`)
+		require.ErrorContains(t, err, `no runtime entry`)
+	})
 }
 
 func TestLazyToolReplacementDoesNotLoadSupersededObject(t *testing.T) {
@@ -857,7 +916,7 @@ func TestLazyToolReplacementDoesNotLoadSupersededObject(t *testing.T) {
 				require.Len(t, mcp.boundTools, 1)
 				require.Equal(t, "owner-B", mcp.boundTools[0].Owner)
 				require.Equal(t, 2, mcp.boundTools[0].Version)
-				toolsets, err := mcp.boundToolsets(t.Context(), srv)
+				toolsets, err := mcp.boundToolsets(srv)
 				require.NoError(t, err)
 				require.Empty(t, calls, "listing must not load either object")
 				require.Len(t, toolsets, 1)
@@ -902,7 +961,7 @@ func TestBoundToolsUseTheirDefiningSchemaAuthoritatively(t *testing.T) {
 
 	assertDefiningTools := func(t *testing.T, mcp *MCP) []LLMTool {
 		t.Helper()
-		toolsets, err := mcp.boundToolsets(t.Context(), current)
+		toolsets, err := mcp.boundToolsets(current)
 		require.NoError(t, err)
 		require.Len(t, toolsets, 1)
 		require.Equal(t, "LiftTestRunner", toolsets[0].typeName)
@@ -1034,7 +1093,7 @@ func TestBoundToolDescribesObjectOutsideCurrentSchema(t *testing.T) {
 
 	var runner dagql.AnyObjectResult
 	require.NoError(t, defining.Select(ctx, defining.Root(), &runner, dagql.Selector{Field: "runner"}))
-	toolsets, err := newMCP().WithTools(runner, defining.Schema(), nil).boundToolsets(ctx, current)
+	toolsets, err := newMCP().WithTools(runner, defining.Schema(), nil).boundToolsets(current)
 	require.NoError(t, err)
 	require.Len(t, toolsets, 1)
 	for _, tool := range toolsets[0].tools {
@@ -1423,7 +1482,7 @@ func TestObjectToolPurity(t *testing.T) {
 	require.True(t, ok)
 
 	m := newMCP().WithLazyTools(nil, objType, srv.Schema(), nil)
-	toolsets, err := m.boundToolsets(t.Context(), srv)
+	toolsets, err := m.boundToolsets(srv)
 	require.NoError(t, err)
 	require.Len(t, toolsets, 1)
 	pure := map[string]bool{}

@@ -1159,6 +1159,15 @@ func (*LLM) Type() *ast.Type {
 	}
 }
 
+// WithOwnerAgent records the agent whose conversation this is. Its tools'
+// Agent arguments receive that agent too, so the MCP mirrors the handle.
+func (llm *LLM) WithOwnerAgent(handle string) *LLM {
+	llm = llm.Clone()
+	llm.OwnerAgentHandle = handle
+	llm.mcp.ownerAgent = handle
+	return llm
+}
+
 func (llm *LLM) Clone() *LLM {
 	// Read under the lock: llm may be a persistent, shared value whose
 	// endpoint another goroutine is resolving right now — a detached agent

@@ -66,17 +66,15 @@ func composingAgentHandle(ctx context.Context) string {
 	return fnCall.composingAgentHandle
 }
 
-// AgentToContext binds a running agent's handle into the context so that a
-// tool invoked from its evaluation loop can receive it: a module function
-// declaring an `Agent!` argument has it auto-filled from here, exactly as an
-// `LLM!` argument is auto-filled from [LLMToContext]. This is the
-// child->parent channel of hack/designs/async-agents.md §3.1: a spawned
-// worker's tool can message (steer) the agent that called it.
+// AgentToContext binds a running agent's handle into the context, so code
+// running on behalf of its evaluation loop knows which agent it serves: the
+// child->parent channel of hack/designs/async-agents.md §3.1, where a spawned
+// worker's tool can message (steer) the agent that called it. A tool's `Agent!`
+// argument receives the conversation's owning agent (see implicitToolArgs),
+// which inside the loop is this same agent.
 //
 // It is only ever set by the agent loop (AgentRuntime.loop), on the context
 // every Step — and therefore every tool dispatch within it — descends from.
-// A synchronous LLM.loop or a direct function call never carries an agent, so
-// tools requiring one are not offered there (see implicitToolArgs).
 func AgentToContext(ctx context.Context, agent dagql.ObjectResult[*Agent]) context.Context {
 	return context.WithValue(ctx, agentContextKey{}, agent)
 }

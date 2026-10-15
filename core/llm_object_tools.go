@@ -351,8 +351,8 @@ func (m *MCP) bindWorkspaceModuleTools(ctx context.Context) (*MCP, error) {
 // builtin of the same name. When a tool name is contributed by more than one
 // bound object, ALL tools of every object involved are served under namespaced
 // names instead (see namespacedTypes) — nothing is silently shadowed.
-func (m *MCP) loadObjectTools(ctx context.Context, srv *dagql.Server, allTools *LLMToolSet) error {
-	toolsets, err := m.boundToolsets(ctx, srv)
+func (m *MCP) loadObjectTools(_ context.Context, srv *dagql.Server, allTools *LLMToolSet) error {
+	toolsets, err := m.boundToolsets(srv)
 	if err != nil {
 		return err
 	}
@@ -375,9 +375,8 @@ type bindingToolset struct {
 	tools    []LLMTool
 }
 
-// boundToolsets generates each binding's tools, in binding order. Which tools
-// exist depends on ctx: methods requiring an Agent need an agent loop.
-func (m *MCP) boundToolsets(ctx context.Context, srv *dagql.Server) ([]bindingToolset, error) {
+// boundToolsets generates each binding's tools, in binding order.
+func (m *MCP) boundToolsets(srv *dagql.Server) ([]bindingToolset, error) {
 	m.mu.Lock()
 	bindings := slices.Clone(m.boundTools)
 	m.mu.Unlock()
@@ -386,7 +385,7 @@ func (m *MCP) boundToolsets(ctx context.Context, srv *dagql.Server) ([]bindingTo
 	}
 	toolsets := make([]bindingToolset, 0, len(bindings))
 	for _, b := range bindings {
-		tools, err := m.toolsForBoundObject(ctx, srv, b)
+		tools, err := m.toolsForBoundObject(srv, b)
 		if err != nil {
 			return nil, err
 		}
@@ -456,7 +455,7 @@ func (m *MCP) ToolNameCollisions(ctx context.Context) (map[string][]string, erro
 	if err != nil {
 		return nil, err
 	}
-	toolsets, err := m.boundToolsets(ctx, srv)
+	toolsets, err := m.boundToolsets(srv)
 	if err != nil {
 		return nil, err
 	}
@@ -479,7 +478,7 @@ func (m *MCP) ToolNameCollisions(ctx context.Context) (map[string][]string, erro
 
 // toolsForBoundObject generates the tools for a single bound object: one per
 // eligible field of its schema type.
-func (m *MCP) toolsForBoundObject(ctx context.Context, srv *dagql.Server, b boundTool) ([]LLMTool, error) {
+func (m *MCP) toolsForBoundObject(srv *dagql.Server, b boundTool) ([]LLMTool, error) {
 	typeName := b.typeName()
 	toolSchema := b.definingSchema
 	if toolSchema == nil {
@@ -489,7 +488,7 @@ func (m *MCP) toolsForBoundObject(ctx context.Context, srv *dagql.Server, b boun
 	if def == nil || (def.Kind != ast.Object && def.Kind != ast.Interface) {
 		return nil, fmt.Errorf("bound object type %q is not an object in its defining schema", typeName)
 	}
-	implicit := m.implicitArgs(ctx)
+	implicit := m.implicitArgs()
 	var tools []LLMTool
 	for _, field := range def.Fields {
 		if !objectToolEligible(field, b.Except, implicit) {
@@ -772,35 +771,34 @@ func liftHint(typeName string) string {
 // none. There an LLM argument is an ordinary object argument the caller cannot
 // satisfy: a required one disqualifies its method (objectToolEligible), and an
 // optional one is exposed by ID like any other object, so it can at least be
-// left unset. Agent is filled from the agent loop dispatching the call (see
-// AgentFromContext), which exists only when an agent drives the conversation,
-// not under a synchronous LLM.loop/step or a standalone server: without one, a
-// method requiring an Agent is hidden rather than offered and then failing, and
+// left unset. Agent is filled with the agent that owns the conversation (its
+// OwnerAgentHandle, recorded on the MCP as ownerAgent), whoever drives the
+// tools: an agent loop, or a synchronous LLM.loop/step over an owned
+// conversation. An unowned conversation, or a standalone server, has no agent:
+// a method requiring one is hidden rather than offered and then failing, and
 // an optional Agent argument is passed as null. Either way an Agent argument
-// never appears in the model's tool schema.
+// never appears in the model's tool schema, mirroring me on an expertise entry.
 type implicitToolArgs struct {
 	// llm reports whether a conversation is available to fill LLM arguments.
 	llm bool
-	// agent reports whether an agent loop is available to fill Agent
+	// agent reports whether an owning agent is available to fill Agent
 	// arguments.
 	agent bool
 }
 
 var (
-	// agentToolArgs is the policy of tools driven by an agent loop.
+	// agentToolArgs is the policy of an owned conversation's tools.
 	agentToolArgs = implicitToolArgs{llm: true, agent: true}
-	// conversationToolArgs is the policy of tools driven by a synchronous
-	// conversation (LLM.loop/step), with no agent.
+	// conversationToolArgs is the policy of an unowned conversation's tools.
 	conversationToolArgs = implicitToolArgs{llm: true}
 	// standaloneToolArgs is the policy of tools served without a conversation.
 	standaloneToolArgs = implicitToolArgs{}
 )
 
 // supplies reports whether MCP fills arg itself under this policy. An Agent
-// argument is never the model's to supply: inside an agent loop MCP fills it
-// with the running agent, and without one an optional Agent argument is left
-// null (a required one hides its method, see objectToolEligible). This mirrors
-// an optional me on an expertise entry composed without an owning agent.
+// argument is never the model's to supply: MCP fills it with the owning agent,
+// and without one an optional Agent argument is left null (a required one
+// hides its method, see objectToolEligible).
 func (p implicitToolArgs) supplies(arg *ast.ArgumentDefinition) bool {
 	if isExpectedTypeArg(arg, agentTypeName) {
 		return p.agent || !toolArgRequired(arg)
@@ -816,13 +814,13 @@ func toolArgRequired(arg *ast.ArgumentDefinition) bool {
 }
 
 // implicitArgs returns the policy this MCP serves tools under: standalone when
-// no conversation will ever drive it (see MCP.Standalone), agent when ctx
-// descends from an agent loop, else a synchronous conversation.
-func (m *MCP) implicitArgs(ctx context.Context) implicitToolArgs {
+// no conversation will ever drive it (see MCP.Standalone), owned when the
+// conversation has an owning agent, else an unowned conversation.
+func (m *MCP) implicitArgs() implicitToolArgs {
 	if m == nil || m.standalone {
 		return standaloneToolArgs
 	}
-	if _, ok := AgentFromContext(ctx); ok {
+	if m.ownerAgent != "" {
 		return agentToolArgs
 	}
 	return conversationToolArgs
@@ -1084,7 +1082,7 @@ func (m *MCP) implicitToolInput(ctx context.Context, astField *ast.FieldDefiniti
 	}
 
 	var obj dagql.IDable
-	implicit := m.implicitArgs(ctx)
+	implicit := m.implicitArgs()
 	switch {
 	case isExpectedTypeArg(astArg, llmTypeName):
 		if !implicit.llm {
@@ -1099,9 +1097,9 @@ func (m *MCP) implicitToolInput(ctx context.Context, astField *ast.FieldDefiniti
 		if !implicit.agent {
 			return nil, false, nil
 		}
-		agent, ok := AgentFromContext(ctx)
-		if !ok {
-			return nil, true, errors.New("function requires the calling agent; invoke it from an agent loop (LLM.spawn)")
+		agent, err := m.owningAgent(ctx)
+		if err != nil {
+			return nil, true, err
 		}
 		obj = agent
 	default:

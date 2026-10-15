@@ -62,9 +62,7 @@ func (s llmSchema) Install(srv *dagql.Server) {
 	}.Install(srv)
 	dagql.Fields[*core.LLM]{
 		dagql.Func("__withOwnerAgent", func(_ context.Context, llm *core.LLM, args struct{ Handle string }) (*core.LLM, error) {
-			llm = llm.Clone()
-			llm.OwnerAgentHandle = args.Handle
-			return llm, nil
+			return llm.WithOwnerAgent(args.Handle), nil
 		}).View(AfterVersion("v1.0.0-0")),
 		dagql.Func("expertise", func(_ context.Context, llm *core.LLM, _ struct{}) (dagql.ObjectResultArray[*core.Expertise], error) {
 			return llm.Expertise, nil

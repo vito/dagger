@@ -1402,6 +1402,9 @@ func (LLMSuite) TestRecomposeWorkerIdentity(ctx context.Context, t *testctx.T) {
 	tools, err := llm.Tools(ctx)
 	require.NoError(t, err)
 	require.NotContains(t, tools, "chiefOnly")
+	// Read from outside any loop, the worker's conversation still lists its
+	// Agent! tool: the conversation's owner supplies it.
+	require.Contains(t, tools, "## parentName\n")
 	require.Contains(t, tools, "Updated peer implementation.")
 	transcript, err = llm.Transcript(ctx)
 	require.NoError(t, err)

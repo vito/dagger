@@ -1,7 +1,7 @@
 // A module whose tool messages the agent that called it, exercising Agent!
 // argument handling (hack/designs/async-agents.md §3.1): when poke is
-// dispatched as a tool from a running agent loop, MCP passes the calling
-// agent's handle into the parent argument, which is hidden from the model's
+// dispatched as a tool on an agent's conversation, MCP passes the owning
+// agent's handle into the caller argument, which is hidden from the model's
 // tool schema but remains required in the module's GraphQL schema.
 package main
 
@@ -27,8 +27,18 @@ func (m *Poker) Poke(ctx context.Context, caller *dagger.Agent, note string) (st
 	return "sent", nil
 }
 
-// MaybePoke is Poke with an optional caller: inside an agent loop MCP passes
-// the calling agent, and without one (a synchronous loop, dagger mcp) it
+// Whoami reports the agent it receives, which is the owner of the conversation
+// calling it, without messaging anyone.
+func (m *Poker) Whoami(ctx context.Context, caller *dagger.Agent) (string, error) {
+	name, err := caller.Name(ctx)
+	if err != nil {
+		return "", err
+	}
+	return "caller: " + name, nil
+}
+
+// MaybePoke is Poke with an optional caller: MCP passes the conversation's
+// owning agent, and without one (an unowned conversation, dagger mcp) it
 // passes null. Either way the argument never reaches the model's schema.
 func (m *Poker) MaybePoke(
 	ctx context.Context,

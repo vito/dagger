@@ -3,9 +3,10 @@ package core
 // These tests cover Agent! object-tool arguments (hack/designs/async-agents.md
 // §3.1): a module function may declare an argument of the core Agent type. The
 // MCP tool schema hides that argument, and object-tool dispatch explicitly
-// passes the calling agent's handle when running inside an agent loop. The
-// module's GraphQL schema remains unchanged. This is the child->parent channel,
-// letting a tool message (steer) the agent that called it.
+// passes the agent that owns the conversation: inside an agent loop, the agent
+// running it. The module's GraphQL schema remains unchanged. This is the
+// child->parent channel, letting a tool message (steer) the agent that called
+// it.
 //
 // Style follows agent_runtime_test.go: keyless replay/ models constructed
 // through the LLM API itself, real tools dispatched during replay, and no
@@ -29,10 +30,11 @@ const (
 	pokeReply  = "done"
 )
 
-// servePokerModule serves the agent-poker fixture module — one function,
-// poke(caller: Agent!, note: String!): String!, which fire-and-forgets note
-// to the MCP-supplied caller and confirms the send — into the
-// client's session and returns the Poker object's ID for llm.withTools.
+// servePokerModule serves the agent-poker fixture module — poke(caller:
+// Agent!, note: String!), which fire-and-forgets note to the MCP-supplied
+// caller and confirms the send, whoami(caller: Agent!), and maybePoke with an
+// optional caller — into the client's session and returns the Poker object's
+// ID for llm.withTools.
 func servePokerModule(ctx context.Context, t *testctx.T, c *dagger.Client) core.ID {
 	t.Helper()
 	modDir := t.TempDir()
@@ -100,12 +102,11 @@ func (AgentRuntimeSuite) TestAgentArgInjection(ctx context.Context, t *testctx.T
 }
 
 // TestAgentArgHiddenFromToolSchema locks in that an Agent argument never
-// reaches the model, and that a method requiring one is offered only where an
-// agent can supply it. Inside an agent loop, TestAgentArgInjection's recorded
-// calls pass only the note: MCP fills the caller during object-tool dispatch.
-// The synchronous toolset rendered here has no agent, so poke is hidden
-// entirely rather than offered and then failing, and maybePoke is offered
-// without its optional caller, which it receives as null.
+// reaches the model, and that a method requiring one is offered exactly when
+// the conversation has an owning agent to supply, whoever reads the toolset.
+// An unowned conversation hides poke entirely rather than offering it and
+// failing, and offers maybePoke without its optional caller, which it receives
+// as null. An agent's snapshot, read here from outside any loop, offers both.
 func (AgentRuntimeSuite) TestAgentArgHiddenFromToolSchema(ctx context.Context, t *testctx.T) {
 	c := connect(ctx, t)
 	pokerID := servePokerModule(ctx, t, c)
@@ -129,13 +130,44 @@ func (AgentRuntimeSuite) TestAgentArgHiddenFromToolSchema(ctx context.Context, t
 	require.Contains(t, doc, "## maybePoke")
 	require.Contains(t, doc, `"note"`)
 	require.NotContains(t, doc, `"caller"`)
+
+	owner := spawnAgent(ctx, t, c, spawnOpts{model: emptyReplayModel, name: "owner", toolIDs: []core.ID{pokerID}})
+	doc = owner.mustRun(ctx, t, "snapshot { tools }").Get("snapshot.tools").String()
+	require.Contains(t, doc, "## poke\n")
+	require.Contains(t, doc, "## whoami\n")
+	require.Contains(t, doc, "## maybePoke")
+	require.NotContains(t, doc, `"caller"`)
+}
+
+// TestAgentArgFromOwnerInSyncLoop covers a synchronous loop over an agent's
+// conversation: no agent loop runs, but the conversation is owned, so a tool
+// requiring an Agent is offered and receives the owner.
+func (AgentRuntimeSuite) TestAgentArgFromOwnerInSyncLoop(ctx context.Context, t *testctx.T) {
+	c := connect(ctx, t)
+	pokerID := servePokerModule(ctx, t, c)
+	owner := spawnAgent(ctx, t, c, spawnOpts{model: emptyReplayModel, name: "owner", toolIDs: []core.ID{pokerID}})
+	snapshot := core.Ref[*core.LLM](core.NewQuery(c), core.ID(owner.mustRun(ctx, t, "snapshot { id }").Get("snapshot.id").String()))
+
+	model := cannedRecordingModel(ctx, t, c, core.NewQuery(c).LLM().
+		WithPrompt("who am I").
+		WithResponse([]core.LLMContentBlockInput{
+			{Kind: core.LLMContentBlockKindToolCall, CallID: "call_1", ToolName: "whoami", Arguments: core.JSON(`{}`)},
+		}).
+		WithToolResult("call_1", "", false).
+		WithResponse([]core.LLMContentBlockInput{
+			{Kind: core.LLMContentBlockKindText, Text: pokeReply},
+		}))
+	transcript, err := snapshot.WithModel(model).WithPrompt("who am I").Loop().Transcript(ctx)
+	require.NoError(t, err)
+	require.Contains(t, transcript, "caller: owner")
+	require.NotContains(t, transcript, "is not available")
 }
 
 // TestAgentArgRequiresAgentLoop covers the no-agent behavior without weakening
 // the module schema. A direct GraphQL call still has to supply the declared
 // Agent! argument; only the MCP object-tool adapter fills it. A synchronous
-// LLM loop has no agent to pass, so a tool requiring one is not offered at
-// all, and one taking an optional caller receives null.
+// loop over an unowned conversation has no agent to pass, so a tool requiring
+// one is not offered at all, and one taking an optional caller receives null.
 func (AgentRuntimeSuite) TestAgentArgRequiresAgentLoop(ctx context.Context, t *testctx.T) {
 	c := connect(ctx, t)
 	pokerID := servePokerModule(ctx, t, c)

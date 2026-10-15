@@ -22,13 +22,13 @@ type Chief {
 }
 
 type Peers {
+  """Original peer implementation."""
   parentName(me: Agent!): String! {
     let parent = me.parent
     if (parent == null) { raise "worker has no parent" }
     "original parent: " + parent.name
   }
 
-  """Original peer implementation."""
   reload(llm: LLM!): LLM! {
     llm.recompose
   }
