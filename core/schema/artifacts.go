@@ -1033,6 +1033,11 @@ func (*artifactsSchema) asExpertise(ctx context.Context, parent dagql.ObjectResu
 	// Validate every signature before creating any entry. Artifact types still
 	// reflect return types; an explicit selection may include plain LLM transforms.
 	for _, item := range items {
+		// A broken module under the selection fails with its load error, not
+		// as an artifact that is not a source of expertise.
+		if failure := item.Self().LoadFailure; failure != nil {
+			return nil, fmt.Errorf("%s", failure.Message)
+		}
 		if _, err := core.NewExpertise(item.Self()); err != nil {
 			return nil, err
 		}
