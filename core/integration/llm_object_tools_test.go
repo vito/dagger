@@ -1976,8 +1976,11 @@ type Swapper {
   }
 
   reload(llm: LLM!): LLM! {
-    let ws = llm.workspace.withNewFile("` + modulePath + `", llm.workspace.file("next-source.txt").contents)
-    llm.withWorkspace(ws).recompose
+    let ws = llm.workspace.withNewFile("` + modulePath + `", llm.workspace.file("next-source.txt").contents).withUserConfig
+    llm.withWorkspace(ws).compose(expertise: llm.expertise.{{ id, artifact.{{ uri }} }}.map { e =>
+      let found = ws.artifacts.filterUri(uri: e.artifact.uri).asExpertise.{{ id }}.map { f => f.id }
+      node(id: found[0] ?? e.id).{{ ... on Expertise! }}
+    })
   }
 
   advance: Swapper! {

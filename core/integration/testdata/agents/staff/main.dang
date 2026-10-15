@@ -30,6 +30,10 @@ type Peers {
   }
 
   reload(llm: LLM!): LLM! {
-    llm.recompose
+    let ws = llm.workspace.withUserConfig
+    llm.withWorkspace(ws).compose(expertise: llm.expertise.{{ id, artifact.{{ uri }} }}.map { e =>
+      let found = ws.artifacts.filterUri(uri: e.artifact.uri).asExpertise.{{ id }}.map { f => f.id }
+      node(id: found[0] ?? e.id).{{ ... on Expertise! }}
+    })
   }
 }

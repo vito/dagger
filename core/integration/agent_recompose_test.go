@@ -40,7 +40,11 @@ type Swapper {
   }
 
   reload(llm: LLM!): LLM! {
-    llm.recompose
+    let ws = llm.workspace.withUserConfig
+    llm.withWorkspace(ws).compose(expertise: llm.expertise.{{ id, artifact.{{ uri }} }}.map { e =>
+      let found = ws.artifacts.filterUri(uri: e.artifact.uri).asExpertise.{{ id }}.map { f => f.id }
+      node(id: found[0] ?? e.id).{{ ... on Expertise! }}
+    })
   }
 %s
 }
@@ -137,9 +141,54 @@ func composeInto(ctx context.Context, c *dagger.Client, conversation *core.LLM, 
 	return llmComposition(ctx, c, conversation, `compose(expertise: $expertise)`, map[string]any{"expertise": ids})
 }
 
-// recomposeConversation runs LLM.recompose: every recorded entry is refreshed.
-func recomposeConversation(ctx context.Context, c *dagger.Client, conversation *core.LLM) (*core.LLM, error) {
-	return llmComposition(ctx, c, conversation, `recompose`, nil)
+// reloadConversation refreshes a conversation's record the way a reload tool
+// does, as the GraphQL chain equivalent of
+//
+//	let ws = llm.workspace.withUserConfig
+//	llm.withWorkspace(ws).compose(expertise: llm.expertise.{{ id, artifact.{{ uri }} }}.map { e =>
+//	  let found = ws.artifacts.filterUri(uri: e.artifact.uri).asExpertise.{{ id }}.map { f => f.id }
+//	  node(id: found[0] ?? e.id).{{ ... on Expertise! }}
+//	})
+//
+// Each recorded entry is looked up again in the bound workspace by its URI,
+// dimension keys included, falling back to the recorded entry where the
+// workspace does not address it; a broken module there fails the lookup.
+func reloadConversation(ctx context.Context, c *dagger.Client, conversation *core.LLM) (*core.LLM, error) {
+	llmID, err := conversation.ID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var res struct {
+		Node struct {
+			Workspace struct {
+				WithUserConfig struct{ ID core.ID }
+			}
+			Expertise []struct {
+				ID       core.ID
+				Artifact struct{ URI string }
+			}
+		}
+	}
+	if err := c.Do(ctx, &dagger.Request{
+		Query:     `query($llm: ID!) { node(id: $llm) { ... on LLM { workspace { withUserConfig { id } } expertise { id artifact { uri } } } } }`,
+		Variables: map[string]any{"llm": llmID},
+	}, &dagger.Response{Data: &res}); err != nil {
+		return nil, err
+	}
+	ws := core.Ref[*core.Workspace](core.NewQuery(c), res.Node.Workspace.WithUserConfig.ID)
+	ids := make([]core.ID, 0, len(res.Node.Expertise))
+	for _, entry := range res.Node.Expertise {
+		found, err := uriExpertiseIDs(ctx, c, ws, entry.Artifact.URI)
+		if err != nil {
+			return nil, err
+		}
+		if len(found) > 0 {
+			ids = append(ids, found[0])
+		} else {
+			ids = append(ids, entry.ID)
+		}
+	}
+	return composeInto(ctx, c, conversation.WithWorkspace(ws), ids)
 }
 
 func llmComposition(ctx context.Context, c *dagger.Client, conversation *core.LLM, selection string, vars map[string]any) (*core.LLM, error) {
@@ -166,11 +215,11 @@ func llmComposition(ctx context.Context, c *dagger.Client, conversation *core.LL
 	return core.Ref[*core.LLM](core.NewQuery(c), result.Node.Result.ID), nil
 }
 
-// recomposeLLM binds ws, refreshes base's record there, then composes the
+// recomposeLLM binds ws, reloads base's record there, then composes the
 // entries discovered in ws, refreshing recorded ones in place.
 func recomposeLLM(ctx context.Context, t *testctx.T, c *dagger.Client, ws *core.Workspace, base *core.LLM, include ...string) (*core.LLM, error) {
 	t.Helper()
-	llm, err := recomposeConversation(ctx, c, base.WithWorkspace(ws))
+	llm, err := refreshLLM(ctx, c, ws, base)
 	if err != nil {
 		return nil, err
 	}
@@ -191,10 +240,10 @@ func composeLLM(ctx context.Context, c *dagger.Client, ws *core.Workspace, base 
 	return composeInto(ctx, c, base.WithWorkspace(ws), ids)
 }
 
-// refreshLLM binds ws and recomposes: every recorded entry is found again in
+// refreshLLM binds ws and reloads: every recorded entry is looked up again in
 // ws, or reruns from its recorded source.
 func refreshLLM(ctx context.Context, c *dagger.Client, ws *core.Workspace, base *core.LLM) (*core.LLM, error) {
-	return recomposeConversation(ctx, c, base.WithWorkspace(ws))
+	return reloadConversation(ctx, c, base.WithWorkspace(ws))
 }
 
 // composeURI binds ws and composes the entries a URI selects there.
@@ -277,7 +326,7 @@ func recordedExpertise(ctx context.Context, t *testctx.T, c *dagger.Client, llm 
 	return res.Node.Expertise
 }
 
-// Refresh the composition record in ws with recompose's own URI resolution,
+// Refresh the composition record in ws with the reload lookup by URI,
 // not old Expertise IDs or compose-all discovery (which would install the chief).
 func recomposeRecordedExpertise(ctx context.Context, t *testctx.T, c *dagger.Client, ws *core.Workspace, llm *core.LLM) *core.LLM {
 	t.Helper()
@@ -336,7 +385,7 @@ func (LLMSuite) TestRecomposePrivateStateAndReplay(ctx context.Context, t *testc
 
 	// Edit the existing workspace overlay, as the editor does: rebuilding a
 	// Directory-backed workspace would give the module a different origin.
-	// LLM.recompose finds the recorded entry again there.
+	// The reload lookup finds the recorded entry again there.
 	ws = ws.WithNewFile(recomposeModulePath, updated)
 	llm, err = refreshLLM(ctx, c, ws, llm)
 	require.NoError(t, err)
@@ -452,7 +501,7 @@ func (LLMSuite) TestRecomposeRemoteToLocalStateAndReplay(ctx context.Context, t 
 	require.Contains(t, transcript, "private counter: 2")
 	require.Len(t, mapPattern.FindAllString(transcript, -1), 2)
 
-	// A same-type state return and a repeated recompose must keep local code
+	// A same-type state return and a repeated reload must keep local code
 	// and ownership, including when the portable recipe is loaded elsewhere.
 	llm, err = recomposeLLM(ctx, t, c, ws, llm, "swapper")
 	require.NoError(t, err)
@@ -898,7 +947,7 @@ type Other {
 	require.NoError(t, err)
 	require.Contains(t, transcript, "private counter: 1")
 
-	// Both modules change on disk. LLM.recompose refreshes every recorded
+	// Both modules change on disk. Reloading refreshes every recorded
 	// entry, replacing only each owner's old prompt and tools: identical
 	// caller text is not ownership.
 	updated := strings.ReplaceAll(source, shared, replacement)
@@ -1062,14 +1111,14 @@ type Outer {
   added: String! { addedDefault + "; counter: " + toString(state) }
 `)
 	// Refreshing Outer refreshes all contributions made during its run,
-	// including the nested Swapper binding. No explicit nested recompose is needed.
+	// including the nested Swapper binding. No explicit nested reload is needed.
 	ws = ws.WithNewFile(recomposeModulePath, updated)
 	llm, err = recomposeLLM(ctx, t, c, ws, llm, "outer")
 	require.NoError(t, err)
 	llm = llm.WithPrompt("updated nested").Loop()
 	transcript, err = llm.Transcript(ctx)
 	require.NoError(t, err)
-	require.Contains(t, transcript, "nested default; counter: 1", "outer recompose must retain the nested Swapper tool state")
+	require.Contains(t, transcript, "nested default; counter: 1", "outer reload must retain the nested Swapper tool state")
 
 	// A nested binding still owns its explicit version contract after replay.
 	portable, err := sink.captureLLMRecipe(ctx, t, c, llm)
@@ -1389,7 +1438,8 @@ func (LLMSuite) TestRecomposeWorkerIdentity(ctx context.Context, t *testctx.T) {
 	llmID, err := llm.WithWorkspace(ws.WithNewFile("../staff/main.dang", updated)).ID(ctx)
 	require.NoError(t, err)
 	require.NoError(t, worker.reseedAgent(ctx, t, string(llmID)))
-	// Reload is llm.recompose, executed inside the worker's loop: the
+	// Reload looks each recorded entry up again and composes them, executed
+	// inside the worker's loop: the
 	// conversation the tool receives is owned by the worker, so the worker
 	// entry's me is the worker, never the chief that originally invoked
 	// spawn. It refreshes only the recorded worker entry, so the worker
@@ -1528,7 +1578,7 @@ type Swapper {
 
 	// Composing refreshes only the given entry, in place, and runs it as
 	// given: here, as converted from the original workspace. Other recorded
-	// entries are untouched until a recompose.
+	// entries are untouched until a reload.
 	ws = ws.WithNewFile(recomposeModulePath, strings.ReplaceAll(source, "original", "updated"))
 	llm, err = composeInto(ctx, c, llm.WithWorkspace(ws), ids)
 	require.NoError(t, err)
@@ -1586,7 +1636,7 @@ type Swapper {
 	require.Equal(t, []string{"first edited"}, recomposeSystemPrompts(ctx, t, c, llm))
 	require.Equal(t, entries, recordedExpertise(ctx, t, c, llm))
 	_, err = llm.Workspace().File("unrelated/main.dang").Contents(ctx)
-	require.NoError(t, err, "recompose keeps the conversation's bound workspace")
+	require.NoError(t, err, "reload keeps the conversation's bound workspace")
 
 	// Bound to a workspace that addresses it again, the entry is found there.
 	returned := edited.WithNewFile(recomposeModulePath, strings.ReplaceAll(source, "original", "returned"))
@@ -1594,6 +1644,29 @@ type Swapper {
 	require.NoError(t, err)
 	require.Equal(t, []string{"first returned"}, recomposeSystemPrompts(ctx, t, c, llm))
 	require.Equal(t, entries, recordedExpertise(ctx, t, c, llm))
+}
+
+// A recorded entry's module that fails to load in the bound workspace makes
+// the reload lookup raise its load error, instead of the lookup coming back
+// empty and the recorded entry silently rerunning from its old source.
+func (LLMSuite) TestReloadLookupRaisesLoadError(ctx context.Context, t *testctx.T) {
+	c := connect(ctx, t)
+	const source = `
+type Swapper {
+  first(base: LLM!): LLM! { base.withSystemPrompt("first original") }
+}
+`
+	ws := recomposeFixture(c, source).AsWorkspace()
+	_, llm := spawnURI(ctx, t, c, ws, core.NewQuery(c).LLM(), "swapper/first")
+	entries := recordedExpertise(ctx, t, c, llm)
+	require.Len(t, entries, 1)
+
+	broken := ws.WithNewFile(recomposeModulePath, "type Swapper {\n  first: IntentionallyUndefinedType! { \"hi\" }\n}\n")
+	_, err := uriExpertiseIDs(ctx, c, broken, entries[0].Artifact.URI)
+	require.ErrorContains(t, err, "IntentionallyUndefinedType", "the lookup itself raises the load error")
+	_, err = refreshLLM(ctx, c, broken, llm)
+	require.ErrorContains(t, err, "IntentionallyUndefinedType")
+	require.Equal(t, []string{"first original"}, recomposeSystemPrompts(ctx, t, c, llm), "the conversation is unchanged")
 }
 
 func (LLMSuite) TestComposeTransformDimensionIdentity(ctx context.Context, t *testctx.T) {
@@ -1635,7 +1708,7 @@ type Member {
 	require.Contains(t, entries[0].Artifact.URI, "member=one")
 	require.Contains(t, entries[1].Artifact.URI, "member=two")
 	require.ElementsMatch(t, []string{"original member: one", "original member: two"}, recomposeSystemPrompts(ctx, t, c, llm))
-	// LLM.recompose finds each entry again by its URI, dimension keys included.
+	// The reload lookup finds each entry again by its URI, dimension keys included.
 	ws = ws.WithNewFile(recomposeModulePath, strings.ReplaceAll(source, "original member", "updated member"))
 	llm, err = refreshLLM(ctx, c, ws, llm)
 	require.NoError(t, err)
@@ -1772,9 +1845,26 @@ type Swapper {
 	require.NoError(t, err)
 	require.ElementsMatch(t, []string{"required: receiver", "optional: receiver"}, recomposeSystemPrompts(ctx, t, c, llm))
 	require.Len(t, recordedExpertise(ctx, t, c, llm), 2)
-	llm, err = recomposeConversation(ctx, c, llm)
+	llm, err = reloadConversation(ctx, c, llm)
 	require.NoError(t, err)
 	require.ElementsMatch(t, []string{"required: receiver", "optional: receiver"}, recomposeSystemPrompts(ctx, t, c, llm))
+
+	// The same conversation without its owner, as a reload can meet it: the
+	// recorded required-Agent entry keeps its record and contribution rather
+	// than being stripped, while the optional one reruns with null.
+	llmID, err := llm.ID(ctx)
+	require.NoError(t, err)
+	var res struct {
+		Node struct{ Unowned struct{ ID core.ID } }
+	}
+	require.NoError(t, c.Do(ctx, &dagger.Request{
+		Query:     `query($llm: ID!) { node(id: $llm) { ... on LLM { unowned: __withOwnerAgent(handle: "") { id } } } }`,
+		Variables: map[string]any{"llm": llmID},
+	}, &dagger.Response{Data: &res}))
+	disowned, err := reloadConversation(ctx, c, core.Ref[*core.LLM](core.NewQuery(c), res.Node.Unowned.ID))
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{"required: receiver", "optional: no agent"}, recomposeSystemPrompts(ctx, t, c, disowned))
+	require.Equal(t, recordedExpertise(ctx, t, c, llm), recordedExpertise(ctx, t, c, disowned))
 
 	// A conversation without an owner has no agent to give. An entry
 	// requiring one is skipped: it does not run and is not recorded. An
@@ -1786,7 +1876,7 @@ type Swapper {
 	entries := recordedExpertise(ctx, t, c, llm)
 	require.Len(t, entries, 1)
 	require.Contains(t, entries[0].Artifact.URI, "swapper/optional")
-	llm, err = recomposeConversation(ctx, c, llm)
+	llm, err = reloadConversation(ctx, c, llm)
 	require.NoError(t, err)
 	require.Equal(t, []string{"optional: no agent"}, recomposeSystemPrompts(ctx, t, c, llm))
 	require.Equal(t, entries, recordedExpertise(ctx, t, c, llm))
