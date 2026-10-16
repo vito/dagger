@@ -1,10 +1,10 @@
 # Local megamerge branch
 
-Last rebuilt: 2026-10-16.
+Last rebuilt: 2026-10-16. Last addition: #14637 on 2026-10-16.
 
 ## Branch foundation
 
-Recreated local `megamerge` from `upstream/main` at `ff0b029a4d270a651b9a8c7286babc79089066e4`. This checkout was renamed from `main` before this rebuild; the separate local `main` branch was left unchanged. Eight open PRs were merged in the order below. Twenty-seven requested PRs are inherited from upstream. No tracked PR changed state or head since the preceding rebuild.
+Recreated local `megamerge` from `upstream/main` at `ff0b029a4d270a651b9a8c7286babc79089066e4`. This checkout was renamed from `main` before this rebuild; the separate local `main` branch was left unchanged. Eight open PRs were merged during the rebuild; #14637 was subsequently added, bringing the locally merged open PR set to nine. Twenty-seven requested PRs are inherited from upstream. No tracked PR changed state or head since the preceding rebuild.
 
 Historically, this branch started as `upstream/main` with #14345 merged fast-forward, followed by the local artifact agents/editor configuration. That original foundation is preserved at `backup/main-before-megamerge-20261004` (`fb1ca4d899c27040e9e28b16340a276d9924bb50`). Rebuilds use #14345's recorded current head.
 
@@ -12,7 +12,7 @@ The preceding megamerge and its tracking document are preserved at `backup/megam
 
 Pre-existing uncommitted `dagger.lock` edits were preserved and restored as unstaged edits: 67 removed keys and three added/updated keys. The new upstream beta.18 entry was retained. The original edits remain in stash `000ca9e3d566b6e239bbf5f25b6743267a775faa` (`megamerge 20261016: preserve local lock edits`). Historical stashes were left untouched.
 
-## Open PRs reapplied
+## Open PRs merged locally
 
 | PR | Change | Included head | Local merge |
 | --- | --- | --- | --- |
@@ -24,6 +24,7 @@ Pre-existing uncommitted `dagger.lock` edits were preserved and restored as unst
 | [#14545](https://github.com/dagger/dagger/pull/14545) | workspace: cap captured bundles, drop the split-and-rejoin | `4ae3ff33a070de8398d7e8fe26887be707ba196a` | `f89e6ff60b` |
 | [#14546](https://github.com/dagger/dagger/pull/14546) | engine: keep handler error status codes; let nested clients read archives | `f8777423f435eb6090386fb522bbb2bf04ac486c` | `02cec33be7` |
 | [#14548](https://github.com/dagger/dagger/pull/14548) | tui console: salvage agents from broken traces | `49e70574ee4e2676164cf3c031cd1eddcaaedd6f` | `815d38f037` |
+| [#14637](https://github.com/dagger/dagger/pull/14637) | agents: compose expertise with owning identity | `42fc5e023177b879bb43f5c3183da5028ba719fd` | `071d1a1b4d` |
 
 #14479 is the corrected number for the original request’s #11479.
 
@@ -59,7 +60,7 @@ Pre-existing uncommitted `dagger.lock` edits were preserved and restored as unst
 | [#14500](https://github.com/dagger/dagger/pull/14500) | core/mcp: run continuations in written position | `2228177a1c3d37581fbaf365d1ba8e264d1a30ea` |
 | [#14504](https://github.com/dagger/dagger/pull/14504) | engine: don't log redirected withExec stdout/stderr | `69ac0c2503952150a7175c4d34393f03f496611f` |
 
-All eight open heads and all twenty-seven upstream merge commits are ancestors of this branch.
+All nine recorded open heads and all twenty-seven upstream merge commits are ancestors of this branch.
 
 ## Conflict resolutions and local changes
 
@@ -78,6 +79,14 @@ All eight open heads and all twenty-seven upstream merge commits are ancestors o
 - #14465 and #14463 now supply the metadata router, Haiku reasoning integration, and adapted fixtures upstream. The former local reasoning/catalog fixture fixes were not reapplied.
 - Earlier Git lock/checkout integration (#14167) and changeset delta fixture fixes (#14466) remain supplied by upstream; old local resolutions were not reapplied over their landed implementations.
 
+## Addition of #14637
+
+Merged #14637 at `071d1a1b4d2f8786c82b7cc49f43eddf52a95d1a` into the existing megamerge without rebuilding or refreshing the other PRs. This adds recorded expertise and owning-agent composition, as well as its console transcript improvements.
+
+Resolved conflicts in the TUI console and its Dang module documentation by combining readable roster/transcript output and the expanded checkpoint decoder with #14548's loaded-telemetry fallback, inferred checkpoints, warnings, and salvage endpoint. Updated the existing salvage fixture's JSON requests and decoder expectations for the new behavior. The prior nil-safe child-span traversal remains intact.
+
+Pre-existing uncommitted `dagger.lock` edits were preserved byte-for-byte. No builds or tests were run; merge ancestry and whitespace checks passed. Other PR statuses in this document are from the rebuild, not re-queried for this addition.
+
 ## Validation policy
 
 The branch owner requested that future megamerge rebuilds and additions skip automated test runs because they take too long. Use dogfooding instead unless the owner explicitly requests tests. Continue resolving merge conflicts and recording branch state here.
@@ -86,4 +95,4 @@ The branch owner requested that future megamerge rebuilds and additions skip aut
 
 No builds or tests were run, per the branch owner's request. Runtime validation is left to dogfooding. All recorded open PR heads and upstream merge commits were verified as ancestors, merge conflicts were resolved, and `git diff --check` passed. Historical test results belong to earlier branches and remain in their backup tracking documents.
 
-Code tip before this tracking-document commit: `3c4bce68f5259714a3c5db9aad1ec6561339de3d`.
+Code tip before the latest tracking-document commit: `071d1a1b4d2f8786c82b7cc49f43eddf52a95d1a`.
