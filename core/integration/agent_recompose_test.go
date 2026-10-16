@@ -1938,7 +1938,7 @@ type Donor {
 	portable, err := sink.captureLLMRecipe(ctx, t, c, llm)
 	require.NoError(t, err)
 	c = connect(ctx, t)
-	agent, llm = restoreComposer(ctx, t, c, agent, portable)
+	_, llm = restoreComposer(ctx, t, c, agent, portable)
 
 	// Owner installed the binding outside an entry run. Adding its new agent
 	// entry must not claim or discard that unowned foreign tool.
