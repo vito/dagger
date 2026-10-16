@@ -64,6 +64,23 @@ func expertiseFunction(artifact *Artifact) *Function {
 	return nil
 }
 
+// ConversationArgument returns the name of the LLM! argument of an artifact
+// that transforms a conversation (whether or not it is nominated with @agent),
+// or "" for any other artifact. Such an artifact is discoverable without
+// arguments because composition supplies the conversation.
+func ConversationArgument(artifact *Artifact) string {
+	fn := expertiseFunction(artifact)
+	if fn == nil || !isExpertiseFunction(fn) {
+		return ""
+	}
+	for _, arg := range fn.Args {
+		if isCoreLLMArg(arg.Self()) {
+			return arg.Self().Name
+		}
+	}
+	return ""
+}
+
 func NewExpertise(artifact *Artifact) (*Expertise, error) {
 	fn := expertiseFunction(artifact)
 	if fn == nil || !isExpertiseFunction(fn) || artifact.Node.OriginalModule.Self() == nil {

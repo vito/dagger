@@ -148,9 +148,11 @@ func TestExpertiseConversion(t *testing.T) {
 			entry, err := NewExpertise(artifact)
 			if !tc.valid {
 				require.ErrorContains(t, err, "not a source of expertise")
+				require.Empty(t, ConversationArgument(artifact))
 				return
 			}
 			require.NoError(t, err)
+			require.Equal(t, "base", ConversationArgument(artifact))
 			require.False(t, functionRequiresCallerArgs(fn), "transforms must remain discoverable without @agent")
 			require.Equal(t, "agent", entry.OriginalModule().Name())
 			entry.Artifact.Node.Name = "changed"

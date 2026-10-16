@@ -462,6 +462,17 @@ func (*artifactsSchema) value(ctx context.Context, parent dagql.AnyResult, args 
 			return result, err
 		}
 	}
+	// A conversation transform is listed without arguments because
+	// composition supplies its conversation. Evaluated on its own, say so
+	// rather than failing on the missing argument.
+	if name := core.ConversationArgument(artifact); name != "" && artifact.LoadFailure == nil &&
+		!slices.ContainsFunc(inputs, func(input dagql.NamedInput) bool { return input.Name == name }) {
+		uri, err := artifact.URI(core.ArtifactURIOpts{DimensionKeys: true})
+		if err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("%s transforms a conversation: compose it with LLM.compose or LLM.spawn(expertise:) through Artifacts.asExpertise, or pass the conversation as its %q argument", uri, name)
+	}
 	if err := evaluateArtifact(ctx, artifact, &result, inputs...); err != nil {
 		if artifact.TypeName != "Check" {
 			return nil, err

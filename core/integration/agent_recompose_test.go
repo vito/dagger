@@ -1582,6 +1582,11 @@ type Swapper {
 	require.Equal(t, []string{"first original"}, recomposeSystemPrompts(ctx, t, c, twice))
 	_, err = uriExpertiseIDs(ctx, c, ws, "swapper/invalid")
 	require.Error(t, err, "asExpertise must reject non-transform artifacts")
+	// A transform is listed without arguments, since composition supplies
+	// its conversation. Evaluated on its own, it says how to use it.
+	_, err = ws.Artifacts().FilterURI("swapper/first").One().Value().ID(ctx)
+	require.ErrorContains(t, err, `transforms a conversation: compose it with LLM.compose or LLM.spawn(expertise:)`)
+	require.ErrorContains(t, err, `"base" argument`)
 	// A new entry is appended after the recorded ones.
 	llm, err = composeURI(ctx, c, ws, llm, "swapper/second")
 	require.NoError(t, err)
