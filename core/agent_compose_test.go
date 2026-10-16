@@ -1,6 +1,7 @@
 package core
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/dagger/dagger/dagql"
@@ -36,4 +37,63 @@ func TestCompleteCompositionLeavesSeedInputUnheld(t *testing.T) {
 	// step, not as a completed turn.
 	rt.testTransition(func() { rt.started = true })
 	require.Equal(t, AgentStateRunning, rt.State())
+}
+
+// A spawn whose composition fails leaves a STOPPED tombstone reserving its
+// handle. Unlike an ordinary STOPPED agent, nothing may relaunch it: its
+// committed conversation is the provisional seed, without the expertise.
+func TestAbortCompositionRefusesRelaunch(t *testing.T) {
+	base, released := leasedAgentContext(t)
+	registry := NewAgentRuntimes()
+	ctx := testAgentContext(t, base, "doomed", "doomed")
+	agent, ok := AgentFromContext(ctx)
+	require.True(t, ok)
+	rt, err := registry.Prepare(ctx, agent, AgentStateIdle, "", false, "")
+	require.NoError(t, err)
+	_, err = registry.Require(ctx, agent)
+	require.ErrorContains(t, err, "still composing")
+
+	cause := errors.New("expertise exploded")
+	rt.AbortComposition(ctx, cause)
+	require.Equal(t, AgentStateStopped, rt.State())
+
+	// The tombstone stays addressable for reads and stop.
+	again, err := registry.Require(ctx, agent)
+	require.NoError(t, err)
+	require.Same(t, rt, again)
+	require.Equal(t, "doomed", rt.Name())
+	_ = rt.Snapshot()
+	require.NoError(t, rt.Stop(base, false, nil, AgentStopExplicit), "stopping a tombstone stays idempotent")
+	require.NoError(t, rt.Stop(base, true, nil, AgentStopExplicit))
+	require.Equal(t, AgentStateStopped, rt.State())
+
+	// Every verb that would run or replace the provisional conversation is
+	// refused with the composition's cause.
+	assertAborted := func(err error) {
+		t.Helper()
+		require.ErrorIs(t, err, cause)
+		require.ErrorContains(t, err, `agent "doomed" failed its initial composition and cannot be run`)
+	}
+	assertAborted(rt.Resume(ctx))
+	assertAborted(rt.start(ctx))
+	_, err = rt.enqueue("hello", nil, "")
+	assertAborted(err)
+	_, err = registry.Send(ctx, agent, "hello", "")
+	assertAborted(err)
+	assertAborted(rt.Reseed(ctx, rt.Snapshot()))
+	assertAborted(registry.Reseed(ctx, agent, rt.Snapshot()))
+	_, err = rt.enqueue("event", &LLMMessageOrigin{Kind: LLMMessageOriginEvent}, "")
+	require.ErrorIs(t, err, errAgentEventDropped, "events to the tombstone are dropped, as for any stopped subscriber")
+
+	rt.mu.Lock()
+	require.False(t, rt.started, "no loop ever ran the provisional seed")
+	require.Empty(t, rt.mailbox)
+	rt.mu.Unlock()
+	require.Equal(t, AgentStateStopped, rt.State())
+
+	// Session teardown still releases the tombstone.
+	require.NoError(t, registry.KillAll(t.Context(), nil))
+	_, err = registry.CloseControl(t.Context())
+	require.NoError(t, err)
+	require.EqualValues(t, 1, released.Load())
 }

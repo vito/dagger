@@ -1252,6 +1252,7 @@ type AgentRuntime struct {
 
 	// Facts, guarded by mu. State() is a pure projection of these.
 	composing     bool                     // spawn is still composing the initial seed
+	composeErr    error                    // initial composition failed: the entry is a tombstone that can never run
 	seed          dagql.ObjectResult[*LLM] // fixed once initial composition completes
 	started       bool                     // the loop goroutine was launched
 	stepping      bool                     // a Step is in flight
@@ -1480,13 +1481,33 @@ func (rt *AgentRuntime) CompleteComposition(ctx context.Context, self dagql.Obje
 	return nil
 }
 
-// AbortComposition preserves a failed spawn as a dormant tombstone; no loop can
-// run the partial composition. Keeping the handle prevents accidental reuse.
+// AbortComposition preserves a failed spawn as a STOPPED tombstone: the handle
+// stays reserved (and visible to the roster) so it is never reused, but the
+// entry can never run. Its committed conversation is the provisional,
+// pre-composition seed — missing whatever the expertise would have added — so
+// every verb that would run or replace it (resume, send, reseed) is refused
+// with the composition's cause, rather than relaunching the tombstone the way
+// an ordinary STOPPED agent would. Read-only verbs and stop keep working.
 func (rt *AgentRuntime) AbortComposition(ctx context.Context, cause error) {
+	if cause == nil {
+		cause = errors.New("initial composition aborted")
+	}
+	rt.mu.Lock()
+	rt.composeErr = cause
+	rt.mu.Unlock()
 	_ = rt.Stop(ctx, true, cause, AgentStopExplicit)
 	rt.mu.Lock()
 	rt.composing = false
 	rt.mu.Unlock()
+}
+
+// abortedLocked reports why the entry can never run, or nil when it can. Must
+// be called with rt.mu held.
+func (rt *AgentRuntime) abortedLocked() error {
+	if rt.composeErr == nil {
+		return nil
+	}
+	return fmt.Errorf("agent %q failed its initial composition and cannot be run: %w", rt.name, rt.composeErr)
 }
 
 // ParentHandle is the immutable lineage recorded when this runtime was created.
@@ -1560,6 +1581,11 @@ func (rt *AgentRuntime) enqueueMessage(text string, content []*LLMContentBlock, 
 	stopped := rt.stateLocked() == AgentStateStopped
 	if stopped && origin != nil && origin.Kind == LLMMessageOriginEvent {
 		return "", errAgentEventDropped
+	}
+	if err := rt.abortedLocked(); err != nil {
+		// A failed composition is STOPPED, but unlike an ordinary stopped
+		// agent it must not reopen: its conversation is the provisional seed.
+		return "", err
 	}
 	var deliveryHint AgentMessageDelivery
 	switch {
@@ -1909,6 +1935,10 @@ func (rt *AgentRuntime) start(ctx context.Context) error {
 	if rt.closing {
 		rt.mu.Unlock()
 		return errors.New("agent is closing")
+	}
+	if err := rt.abortedLocked(); err != nil {
+		rt.mu.Unlock()
+		return err
 	}
 	rt.activated = true
 	if rt.started || rt.done {
@@ -2284,12 +2314,17 @@ func (rt *AgentRuntime) resetForRelaunchLocked() {
 // never-started agent's loop is started, so a seed with pending input steps
 // it. Input a Reseed held stays held: it leads the next message rather than
 // being answered on its own. On a running or idle non-paused agent resume is a
-// no-op.
+// no-op. An entry whose initial composition failed is refused: its tombstone
+// holds only the provisional seed.
 func (rt *AgentRuntime) Resume(ctx context.Context) error {
 	rt.mu.Lock()
 	if rt.closing {
 		rt.mu.Unlock()
 		return errors.New("agent is closing")
+	}
+	if err := rt.abortedLocked(); err != nil {
+		rt.mu.Unlock()
+		return err
 	}
 	rt.activated = true
 	switch rt.stateLocked() {
@@ -2381,6 +2416,9 @@ func (rt *AgentRuntime) Reseed(ctx context.Context, next dagql.ObjectResult[*LLM
 	defer rt.mu.Unlock()
 	if rt.closing {
 		return errors.New("agent is closing")
+	}
+	if err := rt.abortedLocked(); err != nil {
+		return err
 	}
 	switch rt.stateLocked() {
 	case AgentStateStopped:
