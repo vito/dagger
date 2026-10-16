@@ -281,7 +281,8 @@ func TestAgentSpawnCompositionFailureRetry(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, wantKey, childKey)
 	require.NotEqual(t, parentKey, childKey)
-	require.Empty(t, childSeed.Messages[0].CompositionOwner, "the fixture entry runs outside a module")
+	require.Equal(t, "fixture", childSeed.Messages[0].CompositionOwner,
+		"the fixture's prompt is made outside a module, but while its entry ran: the entry's module claims it")
 	rt, err = agents.Require(ctx, worker)
 	require.NoError(t, err)
 	require.Equal(t, core.AgentStateIdle, rt.State())

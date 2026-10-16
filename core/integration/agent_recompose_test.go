@@ -1369,9 +1369,9 @@ type Donor {
 		"own prompt original", "own prompt refreshed").Replace(donorSource))
 	llm, err := refreshLLM(ctx, c, updated, llm)
 	require.NoError(t, err)
-	expected := []string{"shared helper original", "shared helper refreshed", "own prompt refreshed"}
+	expected := []string{"shared helper refreshed", "own prompt refreshed"}
 	require.ElementsMatch(t, expected, recomposeSystemPrompts(ctx, t, c, llm),
-		"the entry's own prompt is replaced; the dependency's is added again")
+		"the dependency's prompt, made while the entry ran, is replaced with the entry's own")
 
 	// The same holds after replay in another session.
 	portable, err := sink.captureLLMRecipe(ctx, t, c, llm)
@@ -1381,7 +1381,7 @@ type Donor {
 	require.ElementsMatch(t, expected, recomposeSystemPrompts(ctx, t, target, restored))
 	restored, err = refreshLLM(ctx, target, restored.Workspace(), restored)
 	require.NoError(t, err)
-	require.ElementsMatch(t, append(expected, "shared helper refreshed"), recomposeSystemPrompts(ctx, t, target, restored))
+	require.ElementsMatch(t, expected, recomposeSystemPrompts(ctx, t, target, restored))
 	require.Len(t, recordedExpertise(ctx, t, target, restored), 2)
 }
 

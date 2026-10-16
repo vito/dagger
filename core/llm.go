@@ -1493,6 +1493,35 @@ func (llm *LLM) WithoutComposition(owner string) *LLM {
 	return llm
 }
 
+// WithContributionOwner re-stamps the system prompts at the given message
+// indices and the skill directories at the given indices as installed by
+// owner, so WithoutComposition(owner) removes them. Composition uses it to
+// make a dependency's contributions, made while an entry ran, the entry's
+// module's own (see claimDependencyContributions).
+func (llm *LLM) WithContributionOwner(owner string, messages, skills []int) (*LLM, error) {
+	llm = llm.Clone()
+	for _, i := range messages {
+		if i < 0 || i >= len(llm.Messages) {
+			return nil, fmt.Errorf("claim message %d: out of range (%d messages)", i, len(llm.Messages))
+		}
+		msg := llm.Messages[i]
+		if msg.Role != LLMMessageRoleSystem {
+			return nil, fmt.Errorf("claim message %d: not a system prompt", i)
+		}
+		msg = msg.Clone()
+		msg.CompositionOwner = owner
+		llm.Messages[i] = msg
+	}
+	// Clone copied the skill directory list: entries can be updated in place.
+	for _, i := range skills {
+		if i < 0 || i >= len(llm.mcp.skillDirs) {
+			return nil, fmt.Errorf("claim skill directory %d: out of range (%d directories)", i, len(llm.mcp.skillDirs))
+		}
+		llm.mcp.skillDirs[i].Owner = owner
+	}
+	return llm, nil
+}
+
 // Append an unowned system prompt message to the history.
 func (llm *LLM) WithSystemPrompt(prompt string) *LLM {
 	return llm.WithSystemPromptOwner(prompt, "")

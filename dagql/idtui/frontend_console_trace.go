@@ -269,6 +269,25 @@ func (d *consoleCheckpointDecoder) drop(remove func(consoleDecodedMessage) bool)
 	d.messages = slices.DeleteFunc(d.messages, remove)
 }
 
+// restamp sets the owner of the system prompt at index in the conversation,
+// counting decoded messages but not gaps. It reports whether there was one.
+func (d *consoleCheckpointDecoder) restamp(index int, owner string) bool {
+	for i := range d.messages {
+		if d.messages[i].message.Role == "GAP" {
+			continue
+		}
+		if index == 0 {
+			if d.messages[i].message.Role != "SYSTEM" {
+				return false
+			}
+			d.messages[i].owner = owner
+			return true
+		}
+		index--
+	}
+	return false
+}
+
 func (d *consoleCheckpointDecoder) apply(frame *callpbv1.Call) {
 	if frame.Field == "llm" || consoleCheckpointConfig[frame.Field] {
 		return
@@ -282,6 +301,19 @@ func (d *consoleCheckpointDecoder) apply(frame *callpbv1.Call) {
 		// spine. Only system prompts and tools are expected there.
 		d.add("SYSTEM", nil, "", consoleTranscriptBlock{Kind: "TEXT",
 			Text: "[expertise composed here; the system prompts and tools it contributed are not recorded on the checkpoint spine]"})
+		return
+	case "__withContributionOwner":
+		// Re-stamps system prompts by their position in the conversation,
+		// so a later __withoutComposition removes them under the new owner.
+		args, _ := consoleFrameArgs(frame, true)
+		owner, _ := args["owner"].(string)
+		indices, _ := args["messages"].([]any)
+		for _, raw := range indices {
+			index, ok := raw.(int64)
+			if !ok || !d.restamp(int(index), owner) {
+				fail("message %v is not in the decoded transcript; its owner was not updated", raw)
+			}
+		}
 		return
 	case "__withoutComposition":
 		args, _ := consoleFrameArgs(frame, true)

@@ -89,8 +89,8 @@ func (s llmSchema) Install(srv *dagql.Server) {
 		dagql.NodeFunc("compose", s.compose).
 			View(AfterVersion("v1.0.0-0")).
 			Doc("Run expertise and record it in expertise, passing this conversation through each function. Retain existing contributions.",
-				"Contributions (system prompts, tools and skills) are owned by the module whose code makes them. A module is refreshed when any of its given entries is already recorded under the same artifact address, with dimension keys: its contributions are cleared before any entry runs, then all of its recorded entries run again in record order, a given entry replacing its recorded one in place, and its compatible tool state is preserved. A change to a tool binding's version resets its state; removed bindings, changed identities, and incompatible state are errors. Entries not yet recorded then run in the given order and are appended to the record; a new entry alone does not refresh its module. Other modules' contributions and unowned ones are untouched. With no expertise given, return the conversation unchanged.",
-				"A dependency's contributions are not refreshed with your entry: when an entry calls a function of another module that contributes, the contribution belongs to that module. Contribute from your own module's code so a refresh replaces it.",
+				"Contributions (system prompts, tools and skills) are owned by the module whose code makes them, except a dependency's, below. A module is refreshed when any of its given entries is already recorded under the same artifact address, with dimension keys: its contributions are cleared before any entry runs, then all of its recorded entries run again in record order, a given entry replacing its recorded one in place, and its compatible tool state is preserved. A change to a tool binding's version resets its state; removed bindings, changed identities, and incompatible state are errors. Entries not yet recorded then run in the given order and are appended to the record; a new entry alone does not refresh its module. Other modules' contributions and unowned ones are untouched. With no expertise given, return the conversation unchanged.",
+				"System prompts and skills that a dependency adds while an entry runs (when the entry calls a function of another module that contributes) become the entry's module's, so a refresh replaces them rather than adding them again. Tool bindings stay the dependency's; one is kept per type, so a refresh rebinds it. Entries composed by a nested composition keep their own contributions.",
 				"Every Agent argument of an entry receives the agent that owns this conversation. Without an owner, an optional Agent argument receives null, and an entry with a required one is skipped: a new one does not run and is not recorded, and a module with such a recorded entry is not refreshed, keeping its record and contributions.",
 				"To refresh a conversation's record, e.g. after its modules changed, look each recorded entry up again in the workspace and compose them all, falling back to the recorded entry where the workspace does not address it. In Dang, with `ws` bound to `llm.workspace.withUserConfig`: `llm.withWorkspace(ws).compose(expertise: llm.expertise.{{ id, artifact.{{ uri }} }}.map { e => let found = ws.artifacts.filterUri(uri: e.artifact.uri).asExpertise.{{ id }}.map { f => f.id }; node(id: found[0] ?? e.id).{{ ... on Expertise! }} })`. A module that fails to load in the workspace makes the lookup fail with its load error.",
 				"When called on the conversation an entry is running with (nested composition), compose never refreshes: it runs and records only the given entries that are neither recorded nor being composed.").
@@ -99,6 +99,16 @@ func (s llmSchema) Install(srv *dagql.Server) {
 			Owner string
 		}) (*core.LLM, error) {
 			return llm.WithoutComposition(args.Owner), nil
+		}).View(AfterVersion("v1.0.0-0")),
+		// Composition re-stamps a dependency's contributions as the running
+		// entry's module's own, by position, so replay reproduces it (see
+		// core.ComposeExpertise).
+		dagql.Func("__withContributionOwner", func(_ context.Context, llm *core.LLM, args struct {
+			Owner    string
+			Messages []int `default:"[]"`
+			Skills   []int `default:"[]"`
+		}) (*core.LLM, error) {
+			return llm.WithContributionOwner(args.Owner, args.Messages, args.Skills)
 		}).View(AfterVersion("v1.0.0-0")),
 		dagql.Func("model", s.model).
 			Doc("The model the conversation is running against, after resolving any configured default."),

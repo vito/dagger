@@ -246,15 +246,22 @@ func newCompositionScopeSession(t *testing.T, runs *int) (context.Context, *dagq
 	}
 	obj := core.NewObjectTypeDef("Query", "", nil)
 	obj.Functions = dagql.ObjectResultArray[*core.Function]{fn, requiredFn, optionalFn, observingFn,
-		plainFn("otherContribute"), plainFn("composeSibling"), plainFn("composeSelf")}
+		plainFn("otherContribute"), plainFn("composeSibling"), plainFn("composeSelf"),
+		plainFn("contributeViaDependency"), plainFn("composeOther")}
 	objRes := objectResult(t, srv, "scope-object", obj)
 	rootType := objectResult(t, srv, "scope-root", (&core.TypeDef{}).WithObject(objRes))
-	// Every entry belongs to the fixture module, except otherContribute.
+	// Every entry belongs to the fixture module, except otherContribute. The
+	// donor module has no entries: it stands in for a dependency whose
+	// function an entry calls.
 	fixtureMod := objectResult(t, srv, "scope-module", &core.Module{NameField: "fixture"})
 	otherMod := objectResult(t, srv, "scope-other-module", &core.Module{NameField: "other"})
+	donorMod := objectResult(t, srv, "scope-donor-module", &core.Module{NameField: "donor"})
 	moduleOf := func(name string) dagql.ObjectResult[*core.Module] {
-		if name == "otherContribute" {
+		switch name {
+		case "otherContribute":
 			return otherMod
+		case "donorHelper":
+			return donorMod
 		}
 		return fixtureMod
 	}
@@ -345,6 +352,23 @@ func newCompositionScopeSession(t *testing.T, runs *int) (context.Context, *dagq
 		// An entry composing itself.
 		dagql.NodeFunc("composeSelf", func(ctx context.Context, _ dagql.ObjectResult[*core.Query], args baseArgs) (dagql.ObjectResult[*core.LLM], error) {
 			return composeNested(ctx, args.Base, "composeSelf", "composeSelf", "self composer")
+		}),
+		// An entry composing another module's entry.
+		dagql.NodeFunc("composeOther", func(ctx context.Context, _ dagql.ObjectResult[*core.Query], args baseArgs) (dagql.ObjectResult[*core.LLM], error) {
+			return composeNested(ctx, args.Base, "composeOther", "otherContribute", "other composer")
+		}),
+		// An entry calling a dependency's function that contributes under the
+		// dependency's name, then contributing its own prompt.
+		dagql.NodeFunc("contributeViaDependency", func(ctx context.Context, _ dagql.ObjectResult[*core.Query], args baseArgs) (dagql.ObjectResult[*core.LLM], error) {
+			llm, err := prompt(ctx, args.Base, "donorHelper", "donor prompt")
+			if err != nil {
+				return llm, err
+			}
+			id, err := llm.ID()
+			if err != nil {
+				return llm, err
+			}
+			return prompt(ctx, dagql.NewID[*core.LLM](id), "contributeViaDependency", "via dependency")
 		}),
 		dagql.Func("fixtureEntry", func(_ context.Context, _ *core.Query, args struct{ Name string }) (*core.Expertise, error) {
 			return newEntry(args.Name), nil
@@ -684,6 +708,70 @@ func TestComposeNestedSelf(t *testing.T) {
 	require.Equal(t, []string{"self composer"}, messageTexts(refreshed.Self()))
 	require.Len(t, refreshed.Self().Expertise, 1)
 	require.Equal(t, 2, runs)
+}
+
+func messageOwners(llm *core.LLM) []string {
+	var owners []string
+	for _, msg := range llm.Messages {
+		owners = append(owners, msg.CompositionOwner)
+	}
+	return owners
+}
+
+// A dependency's prompt, made while an entry ran, becomes the entry's
+// module's: refreshing the module replaces it rather than adding it again
+// beside the old one, and replay reproduces the claim.
+func TestComposeClaimsDependencyContributions(t *testing.T) {
+	runs := 0
+	ctx, srv := newCompositionScopeSession(t, &runs)
+	var seed dagql.ObjectResult[*core.LLM]
+	require.NoError(t, srv.Select(ctx, srv.Root(), &seed, dagql.Selector{Field: "llm", Args: []dagql.NamedInput{{Name: "model", Value: dagql.Opt(dagql.String("test-model"))}}}))
+	entry := fixtureEntryID(t, ctx, srv, "contributeViaDependency")
+	texts := []string{"donor prompt", "via dependency"}
+	owners := []string{"fixture", "fixture"}
+
+	composed := composeExpertise(t, ctx, srv, seed, entry)
+	require.Equal(t, texts, messageTexts(composed.Self()))
+	require.Equal(t, owners, messageOwners(composed.Self()))
+	for range 2 {
+		composed = composeExpertise(t, ctx, srv, composed, recordIDs(t, composed)...)
+		require.Equal(t, texts, messageTexts(composed.Self()), "a refresh must not add the dependency's prompt again")
+		require.Equal(t, owners, messageOwners(composed.Self()))
+	}
+
+	recipe, err := composed.RecipeID(ctx)
+	require.NoError(t, err)
+	replayCtx, replaySrv := newCompositionScopeSession(t, &runs)
+	replayed, err := replaySrv.Load(replayCtx, recipe)
+	require.NoError(t, err)
+	restored, ok := dagql.UnwrapAs[*core.LLM](replayed)
+	require.True(t, ok)
+	require.Equal(t, texts, messageTexts(restored))
+	require.Equal(t, owners, messageOwners(restored))
+}
+
+// An entry composing another module's entry does not claim that entry's
+// contributions: they stay its module's, kept when the composer's module
+// refreshes, since the nested composition then finds the entry recorded and
+// does not run it again.
+func TestComposeNestedOtherModuleKeepsContributions(t *testing.T) {
+	runs := 0
+	ctx, srv := newCompositionScopeSession(t, &runs)
+	var seed dagql.ObjectResult[*core.LLM]
+	require.NoError(t, srv.Select(ctx, srv.Root(), &seed, dagql.Selector{Field: "llm", Args: []dagql.NamedInput{{Name: "model", Value: dagql.Opt(dagql.String("test-model"))}}}))
+	composer := fixtureEntryID(t, ctx, srv, "composeOther")
+	texts := []string{"other prompt", "other composer"}
+	owners := []string{"other", "fixture"}
+
+	composed := composeExpertise(t, ctx, srv, seed, composer)
+	require.Equal(t, texts, messageTexts(composed.Self()))
+	require.Equal(t, owners, messageOwners(composed.Self()))
+	require.Len(t, composed.Self().Expertise, 2)
+
+	refreshed := composeExpertise(t, ctx, srv, composed, composer)
+	require.Equal(t, texts, messageTexts(refreshed.Self()))
+	require.Equal(t, owners, messageOwners(refreshed.Self()))
+	require.Len(t, refreshed.Self().Expertise, 2)
 }
 
 func TestLLMRestoreSkipsSupersededToolConstruction(t *testing.T) {

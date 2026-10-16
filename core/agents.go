@@ -237,9 +237,14 @@ func (a *Expertise) AttachDependencyResults(ctx context.Context, owner dagql.Any
 //     the record. A new entry alone does not refresh its module.
 //   - Other recorded entries and their contributions are untouched.
 //
-// A dependency's contributions, made inside a function of another module the
-// entry calls, belong to that dependency and are not cleared when the entry's
-// module refreshes.
+// A dependency's system prompts and skill directories, made inside a function
+// of another module the entry calls, are re-stamped as the entry's module's
+// once the entry returns (see claimDependencyContributions), so a refresh
+// replaces them rather than adding them again. Tool bindings keep their
+// dependency owner: they are kept one per type, so a refresh rebinds rather
+// than duplicates them, and a binding shared by several modules' entries must
+// not change hands. Contributions of entries composed by a nested composition
+// stay theirs.
 //
 // An entry requiring an Agent is skipped on a conversation without an owning
 // agent: a new one neither runs nor is recorded. A module with such a recorded
@@ -289,6 +294,11 @@ func ComposeExpertise(ctx context.Context, base dagql.ObjectResult[*LLM], expert
 	for _, entry := range plan.run {
 		next, err := entry.Self().Run(ctx, acc)
 		if err != nil {
+			return base, fmt.Errorf("compose agent %q: %w", entry.Self().Name(), err)
+		}
+		// A dependency's contributions, made while the entry ran, are the
+		// entry's module's to refresh.
+		if next, err = claimDependencyContributions(ctx, srv, acc, next, entry.Self()); err != nil {
 			return base, fmt.Errorf("compose agent %q: %w", entry.Self().Name(), err)
 		}
 		// Keep the entries a nested composition recorded.
@@ -425,6 +435,93 @@ func refreshedModules(base dagql.ObjectResult[*LLM], record dagql.ObjectResultAr
 		}
 	}
 	return refresh
+}
+
+// claimDependencyContributions re-stamps, as entry's module's own, the system
+// prompts and skill directories entry added with another owner: those a
+// dependency's function made while the entry ran. Without this, refreshing the
+// entry's module would clear only its own contributions and rerun the entry,
+// adding the dependency's contributions again beside the old ones.
+//
+// Only additions are claimed: what after holds beyond a prefix equal to
+// before. An entry that rewrote what it was given (or built a new
+// conversation) claims nothing. Contributions owned by the module of an entry a
+// nested composition recorded while this one ran are that entry's, which its
+// own module refreshes. Tool bindings are never claimed (see
+// ComposeExpertise).
+//
+// The claim is a recorded selector, so replay reproduces it.
+func claimDependencyContributions(ctx context.Context, srv *dagql.Server, before, after dagql.ObjectResult[*LLM], entry *Expertise) (dagql.ObjectResult[*LLM], error) {
+	owner := entry.ModuleName()
+	if owner == "" || before.Self() == nil || after.Self() == nil {
+		return after, nil
+	}
+	recorded := map[string]bool{}
+	for _, e := range before.Self().Expertise {
+		key, err := e.Self().Identity()
+		if err != nil {
+			return after, err
+		}
+		recorded[key] = true
+	}
+	nested := map[string]bool{}
+	for _, e := range after.Self().Expertise {
+		key, err := e.Self().Identity()
+		if err != nil {
+			return after, err
+		}
+		if !recorded[key] {
+			nested[e.Self().ModuleName()] = true
+		}
+	}
+	claims := func(o string) bool { return o != owner && !nested[o] }
+
+	prev, next := before.Self(), after.Self()
+	var messages dagql.ArrayInput[dagql.Int]
+	if len(next.Messages) > len(prev.Messages) && slices.EqualFunc(prev.Messages, next.Messages[:len(prev.Messages)], sameContribution) {
+		for i := len(prev.Messages); i < len(next.Messages); i++ {
+			if msg := next.Messages[i]; msg.Role == LLMMessageRoleSystem && claims(msg.CompositionOwner) {
+				messages = append(messages, dagql.Int(i))
+			}
+		}
+	}
+	var skills dagql.ArrayInput[dagql.Int]
+	if prev.mcp != nil && next.mcp != nil {
+		prevDirs, nextDirs := prev.mcp.skillDirs, next.mcp.skillDirs
+		if len(nextDirs) > len(prevDirs) && slices.EqualFunc(prevDirs, nextDirs[:len(prevDirs)], sameSkillDirectory) {
+			for i := len(prevDirs); i < len(nextDirs); i++ {
+				if claims(nextDirs[i].Owner) {
+					skills = append(skills, dagql.Int(i))
+				}
+			}
+		}
+	}
+	if len(messages) == 0 && len(skills) == 0 {
+		return after, nil
+	}
+	args := []dagql.NamedInput{{Name: "owner", Value: dagql.String(owner)}}
+	if len(messages) > 0 {
+		args = append(args, dagql.NamedInput{Name: "messages", Value: messages})
+	}
+	if len(skills) > 0 {
+		args = append(args, dagql.NamedInput{Name: "skills", Value: skills})
+	}
+	err := srv.Select(ctx, after, &after, dagql.Selector{Field: "__withContributionOwner", Args: args})
+	return after, err
+}
+
+// sameContribution compares messages by value, including their owner.
+func sameContribution(a, b *LLMMessage) bool {
+	return messagesEqual(a, b) && (a == nil || a.CompositionOwner == b.CompositionOwner)
+}
+
+func sameSkillDirectory(a, b ownedSkillDirectory) bool {
+	if a.Owner != b.Owner {
+		return false
+	}
+	aID, aErr := a.Directory.ID()
+	bID, bErr := b.Directory.ID()
+	return aErr == nil && bErr == nil && stableIDDigest(aID) == stableIDDigest(bID)
 }
 
 // mergeExpertiseRecord appends the entries of from not already in record.

@@ -437,6 +437,43 @@ func TestConsoleRecordedCheckpointSelectors(t *testing.T) {
 	require.Equal(t, "after", got.Snapshot.Messages[2].Content[0].Text)
 }
 
+// A dependency's prompt claimed by the entry's module is removed when that
+// module's contributions are cleared, as the engine does.
+func TestConsoleRecordedContributionOwner(t *testing.T) {
+	llmType := &ast.Type{NamedType: "LLM", NonNull: true}
+	arg := func(name string, value any) *call.Argument {
+		lit, err := call.ToLiteral(value)
+		require.NoError(t, err)
+		return call.NewArgument(name, lit, false)
+	}
+	decode := func(claimed ...any) consoleAgentSnapshot {
+		t.Helper()
+		id := call.New().Append(llmType, "llm").
+			Append(llmType, "withSystemPrompt", call.WithArgs(arg("prompt", "donor prompt"), arg("owner", "donor"))).
+			Append(llmType, "withSystemPrompt", call.WithArgs(arg("prompt", "own prompt"), arg("owner", "entry"))).
+			Append(llmType, "__withContributionOwner", call.WithArgs(arg("owner", "entry"), arg("messages", claimed))).
+			Append(llmType, "withPrompt", call.WithArgs(arg("prompt", "hello"))).
+			Append(llmType, "__withoutComposition", call.WithArgs(arg("owner", "entry")))
+		dag, err := id.ToProto()
+		require.NoError(t, err)
+		db := dagui.NewDB()
+		db.Calls = dag.GetRecipe().CallsByDigest
+		got, err := decodeConsoleCheckpoint(db, consoleAgent{ID: "a", SnapshotDigest: id.Digest().String()})
+		require.NoError(t, err)
+		return got
+	}
+
+	got := decode(int64(0))
+	require.Empty(t, got.Gaps)
+	require.Len(t, got.Snapshot.Messages, 1, "the claimed prompt is cleared with the entry's own")
+	require.Equal(t, "hello", got.Snapshot.Messages[0].Content[0].Text)
+
+	// A position the decoded transcript does not have is a gap, not a guess.
+	got = decode(int64(5))
+	require.Len(t, got.Gaps, 1)
+	require.Contains(t, got.Gaps[0], "message 5 is not in the decoded transcript")
+}
+
 func TestConsoleTimings(t *testing.T) {
 	db := dagui.NewDB()
 	rootID, midID, leafID := prettyTestSpanID(1), prettyTestSpanID(2), prettyTestSpanID(3)
