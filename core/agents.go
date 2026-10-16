@@ -246,74 +246,16 @@ func ComposeExpertise(ctx context.Context, base dagql.ObjectResult[*LLM], expert
 	if err != nil {
 		return base, err
 	}
-	var skipped []string
-	defer func() { recordSkippedExpertise(ctx, skipped) }()
-	outer := base.Self().ComposingExpertise
-	nested := len(outer) > 0
-
-	record := slices.Clone(base.Self().Expertise)
-	keys := make([]string, len(record))
-	position := map[string]int{}
-	for i, entry := range record {
-		if keys[i], err = entry.Self().Identity(); err != nil {
-			return base, err
-		}
-		position[keys[i]] = i
+	plan, err := planComposition(base, expertise)
+	defer func() { recordSkippedExpertise(ctx, plan.skipped) }()
+	if err != nil {
+		return base, err
 	}
-	// Each identity is considered once, at its first position in the list, as
-	// the last entry given for it.
-	var order []string
-	given := map[string]dagql.ObjectResult[*Expertise]{}
-	for _, entry := range expertise {
-		key, err := entry.Self().Identity()
-		if err != nil {
-			return base, err
-		}
-		if _, seen := given[key]; !seen {
-			order = append(order, key)
-		}
-		given[key] = entry
-		if skipsUnowned(base, entry) && !slices.Contains(skipped, key) {
-			skipped = append(skipped, key)
-		}
-	}
-
-	var refresh []string
-	if !nested {
-		refresh = refreshedModules(base, record, keys, given)
-	}
-	var run dagql.ObjectResultArray[*Expertise]
-	for i, entry := range record {
-		if !slices.Contains(refresh, entry.Self().ModuleName()) {
-			continue
-		}
-		if next, ok := given[keys[i]]; ok {
-			record[i] = next
-		}
-		run = append(run, record[i])
-	}
-	for _, key := range order {
-		entry := given[key]
-		if _, recorded := position[key]; recorded || slices.Contains(outer, key) || skipsUnowned(base, entry) {
-			// A recorded entry was refreshed with its module above, or is kept.
-			// One being composed is run by the outer composition.
-			continue
-		}
-		position[key] = len(record)
-		record = append(record, entry)
-		run = append(run, entry)
-	}
-	if len(run) == 0 {
+	if len(plan.run) == 0 {
 		return base, nil
 	}
-	composing := slices.Clone(outer)
-	for _, entry := range run {
-		key, err := entry.Self().Identity()
-		if err != nil {
-			return base, err
-		}
-		composing = append(composing, key)
-	}
+	record, composing := plan.record, plan.composing
+	outer := base.Self().ComposingExpertise
 
 	// Entries are recorded once they have run, not while they run: an entry
 	// that spawns from its base must not hand the child a record of
@@ -322,12 +264,12 @@ func ComposeExpertise(ctx context.Context, base dagql.ObjectResult[*LLM], expert
 	if err != nil {
 		return base, err
 	}
-	for _, mod := range refresh {
+	for _, mod := range plan.refresh {
 		if acc, err = withoutComposition(ctx, srv, acc, mod); err != nil {
 			return base, err
 		}
 	}
-	for _, entry := range run {
+	for _, entry := range plan.run {
 		next, err := entry.Self().Run(ctx, acc)
 		if err != nil {
 			return base, fmt.Errorf("compose agent %q: %w", entry.Self().Name(), err)
@@ -345,7 +287,7 @@ func ComposeExpertise(ctx context.Context, base dagql.ObjectResult[*LLM], expert
 			}
 		}
 	}
-	if len(refresh) > 0 {
+	if len(plan.refresh) > 0 {
 		if acc, err = preserveRecomposedTools(ctx, srv, base, acc); err != nil {
 			return base, err
 		}
@@ -356,6 +298,87 @@ func ComposeExpertise(ctx context.Context, base dagql.ObjectResult[*LLM], expert
 	}
 	acc.Self().WarnToolNameCollisions(ctx)
 	return acc, nil
+}
+
+// compositionPlan is what ComposeExpertise does, decided before any entry
+// runs.
+type compositionPlan struct {
+	record    dagql.ObjectResultArray[*Expertise] // the record once the entries have run
+	run       dagql.ObjectResultArray[*Expertise] // entries to run, in order
+	refresh   []string                            // modules to clear before running
+	composing []string                            // the mark while entries run
+	skipped   []string                            // given entries skipped for want of an owner
+}
+
+// planComposition decides which entries ComposeExpertise runs and which
+// modules it refreshes (see ComposeExpertise).
+func planComposition(base dagql.ObjectResult[*LLM], expertise dagql.ObjectResultArray[*Expertise]) (compositionPlan, error) {
+	var plan compositionPlan
+	outer := base.Self().ComposingExpertise
+
+	record := slices.Clone(base.Self().Expertise)
+	keys := make([]string, len(record))
+	position := map[string]int{}
+	for i, entry := range record {
+		key, err := entry.Self().Identity()
+		if err != nil {
+			return plan, err
+		}
+		keys[i] = key
+		position[key] = i
+	}
+	// Each identity is considered once, at its first position in the list, as
+	// the last entry given for it.
+	var order []string
+	given := map[string]dagql.ObjectResult[*Expertise]{}
+	for _, entry := range expertise {
+		key, err := entry.Self().Identity()
+		if err != nil {
+			return plan, err
+		}
+		if _, seen := given[key]; !seen {
+			order = append(order, key)
+		}
+		given[key] = entry
+		if skipsUnowned(base, entry) && !slices.Contains(plan.skipped, key) {
+			plan.skipped = append(plan.skipped, key)
+		}
+	}
+
+	if len(outer) == 0 {
+		// A nested composition never refreshes.
+		plan.refresh = refreshedModules(base, record, keys, given)
+	}
+	for i, entry := range record {
+		if !slices.Contains(plan.refresh, entry.Self().ModuleName()) {
+			continue
+		}
+		if next, ok := given[keys[i]]; ok {
+			record[i] = next
+		}
+		plan.run = append(plan.run, record[i])
+	}
+	for _, key := range order {
+		entry := given[key]
+		if _, recorded := position[key]; recorded || slices.Contains(outer, key) || skipsUnowned(base, entry) {
+			// A recorded entry was refreshed with its module above, or is kept.
+			// One being composed is run by the outer composition.
+			continue
+		}
+		position[key] = len(record)
+		record = append(record, entry)
+		plan.run = append(plan.run, entry)
+	}
+	plan.record = record
+	plan.composing = slices.Clone(outer)
+	for _, entry := range plan.run {
+		key, err := entry.Self().Identity()
+		if err != nil {
+			return plan, err
+		}
+		plan.composing = append(plan.composing, key)
+	}
+	return plan, nil
 }
 
 // refreshedModules returns, in record order, the modules a top-level
