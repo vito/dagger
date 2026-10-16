@@ -55,8 +55,7 @@ func (MCPSuite) TestModuleWithoutPrivilegedExposesModuleMethods(ctx context.Cont
 		if tool.Name == "nudge" {
 			require.NotContains(t, tool.InputSchema.Properties, "me")
 		}
-		// Engine-internal arguments (e.g. _expertiseOwner) are
-		// never the model's to supply either.
+		// Engine-internal arguments are never the model's to supply either.
 		for name := range tool.InputSchema.Properties {
 			require.False(t, strings.HasPrefix(name, "_"), "tool %q exposes internal argument %q", tool.Name, name)
 		}
