@@ -12584,23 +12584,32 @@ class LLM(Type):
         return Artifacts(_ctx)
 
     def compose(self, expertise: list[Expertise]) -> Self:
-        """Run expertise in list order, passing this conversation through each
-        function, and record the entries in expertise. Retain existing
-        contributions.
+        """Run expertise and record it in expertise, passing this conversation
+        through each function. Retain existing contributions.
 
-        Entries already recorded under the same artifact address, with
-        dimension keys, are refreshed in place: all of their contributions are
-        cleared before any entry runs, they keep their record positions, and
-        their compatible tool state is preserved. A change to a tool binding's
-        version resets its state; removed bindings, changed identities, and
-        incompatible state are errors. Other recorded entries are untouched.
+        Contributions (system prompts, tools and skills) are owned by the
+        module whose code makes them. A module is refreshed when any of its
+        given entries is already recorded under the same artifact address,
+        with dimension keys: its contributions are cleared before any entry
+        runs, then all of its recorded entries run again in record order, a
+        given entry replacing its recorded one in place, and its compatible
+        tool state is preserved. A change to a tool binding's version resets
+        its state; removed bindings, changed identities, and incompatible
+        state are errors. Entries not yet recorded then run in the given order
+        and are appended to the record; a new entry alone does not refresh its
+        module. Other modules' contributions and unowned ones are untouched.
         With no expertise given, return the conversation unchanged.
+
+        A dependency's contributions are not refreshed with your entry: when
+        an entry calls a function of another module that contributes, the
+        contribution belongs to that module. Contribute from your own module's
+        code so a refresh replaces it.
 
         Every Agent argument of an entry receives the agent that owns this
         conversation. Without an owner, an optional Agent argument receives
-        null, and an entry with a required one is skipped: it does not run, a
-        new one is not recorded, and a recorded one keeps its record and
-        contributions.
+        null, and an entry with a required one is skipped: a new one does not
+        run and is not recorded, and a module with such a recorded entry is
+        not refreshed, keeping its record and contributions.
 
         To refresh a conversation's record, e.g. after its modules changed,
         look each recorded entry up again in the workspace and compose them
@@ -12614,10 +12623,9 @@ class LLM(Type):
         module that fails to load in the workspace makes the lookup fail with
         its load error.
 
-        When called while an entry runs (nested composition), the given
-        entries' contributions belong to the running entry and are not
-        recorded separately: rerunning it reproduces them, e.g.
-        `base.compose(expertise: [...])`.
+        When called on the conversation an entry is running with (nested
+        composition), compose never refreshes: it runs and records only the
+        given entries that are neither recorded nor being composed.
 
         Parameters
         ----------
@@ -12675,8 +12683,8 @@ class LLM(Type):
         return await _ctx.execute(int | None)
 
     async def expertise(self) -> list[Expertise]:
-        """Expertise composed into this conversation, in order. Nested
-        composition belongs to its outer entry and is not recorded separately.
+        """Expertise composed into this conversation, in the order it was first
+        composed, including entries composed while another entry ran.
         """
         _args: list[Arg] = []
         _ctx = self._select("expertise", _args)
