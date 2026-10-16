@@ -2868,6 +2868,8 @@ export type LLMLoopOpts = {
 export type LLMSpawnOpts = {
   /**
    * Compose these entries after minting the agent's identity and before fixing its seed. Agent arguments receive the newly spawned agent, not the caller.
+   *
+   * Until composition completes, that agent can be identified but not used: its name, handle, parent, state and loopError are available, while seed, snapshot, send, resume, pause, wait, notify, stop and reseed fail. If composition fails, the agent is left STOPPED and can never run.
    */
   expertise?: Expertise[]
 
@@ -5901,7 +5903,7 @@ export class Artifacts extends BaseClient {
   }
 
   /**
-   * Convert conversation-transforming functions to expertise without running them. Each must return LLM! and take exactly one LLM! argument, with only auto-filled or optional additional arguments. Agent arguments receive the agent that owns the conversation being composed (with LLM.spawn(expertise:), the newly spawned agent). On a conversation without an owner, an optional Agent argument receives null, and an entry with a required one is skipped: it does not run and is not recorded. The @agent directive nominates entries for default composition but is not required for explicit conversion. A module load failure fails with its load error.
+   * Convert conversation-transforming functions to expertise without running them. Each must return LLM! and take exactly one LLM! argument, with only auto-filled or optional additional arguments. Agent arguments receive the agent that owns the conversation being composed (with LLM.spawn(expertise:), the newly spawned agent, which can be identified but not messaged or controlled until its composition completes). On a conversation without an owner, an optional Agent argument receives null, and an entry with a required one is skipped: it does not run and is not recorded. The @agent directive nominates entries for default composition but is not required for explicit conversion. A module load failure fails with its load error.
    */
   asExpertise = async (): Promise<Expertise[]> => {
     type asExpertise = {
@@ -13835,9 +13837,9 @@ export class LLM extends BaseClient {
   /**
    * Run expertise and record it in expertise, passing this conversation through each function. Retain existing contributions.
    *
-   * Contributions (system prompts, tools and skills) are owned by the module whose code makes them. A module is refreshed when any of its given entries is already recorded under the same artifact address, with dimension keys: its contributions are cleared before any entry runs, then all of its recorded entries run again in record order, a given entry replacing its recorded one in place, and its compatible tool state is preserved. A change to a tool binding's version resets its state; removed bindings, changed identities, and incompatible state are errors. Entries not yet recorded then run in the given order and are appended to the record; a new entry alone does not refresh its module. Other modules' contributions and unowned ones are untouched. With no expertise given, return the conversation unchanged.
+   * Contributions (system prompts, tools and skills) are owned by the module whose code makes them, except a dependency's, below. A module is refreshed when any of its given entries is already recorded under the same artifact address, with dimension keys: its contributions are cleared before any entry runs, then all of its recorded entries run again in record order, a given entry replacing its recorded one in place, and its compatible tool state is preserved. A change to a tool binding's version resets its state; removed bindings, changed identities, and incompatible state are errors. Entries not yet recorded then run in the given order and are appended to the record; a new entry alone does not refresh its module. Other modules' contributions and unowned ones are untouched. With no expertise given, return the conversation unchanged.
    *
-   * A dependency's contributions are not refreshed with your entry: when an entry calls a function of another module that contributes, the contribution belongs to that module. Contribute from your own module's code so a refresh replaces it.
+   * System prompts and skills that a dependency adds while an entry runs (when the entry calls a function of another module that contributes) become the entry's module's, so a refresh replaces them rather than adding them again. Tool bindings stay the dependency's; one is kept per type, so a refresh rebinds it. Entries composed by a nested composition keep their own contributions.
    *
    * Every Agent argument of an entry receives the agent that owns this conversation. Without an owner, an optional Agent argument receives null, and an entry with a required one is skipped: a new one does not run and is not recorded, and a module with such a recorded entry is not refreshed, keeping its record and contributions.
    *
@@ -14035,6 +14037,8 @@ export class LLM extends BaseClient {
    *
    * With a handle, spawn restores an instance instead of minting one: this conversation becomes the committed history of the agent that handle names, so prompting it continues where it left off — rebuild a conversation's ID from a trace, load it, and spawn it under the handle it belonged to. Fails if that instance already has a runtime entry in this session: a restore must happen before anything else addresses the instance, since by then it may have stepped.
    * @param opts.expertise Compose these entries after minting the agent's identity and before fixing its seed. Agent arguments receive the newly spawned agent, not the caller.
+   *
+   * Until composition completes, that agent can be identified but not used: its name, handle, parent, state and loopError are available, while seed, snapshot, send, resume, pause, wait, notify, stop and reseed fail. If composition fails, the agent is left STOPPED and can never run.
    * @param opts.name Display label for the agent — telemetry and error messages; carries no identity. Defaults to a short name derived from the conversation.
    * @param opts.handle The runtime handle to restore the instance under, as published on its loop span as dagger.io/agent.id. Omit to mint a fresh instance.
    * @param opts.state The lifecycle state to create the agent in, as facts on the entry: IDLE is ready to be prompted, PAUSED parks it, FAILED holds an error a resume retries past, STOPPED preserves a dormant snapshot that send or resume can relaunch.
