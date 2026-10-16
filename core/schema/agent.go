@@ -314,7 +314,7 @@ func (s agentSchema) snapshot(ctx context.Context, parent dagql.ObjectResult[*co
 		// Never started: the last committed conversation is the seed.
 		return parent.Self().Seed, nil
 	}
-	return rt.Snapshot(), nil
+	return rt.ComposedSnapshot()
 }
 
 func (s agentSchema) send(ctx context.Context, parent dagql.ObjectResult[*core.Agent], args struct {

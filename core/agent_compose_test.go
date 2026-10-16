@@ -52,10 +52,18 @@ func TestAbortCompositionRefusesRelaunch(t *testing.T) {
 	require.NoError(t, err)
 	_, err = registry.Require(ctx, agent)
 	require.ErrorContains(t, err, "still composing")
+	// Reads of the conversation refuse too: the provisional seed lacks the
+	// expertise being composed.
+	_, err = rt.Seed()
+	require.ErrorContains(t, err, "still composing")
+	_, err = rt.ComposedSnapshot()
+	require.ErrorContains(t, err, "still composing")
 
 	cause := errors.New("expertise exploded")
 	rt.AbortComposition(ctx, cause)
 	require.Equal(t, AgentStateStopped, rt.State())
+	_, err = rt.ComposedSnapshot()
+	require.NoError(t, err, "a tombstone's conversation stays readable")
 
 	// The tombstone stays addressable for reads and stop.
 	again, err := registry.Require(ctx, agent)

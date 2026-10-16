@@ -290,7 +290,8 @@ func (s llmSchema) Install(srv *dagql.Server) {
 				`The loop is not started: the agent spends nothing until it is prompted or resumed, and any input pending on the conversation is stepped then.`,
 				`With a handle, spawn restores an instance instead of minting one: this conversation becomes the committed history of the agent that handle names, so prompting it continues where it left off — rebuild a conversation's ID from a trace, load it, and spawn it under the handle it belonged to. Fails if that instance already has a runtime entry in this session: a restore must happen before anything else addresses the instance, since by then it may have stepped.`).
 			Args(
-				dagql.Arg("expertise").Doc("Compose these entries after minting the agent's identity and before fixing its seed. Agent arguments receive the newly spawned agent, not the caller."),
+				dagql.Arg("expertise").Doc("Compose these entries after minting the agent's identity and before fixing its seed. Agent arguments receive the newly spawned agent, not the caller.",
+					"Until composition completes, that agent can be identified but not used: its name, handle, parent, state and loopError are available, while seed, snapshot, send, resume, pause, wait, notify, stop and reseed fail. If composition fails, the agent is left STOPPED and can never run."),
 				dagql.Arg("name").Doc("Display label for the agent — telemetry and error messages; carries no identity. Defaults to a short name derived from the conversation."),
 				dagql.Arg("handle").Doc(`The runtime handle to restore the instance under, as published on its loop span as dagger.io/agent.id. Omit to mint a fresh instance.`),
 				dagql.Arg("state").Doc(`The lifecycle state to create the agent in, as facts on the entry: IDLE is ready to be prompted, PAUSED parks it, FAILED holds an error a resume retries past, STOPPED preserves a dormant snapshot that send or resume can relaunch.`,

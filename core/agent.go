@@ -1536,6 +1536,18 @@ func (rt *AgentRuntime) Snapshot() dagql.ObjectResult[*LLM] {
 	return rt.last
 }
 
+// ComposedSnapshot is Snapshot for readers outside the runtime (Agent.snapshot):
+// like Seed, it refuses while spawn is still composing the initial
+// conversation, whose provisional value lacks the expertise being composed.
+func (rt *AgentRuntime) ComposedSnapshot() (dagql.ObjectResult[*LLM], error) {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	if rt.composing {
+		return dagql.ObjectResult[*LLM]{}, fmt.Errorf("agent %q is still composing its initial conversation", rt.name)
+	}
+	return rt.last, nil
+}
+
 // agentMessageContent validates user blocks and takes ownership of their data.
 // Empty content deliberately retains the legacy withPrompt recipe, even when
 // text is empty. A content-bearing send is always a single ordered message.
