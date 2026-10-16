@@ -23,25 +23,30 @@ class LLM extends Client\AbstractObject implements Client\IdAble, Node, Syncer
     }
 
     /**
-     * Run expertise in list order, passing this conversation through each function. Retain existing contributions.
+     * Expertise composed into this conversation, in the order it was first composed, including entries composed while another entry ran.
+     */
+    public function expertise(): array
+    {
+        $leafQueryBuilder = new \Dagger\Client\QueryBuilder('expertise');
+        return (array)$this->queryLeaf($leafQueryBuilder, 'expertise');
+    }
+
+    /**
+     * Run expertise and record it in expertise, passing this conversation through each function. Retain existing contributions.
+     *
+     * Contributions (system prompts, tools and skills) are owned by the module whose code makes them, except a dependency's, below. A module is refreshed when any of its given entries is already recorded under the same artifact address, with dimension keys: its contributions are cleared before any entry runs, then all of its recorded entries run again in record order, a given entry replacing its recorded one in place, and its compatible tool state is preserved. A change to a tool binding's version resets its state; removed bindings, changed identities, and incompatible state are errors. Entries not yet recorded then run in the given order and are appended to the record; a new entry alone does not refresh its module. Other modules' contributions and unowned ones are untouched. With no expertise given, return the conversation unchanged.
+     *
+     * System prompts and skills that a dependency adds while an entry runs (when the entry calls a function of another module that contributes) become the entry's module's, so a refresh replaces them rather than adding them again. Tool bindings stay the dependency's; one is kept per type, so a refresh rebinds it. Entries composed by a nested composition keep their own contributions.
+     *
+     * Every Agent argument of an entry receives the agent that owns this conversation. Without an owner, an optional Agent argument receives null, and an entry with a required one is skipped: a new one does not run and is not recorded, and a module with such a recorded entry is not refreshed, keeping its record and contributions.
+     *
+     * To refresh a conversation's record, e.g. after its modules changed, look each recorded entry up again in the workspace and compose them all, falling back to the recorded entry where the workspace does not address it. In Dang, with `ws` bound to `llm.workspace.withUserConfig`: `llm.withWorkspace(ws).compose(expertise: llm.expertise.{{ id, artifact.{{ uri }} }}.map { e => let found = ws.artifacts.filterUri(uri: e.artifact.uri).asExpertise.{{ id }}.map { f => f.id }; node(id: found[0] ?? e.id).{{ ... on Expertise! }} })`. A module that fails to load in the workspace makes the lookup fail with its load error.
+     *
+     * When called on the conversation an entry is running with (nested composition), compose never refreshes: it runs and records only the given entries that are neither recorded nor being composed.
      */
     public function compose(array $expertise): LLM
     {
         $innerQueryBuilder = new \Dagger\Client\QueryBuilder('compose');
-        $innerQueryBuilder->setArgument('expertise', $expertise);
-        return new \Dagger\LLM($this->client, $this->queryBuilderChain->chain($innerQueryBuilder));
-    }
-
-    /**
-     * Run expertise in list order, replacing their modules' contributions and preserving compatible tool state.
-     *
-     * Clear each selected module's contributions once before execution. Retain unowned contributions and contributions from other modules. Keep this LLM's workspace.
-     *
-     * A change to a tool binding's version resets its state. Removed bindings, changed identities, and incompatible state are errors.
-     */
-    public function recompose(array $expertise): LLM
-    {
-        $innerQueryBuilder = new \Dagger\Client\QueryBuilder('recompose');
         $innerQueryBuilder->setArgument('expertise', $expertise);
         return new \Dagger\LLM($this->client, $this->queryBuilderChain->chain($innerQueryBuilder));
     }
@@ -403,6 +408,7 @@ class LLM extends Client\AbstractObject implements Client\IdAble, Node, Syncer
      * With a handle, spawn restores an instance instead of minting one: this conversation becomes the committed history of the agent that handle names, so prompting it continues where it left off — rebuild a conversation's ID from a trace, load it, and spawn it under the handle it belonged to. Fails if that instance already has a runtime entry in this session: a restore must happen before anything else addresses the instance, since by then it may have stepped.
      */
     public function spawn(
+        ?array $expertise = null,
         ?string $name = null,
         ?string $handle = null,
         ?AgentState $state = null,
@@ -410,6 +416,9 @@ class LLM extends Client\AbstractObject implements Client\IdAble, Node, Syncer
         ?string $error = '',
     ): Agent {
         $leafQueryBuilder = new \Dagger\Client\QueryBuilder('spawn');
+        if (null !== $expertise) {
+        $leafQueryBuilder->setArgument('expertise', $expertise);
+        }
         if (null !== $name) {
         $leafQueryBuilder->setArgument('name', $name);
         }

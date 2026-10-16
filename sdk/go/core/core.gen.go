@@ -635,6 +635,25 @@ func (r *Agent) Notify(ctx context.Context, subscriber *Agent, opts ...AgentNoti
 	}, nil
 }
 
+// The agent that spawned this agent, or null for a root agent. Restored agents retain their recorded parent handle.
+//
+// Experimental: Agent APIs are likely to change.
+func (r *Agent) Parent(ctx context.Context) (*Agent, error) {
+	q := r.query.Select("parent")
+
+	q = q.Select("id")
+	var objectID *ID
+	if err := q.Bind(&objectID).Execute(ctx); err != nil {
+		return nil, err
+	}
+	if objectID == nil {
+		return nil, nil
+	}
+	return &Agent{
+		query: selectNode(q.Root(), *objectID, "Agent"),
+	}, nil
+}
+
 // AgentPauseOpts contains options for Agent.Pause
 type AgentPauseOpts struct {
 	// Preempt the in-flight step instead of letting it finish. All completed steps are kept and the interrupted turn stays open: messages it consumed remain pending, while unconsumed mailbox messages are discarded. Resume continues the turn from the last committed step. On an idle, never-started, or failed agent there is nothing to preempt, so this is a plain pause.
@@ -1910,7 +1929,7 @@ func (r *Artifacts) AsChecks(ctx context.Context) ([]Check, error) {
 	return convert(response), nil
 }
 
-// Convert the selection to expertise without running the functions. Fail if any artifact is not a source of expertise; a module load failure fails with its load error.
+// Convert conversation-transforming functions to expertise without running them. Each must return LLM! and take exactly one LLM! argument, with only auto-filled or optional additional arguments. Agent arguments receive the agent that owns the conversation being composed (with LLM.spawn(expertise:), the newly spawned agent, which can be identified but not messaged or controlled until its composition completes). On a conversation without an owner, an optional Agent argument receives null, and an entry with a required one is skipped: it does not run and is not recorded. The @agent directive nominates entries for default composition but is not required for explicit conversion. A module load failure fails with its load error.
 func (r *Artifacts) AsExpertise(ctx context.Context) ([]Expertise, error) {
 	q := r.query.Select("asExpertise")
 
@@ -9040,7 +9059,7 @@ func (r *ErrorValue) AsNode() Node {
 	}
 }
 
-// An agent function that can modify a conversation.
+// A function that can modify a conversation.
 type Expertise struct {
 	query *querybuilder.Selection
 	// refetchID is set when this object is built through a field marked
@@ -9059,6 +9078,16 @@ func (r *Expertise) WithGraphQLQuery(q *querybuilder.Selection) *Expertise {
 		// The query's origin is unknown: it may go through a field that
 		// must be reevaluated.
 		refetchID: true,
+	}
+}
+
+// The artifact this expertise runs.
+func (r *Expertise) Artifact() *Artifact {
+	q := r.query.Select("artifact")
+
+	return &Artifact{
+		query:     q,
+		refetchID: r.refetchID,
 	}
 }
 
@@ -14050,7 +14079,17 @@ func (r *LLM) Artifacts(opts ...LLMArtifactsOpts) *Artifacts {
 	}
 }
 
-// Run expertise in list order, passing this conversation through each function. Retain existing contributions.
+// Run expertise and record it in expertise, passing this conversation through each function. Retain existing contributions.
+//
+// Contributions (system prompts, tools and skills) are owned by the module whose code makes them, except a dependency's, below. A module is refreshed when any of its given entries is already recorded under the same artifact address, with dimension keys: its contributions are cleared before any entry runs, then all of its recorded entries run again in record order, a given entry replacing its recorded one in place, and its compatible tool state is preserved. A change to a tool binding's version resets its state; removed bindings, changed identities, and incompatible state are errors. Entries not yet recorded then run in the given order and are appended to the record; a new entry alone does not refresh its module. Other modules' contributions and unowned ones are untouched. With no expertise given, return the conversation unchanged.
+//
+// System prompts and skills that a dependency adds while an entry runs (when the entry calls a function of another module that contributes) become the entry's module's, so a refresh replaces them rather than adding them again. Tool bindings stay the dependency's; one is kept per type, so a refresh rebinds it. Entries composed by a nested composition keep their own contributions.
+//
+// Every Agent argument of an entry receives the agent that owns this conversation. Without an owner, an optional Agent argument receives null, and an entry with a required one is skipped: a new one does not run and is not recorded, and a module with such a recorded entry is not refreshed, keeping its record and contributions.
+//
+// To refresh a conversation's record, e.g. after its modules changed, look each recorded entry up again in the workspace and compose them all, falling back to the recorded entry where the workspace does not address it. In Dang, with `ws` bound to `llm.workspace.withUserConfig`: `llm.withWorkspace(ws).compose(expertise: llm.expertise.{{ id, artifact.{{ uri }} }}.map { e => let found = ws.artifacts.filterUri(uri: e.artifact.uri).asExpertise.{{ id }}.map { f => f.id }; node(id: found[0] ?? e.id).{{ ... on Expertise! }} })`. A module that fails to load in the workspace makes the lookup fail with its load error.
+//
+// When called on the conversation an entry is running with (nested composition), compose never refreshes: it runs and records only the given entries that are neither recorded nor being composed.
 func (r *LLM) Compose(expertise []*Expertise) *LLM {
 	q := r.query.Select("compose")
 	q = q.Arg("expertise", expertise)
@@ -14085,6 +14124,39 @@ func (r *LLM) ContextWindow(ctx context.Context) (int, error) {
 
 	q = q.Bind(&response)
 	return response, q.Execute(ctx)
+}
+
+// Expertise composed into this conversation, in the order it was first composed, including entries composed while another entry ran.
+func (r *LLM) Expertise(ctx context.Context) ([]Expertise, error) {
+	q := r.query.Select("expertise")
+
+	q = q.Select("id")
+
+	type expertise struct {
+		Id ID
+	}
+
+	convert := func(fields []expertise) []Expertise {
+		out := []Expertise{}
+
+		for i := range fields {
+			val := Expertise{id: &fields[i].Id}
+			val.query = selectNode(q.Root(), fields[i].Id, "Expertise")
+			out = append(out, val)
+		}
+
+		return out
+	}
+	var response []expertise
+
+	q = q.Bind(&response)
+
+	err := q.Execute(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return convert(response), nil
 }
 
 // Fork the conversation, so that otherwise-identical follow-ups evaluate independently instead of deduplicating to a single cached result.
@@ -14270,21 +14342,6 @@ func (r *LLM) ReasoningEffort(ctx context.Context) (string, error) {
 	return response, q.Execute(ctx)
 }
 
-// Run expertise in list order, replacing their modules' contributions and preserving compatible tool state.
-//
-// Clear each selected module's contributions once before execution. Retain unowned contributions and contributions from other modules. Keep this LLM's workspace.
-//
-// A change to a tool binding's version resets its state. Removed bindings, changed identities, and incompatible state are errors.
-func (r *LLM) Recompose(expertise []*Expertise) *LLM {
-	q := r.query.Select("recompose")
-	q = q.Arg("expertise", expertise)
-
-	return &LLM{
-		query:     q,
-		refetchID: r.refetchID,
-	}
-}
-
 // The skills visible to the model, exactly as the ListSkills tool serves them: engine-embedded skills, skills installed with withSkills, and skills discovered in the workspace.
 func (r *LLM) Skills(ctx context.Context) ([]LLMSkill, error) {
 	q := r.query.Select("skills")
@@ -14320,6 +14377,10 @@ func (r *LLM) Skills(ctx context.Context) ([]LLMSkill, error) {
 
 // LLMSpawnOpts contains options for LLM.Spawn
 type LLMSpawnOpts struct {
+	// Compose these entries after minting the agent's identity and before fixing its seed. Agent arguments receive the newly spawned agent, not the caller.
+	//
+	// Until composition completes, that agent can be identified but not used: its name, handle, parent, state and loopError are available, while seed, snapshot, send, resume, pause, wait, notify, stop and reseed fail. If composition fails, the agent is left STOPPED and can never run.
+	Expertise []*Expertise
 	// Display label for the agent — telemetry and error messages; carries no identity. Defaults to a short name derived from the conversation.
 	Name string
 	// The runtime handle to restore the instance under, as published on its loop span as dagger.io/agent.id. Omit to mint a fresh instance.
@@ -14348,6 +14409,10 @@ type LLMSpawnOpts struct {
 func (r *LLM) Spawn(ctx context.Context, opts ...LLMSpawnOpts) (*Agent, error) {
 	q := r.query.Select("spawn")
 	for i := len(opts) - 1; i >= 0; i-- {
+		// `expertise` optional argument
+		if !querybuilder.IsZeroValue(opts[i].Expertise) {
+			q = q.Arg("expertise", opts[i].Expertise)
+		}
 		// `name` optional argument
 		if !querybuilder.IsZeroValue(opts[i].Name) {
 			q = q.Arg("name", opts[i].Name)

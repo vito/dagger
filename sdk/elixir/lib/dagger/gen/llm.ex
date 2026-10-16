@@ -65,7 +65,17 @@ defmodule Dagger.LLM do
   end
 
   @doc """
-  Run expertise in list order, passing this conversation through each function. Retain existing contributions.
+  Run expertise and record it in expertise, passing this conversation through each function. Retain existing contributions.
+
+  Contributions (system prompts, tools and skills) are owned by the module whose code makes them, except a dependency's, below. A module is refreshed when any of its given entries is already recorded under the same artifact address, with dimension keys: its contributions are cleared before any entry runs, then all of its recorded entries run again in record order, a given entry replacing its recorded one in place, and its compatible tool state is preserved. A change to a tool binding's version resets its state; removed bindings, changed identities, and incompatible state are errors. Entries not yet recorded then run in the given order and are appended to the record; a new entry alone does not refresh its module. Other modules' contributions and unowned ones are untouched. With no expertise given, return the conversation unchanged.
+
+  System prompts and skills that a dependency adds while an entry runs (when the entry calls a function of another module that contributes) become the entry's module's, so a refresh replaces them rather than adding them again. Tool bindings stay the dependency's; one is kept per type, so a refresh rebinds it. Entries composed by a nested composition keep their own contributions.
+
+  Every Agent argument of an entry receives the agent that owns this conversation. Without an owner, an optional Agent argument receives null, and an entry with a required one is skipped: a new one does not run and is not recorded, and a module with such a recorded entry is not refreshed, keeping its record and contributions.
+
+  To refresh a conversation's record, e.g. after its modules changed, look each recorded entry up again in the workspace and compose them all, falling back to the recorded entry where the workspace does not address it. In Dang, with `ws` bound to `llm.workspace.withUserConfig`: `llm.withWorkspace(ws).compose(expertise: llm.expertise.{{ id, artifact.{{ uri }} }}.map { e => let found = ws.artifacts.filterUri(uri: e.artifact.uri).asExpertise.{{ id }}.map { f => f.id }; node(id: found[0] ?? e.id).{{ ... on Expertise! }} })`. A module that fails to load in the workspace makes the lookup fail with its load error.
+
+  When called on the conversation an entry is running with (nested composition), compose never refreshes: it runs and records only the given entries that are neither recorded nor being composed.
   """
   @spec compose(t(), [String.t()]) :: Dagger.LLM.t()
   def compose(%__MODULE__{} = llm, expertise) do
@@ -98,6 +108,29 @@ defmodule Dagger.LLM do
       llm.query_builder |> QB.select("contextWindow")
 
     Client.execute(llm.client, query_builder)
+  end
+
+  @doc """
+  Expertise composed into this conversation, in the order it was first composed, including entries composed while another entry ran.
+  """
+  @spec expertise(t()) :: {:ok, [Dagger.Expertise.t()]} | {:error, term()}
+  def expertise(%__MODULE__{} = llm) do
+    query_builder =
+      llm.query_builder |> QB.select("expertise") |> QB.select("id")
+
+    with {:ok, items} <- Client.execute(llm.client, query_builder) do
+      {:ok,
+       for %{"id" => id} <- items do
+         %Dagger.Expertise{
+           query_builder:
+             QB.query()
+             |> QB.select("node")
+             |> QB.put_arg("id", id)
+             |> QB.inline_fragment("Expertise"),
+           client: llm.client
+         }
+       end}
+    end
   end
 
   @doc """
@@ -222,24 +255,6 @@ defmodule Dagger.LLM do
   end
 
   @doc """
-  Run expertise in list order, replacing their modules' contributions and preserving compatible tool state.
-
-  Clear each selected module's contributions once before execution. Retain unowned contributions and contributions from other modules. Keep this LLM's workspace.
-
-  A change to a tool binding's version resets its state. Removed bindings, changed identities, and incompatible state are errors.
-  """
-  @spec recompose(t(), [String.t()]) :: Dagger.LLM.t()
-  def recompose(%__MODULE__{} = llm, expertise) do
-    query_builder =
-      llm.query_builder |> QB.select("recompose") |> QB.put_arg("expertise", expertise)
-
-    %Dagger.LLM{
-      query_builder: query_builder,
-      client: llm.client
-    }
-  end
-
-  @doc """
   The skills visible to the model, exactly as the ListSkills tool serves them: engine-embedded skills, skills installed with withSkills, and skills discovered in the workspace.
   """
   @spec skills(t()) :: {:ok, [Dagger.LLMSkill.t()]} | {:error, term()}
@@ -276,6 +291,7 @@ defmodule Dagger.LLM do
   > "Agent APIs are likely to change."
   """
   @spec spawn(t(), [
+          {:expertise, [Dagger.Expertise.t()]},
           {:name, String.t() | nil},
           {:handle, String.t() | nil},
           {:state, Dagger.AgentState.t() | nil},
@@ -286,6 +302,13 @@ defmodule Dagger.LLM do
     query_builder =
       llm.query_builder
       |> QB.select("spawn")
+      |> QB.maybe_put_arg(
+        "expertise",
+        if(optional_args[:expertise],
+          do: Enum.map(optional_args[:expertise], &Dagger.ID.id!/1),
+          else: nil
+        )
+      )
       |> QB.maybe_put_arg("name", optional_args[:name])
       |> QB.maybe_put_arg("handle", optional_args[:handle])
       |> QB.maybe_put_arg("state", optional_args[:state])

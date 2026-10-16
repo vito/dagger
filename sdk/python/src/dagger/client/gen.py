@@ -1144,6 +1144,17 @@ class Agent(Type):
         ]
         return await self._ctx.execute_sync(self, "notify", _args)
 
+    async def parent(self) -> "Agent | None":
+        """The agent that spawned this agent, or null for a root agent. Restored
+        agents retain their recorded parent handle.
+
+        .. caution::
+            Experimental: Agent APIs are likely to change.
+        """
+        _args: list[Arg] = []
+        _ctx = self._select("parent", _args)
+        return await _ctx.execute_object(Agent)
+
     async def pause(self, *, interrupt: bool | None = False) -> Self:
         """Stop draining the mailbox once the in-flight step completes, or
         immediately with interrupt.
@@ -2248,9 +2259,17 @@ class Artifacts(Type):
         return await _ctx.execute_object_list(Check)
 
     async def as_expertise(self) -> list["Expertise"]:
-        """Convert the selection to expertise without running the functions. Fail
-        if any artifact is not a source of expertise; a module load failure
-        fails with its load error.
+        """Convert conversation-transforming functions to expertise without
+        running them. Each must return LLM! and take exactly one LLM!
+        argument, with only auto-filled or optional additional arguments.
+        Agent arguments receive the agent that owns the conversation being
+        composed (with LLM.spawn(expertise:), the newly spawned agent, which
+        can be identified but not messaged or controlled until its composition
+        completes). On a conversation without an owner, an optional Agent
+        argument receives null, and an entry with a required one is skipped:
+        it does not run and is not recorded. The @agent directive nominates
+        entries for default composition but is not required for explicit
+        conversion. A module load failure fails with its load error.
         """
         _args: list[Arg] = []
         _ctx = self._select("asExpertise", _args)
@@ -8372,7 +8391,13 @@ class ErrorValue(Type):
 
 @typecheck
 class Expertise(Type):
-    """An agent function that can modify a conversation."""
+    """A function that can modify a conversation."""
+
+    def artifact(self) -> Artifact:
+        """The artifact this expertise runs."""
+        _args: list[Arg] = []
+        _ctx = self._select("artifact", _args)
+        return Artifact(_ctx)
 
     async def description(self) -> str:
         """The agent function's description.
@@ -12560,8 +12585,51 @@ class LLM(Type):
         return Artifacts(_ctx)
 
     def compose(self, expertise: list[Expertise]) -> Self:
-        """Run expertise in list order, passing this conversation through each
-        function. Retain existing contributions.
+        """Run expertise and record it in expertise, passing this conversation
+        through each function. Retain existing contributions.
+
+        Contributions (system prompts, tools and skills) are owned by the
+        module whose code makes them, except a dependency's, below. A module
+        is refreshed when any of its given entries is already recorded under
+        the same artifact address, with dimension keys: its contributions are
+        cleared before any entry runs, then all of its recorded entries run
+        again in record order, a given entry replacing its recorded one in
+        place, and its compatible tool state is preserved. A change to a tool
+        binding's version resets its state; removed bindings, changed
+        identities, and incompatible state are errors. Entries not yet
+        recorded then run in the given order and are appended to the record; a
+        new entry alone does not refresh its module. Other modules'
+        contributions and unowned ones are untouched. With no expertise given,
+        return the conversation unchanged.
+
+        System prompts and skills that a dependency adds while an entry runs
+        (when the entry calls a function of another module that contributes)
+        become the entry's module's, so a refresh replaces them rather than
+        adding them again. Tool bindings stay the dependency's; one is kept
+        per type, so a refresh rebinds it. Entries composed by a nested
+        composition keep their own contributions.
+
+        Every Agent argument of an entry receives the agent that owns this
+        conversation. Without an owner, an optional Agent argument receives
+        null, and an entry with a required one is skipped: a new one does not
+        run and is not recorded, and a module with such a recorded entry is
+        not refreshed, keeping its record and contributions.
+
+        To refresh a conversation's record, e.g. after its modules changed,
+        look each recorded entry up again in the workspace and compose them
+        all, falling back to the recorded entry where the workspace does not
+        address it. In Dang, with `ws` bound to
+        `llm.workspace.withUserConfig`:
+        `llm.withWorkspace(ws).compose(expertise: llm.expertise.{{ id,
+        artifact.{{ uri }} }}.map { e => let found =
+        ws.artifacts.filterUri(uri: e.artifact.uri).asExpertise.{{ id }}.map {
+        f => f.id }; node(id: found[0] ?? e.id).{{ ... on Expertise! }} })`. A
+        module that fails to load in the workspace makes the lookup fail with
+        its load error.
+
+        When called on the conversation an entry is running with (nested
+        composition), compose never refreshes: it runs and records only the
+        given entries that are neither recorded nor being composed.
 
         Parameters
         ----------
@@ -12617,6 +12685,14 @@ class LLM(Type):
         _args: list[Arg] = []
         _ctx = self._select("contextWindow", _args)
         return await _ctx.execute(int | None)
+
+    async def expertise(self) -> list[Expertise]:
+        """Expertise composed into this conversation, in the order it was first
+        composed, including entries composed while another entry ran.
+        """
+        _args: list[Arg] = []
+        _ctx = self._select("expertise", _args)
+        return await _ctx.execute_object_list(Expertise)
 
     def fork(self, label: str) -> Self:
         """Fork the conversation, so that otherwise-identical follow-ups evaluate
@@ -12802,28 +12878,6 @@ class LLM(Type):
         _ctx = self._select("reasoningEffort", _args)
         return await _ctx.execute(str)
 
-    def recompose(self, expertise: list[Expertise]) -> Self:
-        """Run expertise in list order, replacing their modules' contributions
-        and preserving compatible tool state.
-
-        Clear each selected module's contributions once before execution.
-        Retain unowned contributions and contributions from other modules.
-        Keep this LLM's workspace.
-
-        A change to a tool binding's version resets its state. Removed
-        bindings, changed identities, and incompatible state are errors.
-
-        Parameters
-        ----------
-        expertise:
-            The expertise to run. Each reference retains its source workspace.
-        """
-        _args = [
-            Arg("expertise", expertise),
-        ]
-        _ctx = self._select("recompose", _args)
-        return LLM(_ctx)
-
     async def skills(self) -> list["LLMSkill"]:
         """The skills visible to the model, exactly as the ListSkills tool serves
         them: engine-embedded skills, skills installed with withSkills, and
@@ -12836,6 +12890,7 @@ class LLM(Type):
     async def spawn(
         self,
         *,
+        expertise: list[Expertise] | None = None,
         name: str | None = None,
         handle: str | None = None,
         state: AgentState | None = AgentState.IDLE,
@@ -12868,6 +12923,15 @@ class LLM(Type):
 
         Parameters
         ----------
+        expertise:
+            Compose these entries after minting the agent's identity and
+            before fixing its seed. Agent arguments receive the newly spawned
+            agent, not the caller.
+            Until composition completes, that agent can be identified but not
+            used: its name, handle, parent, state and loopError are available,
+            while seed, snapshot, send, resume, pause, wait, notify, stop and
+            reseed fail. If composition fails, the agent is left STOPPED and
+            can never run.
         name:
             Display label for the agent — telemetry and error messages;
             carries no identity. Defaults to a short name derived from the
@@ -12902,6 +12966,7 @@ class LLM(Type):
             If the API returns an error.
         """
         _args = [
+            Arg("expertise", [] if expertise is None else expertise, []),
             Arg("name", name, None),
             Arg("handle", handle, None),
             Arg("state", state, AgentState.IDLE),
