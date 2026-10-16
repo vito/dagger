@@ -141,6 +141,11 @@ func decodeConsoleCheckpoint(db *dagui.DB, agent consoleAgent) (consoleAgentSnap
 			continue
 		case "withoutDefaultSystemPrompt", "withMCPServer", "withSkills", "withTools", "withWorkspace", "withModel", "withReasoningEffort", "__withExpertise", "__withOwnerAgent":
 			continue // Binding/configuration, not message data. Do not follow IDs.
+		case "compose", "__withoutComposition":
+			// Composition runs entries and clears a module's composed
+			// contributions. Neither changes user, assistant or tool messages;
+			// a system prompt a reload replaced may linger in the transcript.
+			continue
 		case "__withCompositionOwner":
 			continue // Legacy recorded checkpoints; no longer emitted or evaluated.
 		case "withPrompt", "withSystemPrompt", "withResponse", "withToolResult":
