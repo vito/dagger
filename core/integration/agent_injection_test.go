@@ -132,7 +132,6 @@ func (AgentRuntimeSuite) TestAgentArgHiddenFromToolSchema(ctx context.Context, t
 	require.NotContains(t, doc, `"caller"`)
 	// Neither are the engine-internal arguments every module function carries.
 	require.NotContains(t, doc, "_expertiseOwner")
-	require.NotContains(t, doc, "_composingAgent")
 
 	owner := spawnAgent(ctx, t, c, spawnOpts{model: emptyReplayModel, name: "owner", toolIDs: []core.ID{pokerID}})
 	doc = owner.mustRun(ctx, t, "snapshot { tools }").Get("snapshot.tools").String()
@@ -141,7 +140,6 @@ func (AgentRuntimeSuite) TestAgentArgHiddenFromToolSchema(ctx context.Context, t
 	require.Contains(t, doc, "## maybePoke")
 	require.NotContains(t, doc, `"caller"`)
 	require.NotContains(t, doc, "_expertiseOwner")
-	require.NotContains(t, doc, "_composingAgent")
 }
 
 // TestAgentArgFromOwnerInSyncLoop covers a synchronous loop over an agent's

@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/dagger/dagger/dagql"
-	"github.com/dagger/dagger/dagql/call"
 	"github.com/dagger/dagger/engine"
 	"github.com/stretchr/testify/require"
 )
@@ -25,7 +24,11 @@ func TestComposingAgentContext(t *testing.T) {
 	require.Empty(t, composingAgentHandle(WithComposingAgent(ctx, "")))
 }
 
-func TestComposingAgentCallCacheAndReplay(t *testing.T) {
+// The composing agent is execution context, not a recorded input: module calls
+// made while composing two different agents share their cache entries. Lineage
+// follows the execution, so a call that executes spawns under the agent being
+// composed, and a cache hit, executing nothing, still names its first child.
+func TestComposingAgentCallCache(t *testing.T) {
 	var newLease func(engine.ClientLeaseKind, string) *engine.ClientLifecycleLease
 	newLease = func(kind engine.ClientLeaseKind, owner string) *engine.ClientLifecycleLease {
 		return engine.NewClientLifecycleLease(kind, owner, nil, func(kind engine.ClientLeaseKind, owner string) (*engine.ClientLifecycleLease, error) {
@@ -58,17 +61,9 @@ func TestComposingAgentCallCacheAndReplay(t *testing.T) {
 		require.NoError(t, err)
 	}
 	calls := 0
-	// No public arguments: only the engine's recorded scopes distinguish the
-	// same spawning helper invoked by the same entry for two different parents.
-	field := dagql.NodeFunc("spawnHelper", func(ctx context.Context, _ dagql.ObjectResult[*Query], args struct {
-		Owner     dagql.Optional[dagql.String] `name:"_expertiseOwner" internal:"true"`
-		Composing dagql.Optional[dagql.String] `name:"_composingAgent" internal:"true"`
+	spawnHelper := func(ctx context.Context, _ dagql.ObjectResult[*Query], args struct {
+		Owner dagql.Optional[dagql.String] `name:"_expertiseOwner" internal:"true"`
 	}) (dagql.ObjectResult[*Agent], error) {
-		opts := &CallOpts{useRecordedExpertiseOwner: true, Inputs: []CallInput{
-			{Name: expertiseOwnerArg, Value: args.Owner},
-			{Name: composingAgentArg, Value: args.Composing},
-		}}
-		ctx = composingAgentCallContext(expertiseCallContext(ctx, opts), opts)
 		calls++
 		child, err := dagql.NewObjectResultForCurrentCall(ctx, srv, &Agent{Handle: fmt.Sprintf("child-%d", calls), Name: "child"})
 		if err != nil {
@@ -76,46 +71,44 @@ func TestComposingAgentCallCacheAndReplay(t *testing.T) {
 		}
 		_, err = registry.Create(ctx, child, AgentStateIdle, "", false, "")
 		return child, err
-	})
-	field.Spec.GetDynamicInput = fn.DynamicInputsForCall
-	dagql.Fields[*Query]{field}.Install(srv)
-
-	for _, handle := range []string{"parent-A", "parent-B", ""} {
-		callCtx := ctx
-		if handle != "" {
-			callCtx = WithComposingAgent(WithExpertiseOwner(ctx, "same-entry-uri"), handle)
-		}
-		before := calls
-		var child dagql.ObjectResult[*Agent]
-		for range 2 {
-			require.NoError(t, srv.Select(callCtx, srv.Root(), &child, dagql.Selector{Field: "spawnHelper"}))
-			rt, err := registry.Require(ctx, child)
-			require.NoError(t, err)
-			require.Equal(t, handle, rt.ParentHandle())
-		}
-		require.Equal(t, before+1, calls)
-		recipe, err := child.RecipeID(callCtx)
-		require.NoError(t, err)
-		if handle == "" {
-			require.Nil(t, recipe.Arg(composingAgentArg))
-			legacy := call.New().Append((&Agent{}).Type(), "spawnHelper")
-			require.Equal(t, legacy.Digest(), recipe.Digest(), "ordinary module call IDs stay unchanged")
-		} else {
-			require.Equal(t, handle, recipe.Arg(composingAgentArg).Value().ToInput())
-		}
-		cold, err := dagql.NewCache(ctx, "", nil, nil)
-		require.NoError(t, err)
-		t.Cleanup(func() { require.NoError(t, cold.Close(context.Background())) })
-		replayCtx := WithComposingAgent(dagql.ContextWithCache(ctx, cold), "different-replay-parent")
-		replayed, err := srv.Load(replayCtx, recipe)
-		require.NoError(t, err)
-		rt, err := registry.Require(replayCtx, replayed.(dagql.ObjectResult[*Agent]))
-		require.NoError(t, err)
-		require.Equal(t, handle, rt.ParentHandle(), "cold replay restores present and absent lineage scopes")
 	}
-	inputs, err := fn.setCallInputs(ctx, &CallOpts{Inputs: []CallInput{{Name: composingAgentArg, Value: dagql.Opt(dagql.String("parent-A"))}}})
+	// No public arguments: nothing distinguishes the same helper invoked by
+	// the same entry while composing two different agents.
+	cached := dagql.NodeFunc("cachedSpawn", spawnHelper)
+	cached.Spec.GetDynamicInput = fn.DynamicInputsForCall
+	fresh := dagql.NodeFunc("freshSpawn", spawnHelper).DoNotCache("spawns on every call")
+	fresh.Spec.GetDynamicInput = fn.DynamicInputsForCall
+	dagql.Fields[*Query]{cached, fresh}.Install(srv)
+
+	composing := func(handle string) context.Context {
+		return WithComposingAgent(WithExpertiseOwner(ctx, "same-entry-uri"), handle)
+	}
+	spawnUnder := func(field, handle string) (string, string) {
+		var child dagql.ObjectResult[*Agent]
+		require.NoError(t, srv.Select(composing(handle), srv.Root(), &child, dagql.Selector{Field: field}))
+		rt, err := registry.Require(ctx, child)
+		require.NoError(t, err)
+		return child.Self().Handle, rt.ParentHandle()
+	}
+
+	child, parent := spawnUnder("cachedSpawn", "parent-A")
+	require.Equal(t, "parent-A", parent, "a spawn executed during composition belongs to the composing agent")
+	again, parent := spawnUnder("cachedSpawn", "parent-B")
+	require.Equal(t, 1, calls, "composing another agent must not miss the cache")
+	require.Equal(t, child, again, "a cache hit does not spawn again")
+	require.Equal(t, "parent-A", parent)
+
+	var recipe dagql.ObjectResult[*Agent]
+	require.NoError(t, srv.Select(composing("parent-B"), srv.Root(), &recipe, dagql.Selector{Field: "cachedSpawn"}))
+	id, err := recipe.RecipeID(ctx)
 	require.NoError(t, err)
-	require.Empty(t, inputs, "the scope must not become a module SDK argument")
+	require.Len(t, id.Args(), 1, "only the stable entry scope is recorded")
+	require.Equal(t, expertiseOwnerArg, id.Args()[0].Name())
+
+	for _, handle := range []string{"parent-A", "parent-B"} {
+		_, parent := spawnUnder("freshSpawn", handle)
+		require.Equal(t, handle, parent, "a spawn that executes follows the agent being composed")
+	}
 }
 
 func TestAgentToolCallContext(t *testing.T) {

@@ -189,7 +189,7 @@ func (fn *ModuleFunction) setCallInputs(ctx context.Context, opts *CallOpts) ([]
 	hasArg := map[string]bool{}
 
 	for _, input := range opts.Inputs {
-		if input.Name == expertiseOwnerArg || input.Name == composingAgentArg {
+		if input.Name == expertiseOwnerArg {
 			continue
 		}
 		normalizedName := gqlArgName(input.Name)
@@ -685,11 +685,13 @@ func (fn *ModuleFunction) DynamicInputsForCall(
 	if err := StampExpertiseOwner(ctx, req); err != nil {
 		return err
 	}
-	// The same entry can compose several agents. A helper without public
-	// Agent/LLM arguments can still spawn, so lineage must partition its cache.
-	if err := stampComposingAgent(ctx, req); err != nil {
-		return err
-	}
+	// The agent spawn is composing is deliberately NOT stamped here: it is a
+	// fresh random handle per spawn, so recording it would make every module
+	// call made during composition (tool constructors, helpers) miss the cache
+	// on every spawn. Lineage instead follows execution (see
+	// WithComposingAgent): a spawn that runs during composition gets the
+	// composing agent as parent, while a cache-hit call that spawned when it
+	// first ran is not re-run and keeps naming that first child.
 	var ctxArgs []*FunctionArg
 	var workspaceArgs []*FunctionArg
 	var userDefaults []*UserDefault
@@ -1025,7 +1027,6 @@ func (fn *ModuleFunction) loadFunctionRuntime(ctx context.Context) (_ ModuleRunt
 
 func (fn *ModuleFunction) Call(ctx context.Context, opts *CallOpts) (t dagql.AnyResult, rerr error) {
 	ctx = expertiseCallContext(ctx, opts)
-	ctx = composingAgentCallContext(ctx, opts)
 	mod := fn.mod.Self()
 
 	lg := bklog.G(ctx).WithField("module", mod.Name()).WithField("function", fn.metadata.Name)

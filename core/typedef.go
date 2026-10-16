@@ -2452,6 +2452,7 @@ type FunctionCall struct {
 
 	// composingAgentHandle propagates initial-composition lineage across module
 	// client boundaries without changing callerAgent's provenance semantics.
+	// Like callerAgent, it is set at dispatch and never part of a cache key.
 	composingAgentHandle string
 
 	// expertiseOwner follows the outermost expertise run through nested client

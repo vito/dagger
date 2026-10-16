@@ -9,44 +9,19 @@ import (
 type agentContextKey struct{}
 type composingAgentContextKey struct{}
 
-const composingAgentArg = "_composingAgent"
-
-func composingAgentInputSpec() dagql.InputSpec {
-	return dagql.InputSpec{Name: composingAgentArg, Type: dagql.Optional[dagql.String]{}, Internal: true}
-}
-
-func stampComposingAgent(ctx context.Context, req *dagql.CallRequest) error {
-	if req.Replay {
-		return nil
-	}
-	if arg := req.Arg(composingAgentArg); arg != nil && arg.Value != nil && arg.Value.Kind != dagql.ResultCallLiteralKindNull {
-		return nil
-	}
-	if handle := composingAgentHandle(ctx); handle != "" {
-		return req.SetArgInput(ctx, composingAgentArg, dagql.Opt(dagql.String(handle)), false)
-	}
-	return nil
-}
-
-func composingAgentCallContext(ctx context.Context, opts *CallOpts) context.Context {
-	if opts.useRecordedExpertiseOwner {
-		// An absent recorded scope must not inherit the replay caller's agent.
-		ctx = WithComposingAgent(ctx, "")
-	}
-	for _, input := range opts.Inputs {
-		if input.Name != composingAgentArg {
-			continue
-		}
-		if handle, ok := input.Value.(dagql.Optional[dagql.String]); ok && handle.Valid {
-			return WithComposingAgent(ctx, string(handle.Value))
-		}
-	}
-	return ctx
-}
-
 // WithComposingAgent identifies whose initial conversation spawn is composing.
 // This affects only the lineage of agents spawned during that composition;
 // CallerAgent remains unchanged for messages and deadlock detection.
+//
+// Like CallerAgent, the composing agent is execution context, never a recorded
+// call input: it rides the context and the engine-side FunctionCall record
+// (see ModuleFunction.Call), so module calls made during composition keep
+// their ordinary cache keys. A spawn made while the composition executes gets
+// this agent as its parent. A call that is a cache hit executes nothing, so a
+// spawn inside a cached call is not repeated: its result still names the agent
+// the first execution spawned. That is the rule for any cached function with
+// side effects; a function that must spawn on every call opts out of caching
+// (e.g. @cache(policy: Never)).
 func WithComposingAgent(ctx context.Context, handle string) context.Context {
 	return context.WithValue(ctx, composingAgentContextKey{}, handle)
 }

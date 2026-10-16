@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"dagger.io/dagger/core"
 
@@ -1819,6 +1820,67 @@ type Swapper {
 		require.Contains(t, recomposeSystemPrompts(ctx, t, c, childSnapshot), "ready: nested-child")
 		require.Equal(t, "family", child.mustRun(ctx, t, "parent { name }").Get("parent.name").String())
 	})
+}
+
+// Spawning mints a new agent every time, and its entries run again on a
+// conversation owned by that agent. The module calls they make that do not
+// depend on the agent, such as tool constructors and helpers, must still be
+// cached across spawns and sessions like any other module call.
+func (LLMSuite) TestSpawnCompositionCaches(ctx context.Context, t *testctx.T) {
+	fixture := func(c *dagger.Client) *core.Workspace {
+		return core.NewQuery(c).Directory().
+			WithNewFile("dagger.toml", "[modules.probe]\nsource = \"probe\"\n").
+			WithNewFile("probe/dagger.json", `{"name":"probe","engineVersion":"v1.0.0-0","sdk":"dang","dependencies":[{"name":"stamper","source":"stamper"}]}`).
+			WithNewFile("probe/main.dang", `
+type Probe {
+  agent(base: LLM!): LLM! @agent {
+    base.withSystemPrompt("entry: " + currentTimestamp + "; helper: " + stamper.stamp)
+  }
+  worker(base: LLM!, me: Agent!): LLM! {
+    base.withSystemPrompt("worker " + me.name + "; helper: " + stamper.stamp)
+  }
+}
+`).
+			WithNewFile("probe/stamper/dagger.json", `{"name":"stamper","engineVersion":"v1.0.0-0","sdk":"dang"}`).
+			WithNewFile("probe/stamper/main.dang", `
+type Stamper {
+  stamp: String! { currentTimestamp }
+}
+`).AsWorkspace()
+	}
+	spawnPrompt := func(c *dagger.Client, uri, name string) (string, string) {
+		ws := fixture(c)
+		entries, err := uriExpertiseIDs(ctx, c, ws, uri)
+		require.NoError(t, err)
+		require.Len(t, entries, 1)
+		agent := spawnWithExpertise(ctx, t, c, core.NewQuery(c).LLM().WithWorkspace(ws), name, entries)
+		seed := core.Ref[*core.LLM](core.NewQuery(c), core.ID(agent.mustRun(ctx, t, "snapshot { id }").Get("snapshot.id").String()))
+		// Timestamps have a resolution of one second: a call that runs again
+		// must be able to tell itself apart from the first run.
+		time.Sleep(1100 * time.Millisecond)
+		prompts := recomposeSystemPrompts(ctx, t, c, seed)
+		require.Len(t, prompts, 1)
+		entry, helper, ok := strings.Cut(prompts[0], "; helper: ")
+		require.True(t, ok, prompts[0])
+		return entry, helper
+	}
+
+	c := connect(ctx, t)
+	firstEntry, firstHelper := spawnPrompt(c, "probe/agent", "first")
+	for _, client := range []*dagger.Client{c, connect(ctx, t)} {
+		// A second spawn in the same session, or a relaunched dagger agent.
+		entry, helper := spawnPrompt(client, "probe/agent", "again")
+		require.NotEqual(t, firstEntry, entry, "the entry receives a conversation owned by the new agent")
+		require.Equal(t, firstHelper, helper, "module calls made by the entry are cached across spawns")
+	}
+
+	// The same for an entry taking the agent: it runs for each agent, but
+	// the helper calls that do not take the agent are cached.
+	alice, aliceHelper := spawnPrompt(c, "probe/worker", "alice")
+	bob, bobHelper := spawnPrompt(c, "probe/worker", "bob")
+	require.Equal(t, "worker alice", alice)
+	require.Equal(t, "worker bob", bob)
+	require.Equal(t, aliceHelper, bobHelper)
 }
 
 func (LLMSuite) TestComposeTransformReceivesAgent(ctx context.Context, t *testctx.T) {

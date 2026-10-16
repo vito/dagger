@@ -1305,7 +1305,6 @@ func (obj *ModuleObject) installConstructor(ctx context.Context, dag *dagql.Serv
 	spec.ModuleProvider = moduleProvider
 	spec.GetDynamicInput = fn.DynamicInputsForCall
 	spec.Args.Add(expertiseOwnerInputSpec())
-	spec.Args.Add(composingAgentInputSpec())
 	spec.ImplicitInputs = append(spec.ImplicitInputs, fn.cacheImplicitInputs()...)
 
 	dag.Root().ObjectType().Extend(
@@ -1682,7 +1681,6 @@ func objFun(ctx context.Context, mod dagql.ObjectResult[*Module], objDef *Object
 	spec.ModuleProvider = moduleProvider
 	spec.GetDynamicInput = modFun.DynamicInputsForCall
 	spec.Args.Add(expertiseOwnerInputSpec())
-	spec.Args.Add(composingAgentInputSpec())
 	spec.ImplicitInputs = append(spec.ImplicitInputs, modFun.cacheImplicitInputs()...)
 	installed := newInstalledServer(dag)
 
