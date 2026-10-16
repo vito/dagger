@@ -1459,6 +1459,13 @@ func (LLMSuite) TestRecomposeWorkerIdentity(ctx context.Context, t *testctx.T) {
 	transcript, err = llm.Transcript(ctx)
 	require.NoError(t, err)
 	require.Contains(t, transcript, "updated parent: chief")
+	// The refreshed system prompt moved to the end of the history, but the
+	// conversation itself is unchanged: the reload is not reported as a
+	// replaced history. Its withUserConfig workspace has the same contents,
+	// so no (empty) workspace change is reported either.
+	require.Contains(t, transcript, "Continuing from the returned conversation.")
+	require.NotContains(t, transcript, "Conversation history replaced")
+	require.NotContains(t, transcript, "Workspace changed")
 
 	// CLI restore evaluates a captured conversation before minting its runtime.
 	// Seed-free owner references must remain lazy through that evaluation.
