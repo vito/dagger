@@ -1980,6 +1980,21 @@ var errAgentInterrupted = errors.New("agent interrupted")
 // event is dropped, and the dispatcher treats this as a non-error.
 var errAgentEventDropped = errors.New("agent event dropped: subscriber is stopped")
 
+// agentLoopContext is the context an agent's evaluation loop runs under.
+//
+// It binds the agent, so the module calls the loop makes know which agent they
+// serve (CallerAgent): the child->parent channel of design §3.1.
+//
+// It also marks the context as not composing. The loop's detached context keeps
+// the client of whatever started it, which may be a module call made while
+// another agent's spawn was composing (an entry that spawns a worker and sends
+// it a task). Without the mark, composingAgentHandle would fall back to that
+// call's record, and everything the loop spawns would name the composing agent
+// as its parent instead of this one.
+func agentLoopContext(ctx context.Context, self dagql.ObjectResult[*Agent]) context.Context {
+	return WithComposingAgent(AgentToContext(ctx, self), "")
+}
+
 // loop is the agent's evaluation loop, run on a goroutine under a detached
 // context. It mirrors LLM.Loop (core/llm.go) with the mailbox spliced in:
 // drain queued messages onto the conversation (each recorded as a
@@ -1995,12 +2010,10 @@ var errAgentEventDropped = errors.New("agent event dropped: subscriber is stoppe
 //nolint:gocyclo
 func (rt *AgentRuntime) loop(ctx context.Context) {
 	// Bind the agent's own handle into the loop context: every Step below —
-	// and thus every tool dispatched within one — descends from it, so a
-	// module tool declaring an `Agent!` argument is auto-injected with THIS
-	// agent (AgentToContext -> ModuleFunction.loadAgentArg), the
-	// child->parent channel of design §3.1. Covers the Resume-retry
-	// relaunch too, which re-enters here on a fresh detached context.
-	ctx = AgentToContext(ctx, rt.self)
+	// and thus every tool dispatched within one — descends from it. Covers the
+	// Resume-retry relaunch too, which re-enters here on a fresh detached
+	// context.
+	ctx = agentLoopContext(ctx, rt.self)
 	ctx, span := Tracer(ctx).Start(ctx, fmt.Sprintf("agent: %s", rt.name),
 		agentSpanAttrs(ctx, rt.name, rt.self)...)
 

@@ -22,6 +22,11 @@ type composingAgentContextKey struct{}
 // the first execution spawned. That is the rule for any cached function with
 // side effects; a function that must spawn on every call opts out of caching
 // (e.g. @cache(policy: Never)).
+//
+// An empty handle marks a context that is not composing, overriding the
+// fallback to the current function call's record: an agent loop uses it, since
+// its detached context may keep the client of a call made during another
+// agent's composition.
 func WithComposingAgent(ctx context.Context, handle string) context.Context {
 	return context.WithValue(ctx, composingAgentContextKey{}, handle)
 }

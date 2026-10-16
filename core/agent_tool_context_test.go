@@ -24,6 +24,26 @@ func TestComposingAgentContext(t *testing.T) {
 	require.Empty(t, composingAgentHandle(WithComposingAgent(ctx, "")))
 }
 
+// An agent loop started from a module call made during another agent's
+// composition keeps that call's client. Its own spawns must not inherit the
+// composing agent as their parent: the loop is the caller, and never composes.
+func TestAgentLoopContextIsNotComposing(t *testing.T) {
+	fnCall := newFunctionCall(FunctionCall{composingAgentHandle: "chief"})
+	started := ContextWithQuery(t.Context(), NewRoot(&mockServer{functionCall: fnCall}))
+	require.Equal(t, "chief", composingAgentHandle(started), "the starting call was made while the chief composed")
+
+	worker, ok := AgentFromContext(testAgentContext(t, t.Context(), "worker", "worker"))
+	require.True(t, ok)
+	loop := agentLoopContext(started, worker)
+	require.Empty(t, composingAgentHandle(loop))
+	caller, ok := CallerAgent(loop)
+	require.True(t, ok)
+	require.Equal(t, "worker", caller.Self().Handle)
+
+	// A spawn composing from inside the loop still names its own agent.
+	require.Equal(t, "child", composingAgentHandle(WithComposingAgent(loop, "child")))
+}
+
 // The composing agent is execution context, not a recorded input: module calls
 // made while composing two different agents share their cache entries. Lineage
 // follows the execution, so a call that executes spawns under the agent being
