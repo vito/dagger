@@ -1471,8 +1471,10 @@ func (rt *AgentRuntime) CompleteComposition(ctx context.Context, self dagql.Obje
 	rt.self = self
 	rt.seed = seed
 	rt.transitionLocked(func() {
+		// commitLast leaves the seed's pending input unheld: spawn's contract
+		// is that input pending on the conversation is stepped when the loop
+		// starts (by send or resume). Only Reseed holds input back.
 		rt.commitLast(ctx, seed)
-		rt.held = seed.Self().HasPending()
 		rt.composing = false
 	})
 	return nil
