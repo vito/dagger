@@ -9,18 +9,18 @@ import (
 	"github.com/dagger/dagger/engine/slog"
 )
 
-// withoutComposition removes one entry's owned contributions, as a recorded
+// withoutComposition removes one module's contributions, as a recorded
 // selector so replay reproduces the clearing.
-func withoutComposition(ctx context.Context, srv *dagql.Server, llm dagql.ObjectResult[*LLM], key string) (dagql.ObjectResult[*LLM], error) {
+func withoutComposition(ctx context.Context, srv *dagql.Server, llm dagql.ObjectResult[*LLM], module string) (dagql.ObjectResult[*LLM], error) {
 	err := srv.Select(ctx, llm, &llm, dagql.Selector{
 		Field: "__withoutComposition",
-		Args:  []dagql.NamedInput{{Name: "owner", Value: dagql.String(key)}},
+		Args:  []dagql.NamedInput{{Name: "owner", Value: dagql.String(module)}},
 	})
 	return llm, err
 }
 
-// compositionOwnerMatches compares entry identities. Empty owners are always
-// unowned, never an entry selected for recomposition.
+// compositionOwnerMatches compares flat module identities. Empty owners are
+// always unowned, never a module selected for recomposition.
 func compositionOwnerMatches(contribution, owner string) bool {
 	return owner != "" && contribution == owner
 }
@@ -43,14 +43,11 @@ func preserveRecomposedTools(ctx context.Context, srv *dagql.Server, previous, c
 		if !exists {
 			return candidate, fmt.Errorf("reload would discard tool state for %q; use a fresh composition to reset it explicitly", old.typeName())
 		}
-		if old.Owner != next.Owner {
-			label := func(owner string) string {
-				if owner == "" {
-					return "unowned"
-				}
-				return fmt.Sprintf("expertise %q", owner)
-			}
-			return candidate, fmt.Errorf("reload would replace tool binding %q owned by other expertise: %s -> %s; use a fresh composition to replace it explicitly", old.typeName(), label(old.Owner), label(next.Owner))
+		// An unowned binding (e.g. bound by the main client) may be taken over
+		// by a module's binding of the same type, and vice versa; only two
+		// different modules' bindings conflict.
+		if old.Owner != "" && next.Owner != "" && old.Owner != next.Owner {
+			return candidate, fmt.Errorf("reload would replace tool binding %q owned by other expertise: module %q -> module %q; use a fresh composition to replace it explicitly", old.typeName(), old.Owner, next.Owner)
 		}
 		if stableIDDigest(old.id) == stableIDDigest(next.id) && old.Version == next.Version {
 			continue

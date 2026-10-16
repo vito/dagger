@@ -159,8 +159,8 @@ type Doug {
   "Tag something — the engine fills its internal arguments."
   tag(
     label: String!,
-    _expertiseOwner: String @internal,
-    _composingAgent: String @internal,
+    _recordedOwner: String @internal,
+    _engineScope: String @internal,
   ): Doug!
 }
 `,
@@ -306,9 +306,8 @@ func TestObjectMethodSchema(t *testing.T) {
 		require.NotContains(t, nudgeSchema["properties"], "caller", "%+v", policy)
 		require.Contains(t, nudgeSchema["properties"], "note")
 	}
-	// Engine-internal arguments (an expertise entry's owner, the composing
-	// agent) are filled by the engine and skipped at dispatch, so no policy
-	// shows them to the model.
+	// Engine-internal arguments are filled by the engine and skipped at
+	// dispatch, so no policy shows them to the model.
 	for _, policy := range []implicitToolArgs{agentToolArgs, conversationToolArgs, standaloneToolArgs} {
 		require.True(t, objectToolEligible(fieldByName(doug, "tag"), nil, policy))
 		tagSchema, err := objectMethodSchema(schema, fieldByName(doug, "tag"), policy)

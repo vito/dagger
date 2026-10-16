@@ -110,10 +110,6 @@ type CallOpts struct {
 	ParentFields   map[string]any
 	SkipSelfSchema bool
 	Server         *dagql.Server
-
-	// Schema dispatch uses the recorded expertise and composing-agent scopes,
-	// including absent scopes. Direct engine calls inherit their caller's scopes.
-	useRecordedExpertiseOwner bool
 }
 
 type CallInput struct {
@@ -185,13 +181,10 @@ func cachePolicyNever(spec dagql.FieldSpec) bool {
 // Then the default values.
 // Finally the contextual arguments.
 func (fn *ModuleFunction) setCallInputs(ctx context.Context, opts *CallOpts) ([]*FunctionCallArgValue, error) {
-	callInputs := make([]*FunctionCallArgValue, 0, len(opts.Inputs))
+	callInputs := make([]*FunctionCallArgValue, len(opts.Inputs))
 	hasArg := map[string]bool{}
 
-	for _, input := range opts.Inputs {
-		if input.Name == expertiseOwnerArg {
-			continue
-		}
+	for i, input := range opts.Inputs {
 		normalizedName := gqlArgName(input.Name)
 		arg, ok := fn.args[normalizedName]
 		if !ok {
@@ -217,10 +210,10 @@ func (fn *ModuleFunction) setCallInputs(ctx context.Context, opts *CallOpts) ([]
 			return nil, fmt.Errorf("marshal arg %q: %w", input.Name, err)
 		}
 
-		callInputs = append(callInputs, &FunctionCallArgValue{
+		callInputs[i] = &FunctionCallArgValue{
 			Name:  name,
 			Value: encoded,
-		})
+		}
 
 		hasArg[name] = true
 	}
@@ -680,11 +673,6 @@ func (fn *ModuleFunction) DynamicInputsForCall(
 	view call.View,
 	req *dagql.CallRequest,
 ) error {
-	// Partition every module call, not just those taking an LLM: a function can
-	// create one itself or carry one in its receiver or a nested argument.
-	if err := StampExpertiseOwner(ctx, req); err != nil {
-		return err
-	}
 	// The agent spawn is composing is deliberately NOT stamped here: it is a
 	// fresh random handle per spawn, so recording it would make every module
 	// call made during composition (tool constructors, helpers) miss the cache
@@ -1026,7 +1014,6 @@ func (fn *ModuleFunction) loadFunctionRuntime(ctx context.Context) (_ ModuleRunt
 }
 
 func (fn *ModuleFunction) Call(ctx context.Context, opts *CallOpts) (t dagql.AnyResult, rerr error) {
-	ctx = expertiseCallContext(ctx, opts)
 	mod := fn.mod.Self()
 
 	lg := bklog.G(ctx).WithField("module", mod.Name()).WithField("function", fn.metadata.Name)
@@ -1084,8 +1071,6 @@ func (fn *ModuleFunction) Call(ctx context.Context, opts *CallOpts) (t dagql.Any
 		Parent:    parentJSON,
 		InputArgs: callInputs,
 	})
-	owner, owned := ExpertiseOwner(ctx)
-	fnCall.expertiseOwner = expertiseOwner{key: owner, valid: owned}
 	fnCall.composingAgentHandle = composingAgentHandle(ctx)
 	if fn.objDef != nil {
 		fnCall.ParentName = fn.objDef.OriginalName

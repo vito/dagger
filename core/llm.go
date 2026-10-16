@@ -102,8 +102,15 @@ type LLM struct {
 	// a `field:"true"` tag, since struct tag fields cannot carry a view filter.
 	Messages []*LLMMessage
 
-	// Outermost composition entries, in their original order.
+	// Expertise composed into this conversation, in the order it was first
+	// composed (see ComposeExpertise).
 	Expertise dagql.ObjectResultArray[*Expertise]
+
+	// ComposingExpertise marks a conversation whose composition is running
+	// entries: the identities being composed. A composition of a marked
+	// conversation is nested in a running entry and never refreshes anything.
+	// Empty outside a composition.
+	ComposingExpertise []string
 
 	// OwnerAgentHandle identifies the agent whose conversation this is. It is
 	// independent of the caller and is recorded without embedding an Agent ID.
@@ -882,7 +889,7 @@ type LLMMessage struct {
 	// since absent is the common case.
 	Origin *LLMMessageOrigin `json:"origin,omitempty"`
 
-	// CompositionOwner identifies the expertise entry that installed a system
+	// CompositionOwner identifies the module that installed a system
 	// prompt. Empty means caller-owned/unowned. This is independent of mailbox
 	// Origin and is never sent to a model as prompt text or attribution.
 	CompositionOwner string `json:"composition_owner,omitempty"`
@@ -1181,6 +1188,7 @@ func (llm *LLM) Clone() *LLM {
 	// LLMMessage.Clone before modifying one.
 	cp.Messages = slices.Clone(cp.Messages)
 	cp.Expertise = slices.Clone(cp.Expertise)
+	cp.ComposingExpertise = slices.Clone(cp.ComposingExpertise)
 	cp.mcp = cp.mcp.Clone()
 	cp.endpointMtx = &sync.Mutex{}
 	return &cp

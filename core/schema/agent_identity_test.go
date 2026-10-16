@@ -232,7 +232,7 @@ func TestAgentSpawnCompositionFailureRetry(t *testing.T) {
 		{Name: "expertise", Value: dagql.ArrayInput[dagql.ID[*core.Expertise]]{dagql.NewID[*core.Expertise](id)}},
 	}
 	// Run the spawn from a real parent expertise entry. The child's compose
-	// must start its own record/ownership scope without losing CallerAgent.
+	// must start its own record without losing CallerAgent.
 	parentFn := objectResult(t, srv, "spawn-parent", &core.Function{Name: "spawnWorker", ReturnType: llmType, Args: dagql.ObjectResultArray[*core.FunctionArg]{args[0]}})
 	parentObj := core.NewObjectTypeDef("Query", "", nil)
 	parentObj.Functions = dagql.ObjectResultArray[*core.Function]{parentFn}
@@ -246,9 +246,6 @@ func TestAgentSpawnCompositionFailureRetry(t *testing.T) {
 	var worker dagql.ObjectResult[*core.Agent]
 	dagql.Fields[*core.Query]{
 		dagql.NodeFunc("spawnWorker", func(ctx context.Context, _ dagql.ObjectResult[*core.Query], args struct{ Base core.LLMID }) (dagql.ObjectResult[*core.LLM], error) {
-			owner, ok := core.ExpertiseOwner(ctx)
-			require.True(t, ok)
-			require.Equal(t, parentKey, owner)
 			llm, err := args.Base.Load(ctx, srv)
 			if err != nil {
 				return llm, err
@@ -284,7 +281,7 @@ func TestAgentSpawnCompositionFailureRetry(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, wantKey, childKey)
 	require.NotEqual(t, parentKey, childKey)
-	require.Equal(t, childKey, childSeed.Messages[0].CompositionOwner)
+	require.Empty(t, childSeed.Messages[0].CompositionOwner, "the fixture entry runs outside a module")
 	rt, err = agents.Require(ctx, worker)
 	require.NoError(t, err)
 	require.Equal(t, core.AgentStateIdle, rt.State())
@@ -309,6 +306,13 @@ func TestAgentSpawnCompositionFailureRetry(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, family.Self().Handle, workerParent.Value.Self().Handle)
 	require.Equal(t, "family", workerParent.Value.Self().Name)
-	require.Len(t, worker.Self().Seed.Self().Expertise, 1)
-	require.Equal(t, childKey, worker.Self().Seed.Self().Messages[0].CompositionOwner)
+	// The parent entry spawned from the conversation it was composing: the
+	// child's composition is not nested in it, and records only its own entry.
+	childSeed = worker.Self().Seed.Self()
+	require.Len(t, childSeed.Expertise, 1)
+	childKey, err = childSeed.Expertise[0].Self().Identity()
+	require.NoError(t, err)
+	require.Equal(t, wantKey, childKey)
+	require.Empty(t, childSeed.ComposingExpertise)
+	require.Equal(t, "worker ready", childSeed.Messages[0].TextContent())
 }

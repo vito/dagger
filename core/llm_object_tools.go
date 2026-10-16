@@ -813,9 +813,9 @@ func toolArgRequired(arg *ast.ArgumentDefinition) bool {
 	return arg.Type.NonNull && arg.DefaultValue == nil
 }
 
-// isInternalToolArg reports whether an argument is engine-internal (e.g.
-// _expertiseOwner): the engine fills it, dispatch skips it
-// (see buildObjectMethodSelector), so it never belongs in a tool schema.
+// isInternalToolArg reports whether an argument is engine-internal (e.g. a
+// core field's recorded contribution owner): the engine fills it, dispatch
+// skips it (see buildObjectMethodSelector), so it never belongs in a tool schema.
 func isInternalToolArg(arg *ast.ArgumentDefinition) bool {
 	return arg.Directives.ForName("internal") != nil
 }

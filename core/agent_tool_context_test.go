@@ -61,9 +61,7 @@ func TestComposingAgentCallCache(t *testing.T) {
 		require.NoError(t, err)
 	}
 	calls := 0
-	spawnHelper := func(ctx context.Context, _ dagql.ObjectResult[*Query], args struct {
-		Owner dagql.Optional[dagql.String] `name:"_expertiseOwner" internal:"true"`
-	}) (dagql.ObjectResult[*Agent], error) {
+	spawnHelper := func(ctx context.Context, _ dagql.ObjectResult[*Query], _ struct{}) (dagql.ObjectResult[*Agent], error) {
 		calls++
 		child, err := dagql.NewObjectResultForCurrentCall(ctx, srv, &Agent{Handle: fmt.Sprintf("child-%d", calls), Name: "child"})
 		if err != nil {
@@ -81,7 +79,7 @@ func TestComposingAgentCallCache(t *testing.T) {
 	dagql.Fields[*Query]{cached, fresh}.Install(srv)
 
 	composing := func(handle string) context.Context {
-		return WithComposingAgent(WithExpertiseOwner(ctx, "same-entry-uri"), handle)
+		return WithComposingAgent(ctx, handle)
 	}
 	spawnUnder := func(field, handle string) (string, string) {
 		var child dagql.ObjectResult[*Agent]
@@ -102,8 +100,7 @@ func TestComposingAgentCallCache(t *testing.T) {
 	require.NoError(t, srv.Select(composing("parent-B"), srv.Root(), &recipe, dagql.Selector{Field: "cachedSpawn"}))
 	id, err := recipe.RecipeID(ctx)
 	require.NoError(t, err)
-	require.Len(t, id.Args(), 1, "only the stable entry scope is recorded")
-	require.Equal(t, expertiseOwnerArg, id.Args()[0].Name())
+	require.Empty(t, id.Args(), "the composition is not recorded on module calls")
 
 	for _, handle := range []string{"parent-A", "parent-B"} {
 		_, parent := spawnUnder("freshSpawn", handle)

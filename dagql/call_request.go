@@ -13,11 +13,6 @@ type CallRequest struct {
 	DoNotCache     bool
 	IsPersistable  bool
 
-	// Replay marks a selector reconstructed from a recorded recipe. Dynamic
-	// input hooks can preserve meaningful absent arguments instead of filling
-	// them from the replay caller. It is request-only, never part of identity.
-	Replay bool
-
 	// ListItem marks a read of item Nth of the receiver, a cache-backed list
 	// whose value holds the item inline. Such a read is answered only by the
 	// item the receiver recorded for that position (sharedResult.listItems):
@@ -66,7 +61,6 @@ func (req *CallRequest) Clone() *CallRequest {
 		TTL:                  req.TTL,
 		DoNotCache:           req.DoNotCache,
 		IsPersistable:        req.IsPersistable,
-		Replay:               req.Replay,
 		ListItem:             req.ListItem,
 		PassthroughTelemetry: req.PassthroughTelemetry,
 		ReceiverTypeName:     req.ReceiverTypeName,

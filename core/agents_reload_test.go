@@ -64,7 +64,10 @@ func TestToolStateIdentity(t *testing.T) {
 	})
 }
 
-func TestRecomposeCannotClaimUnownedTools(t *testing.T) {
+// Only two different modules' bindings conflict. An unowned binding, e.g. one
+// a tool continuation or the main client made, may be taken over by a module's
+// binding of the same type on reload, and vice versa.
+func TestRecomposeToolOwners(t *testing.T) {
 	srv := newCoreDagqlServerForTest(t, &Query{})
 	installModuleObjectTestModuleClass(srv)
 	dagql.Fields[*LLM]{}.Install(srv)
@@ -72,16 +75,12 @@ func TestRecomposeCannotClaimUnownedTools(t *testing.T) {
 	makeLLM := func(owner string) dagql.ObjectResult[*LLM] {
 		return newTypeDefDetachedResult(t, srv, "llm", &LLM{mcp: &MCP{mu: new(sync.Mutex), boundTools: []boundTool{{object: tool, Owner: owner}}}})
 	}
-	for _, owners := range [][2]string{{"", "new-entry"}, {"old-entry", ""}, {"old-entry", "new-entry"}} {
+	_, err := preserveRecomposedTools(t.Context(), srv, makeLLM("old-module"), makeLLM("new-module"))
+	require.ErrorContains(t, err, `tool binding "Module" owned by other expertise: module "old-module" -> module "new-module"`)
+	require.ErrorContains(t, err, "use a fresh composition")
+	for _, owners := range [][2]string{{"", "module"}, {"module", ""}, {"module", "module"}, {"", ""}} {
 		_, err := preserveRecomposedTools(t.Context(), srv, makeLLM(owners[0]), makeLLM(owners[1]))
-		require.ErrorContains(t, err, `tool binding "Module"`)
-		require.ErrorContains(t, err, "use a fresh composition")
-		for _, owner := range owners {
-			if owner == "" {
-				owner = "unowned"
-			}
-			require.ErrorContains(t, err, owner)
-		}
+		require.NoError(t, err, "%q -> %q", owners[0], owners[1])
 	}
 }
 
@@ -97,6 +96,20 @@ func TestExpertiseIdentity(t *testing.T) {
 	other, err := entry.Identity()
 	require.NoError(t, err)
 	require.NotEqual(t, first, other)
+}
+
+// Contributions are stamped with the current module's installed name, and an
+// entry refreshes the contributions stamped with its module's: both must name
+// an aliased install by its alias, not by the module's intrinsic name.
+func TestCompositionOwnerIsInstalledName(t *testing.T) {
+	srv := newCoreDagqlServerForTest(t, &Query{})
+	installModuleObjectTestModuleClass(srv)
+	aliased := &Module{NameField: "alias", OriginalName: "intrinsic"}
+	require.Equal(t, "alias", CompositionOwner(aliased))
+	require.Empty(t, CompositionOwner(nil), "the main client is unowned")
+	mod := newTypeDefDetachedResult(t, srv, "aliased-module", aliased)
+	entry := &Expertise{Artifact: &Artifact{Path: []string{"alias", "agent"}, Node: &ModTreeNode{Name: "agent", Module: mod, OriginalModule: mod}}}
+	require.Equal(t, CompositionOwner(aliased), entry.ModuleName())
 }
 
 func TestExpertiseConversion(t *testing.T) {

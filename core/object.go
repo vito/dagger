@@ -1304,7 +1304,6 @@ func (obj *ModuleObject) installConstructor(ctx context.Context, dag *dagql.Serv
 	spec.Module = moduleID
 	spec.ModuleProvider = moduleProvider
 	spec.GetDynamicInput = fn.DynamicInputsForCall
-	spec.Args.Add(expertiseOwnerInputSpec())
 	spec.ImplicitInputs = append(spec.ImplicitInputs, fn.cacheImplicitInputs()...)
 
 	dag.Root().ObjectType().Extend(
@@ -1318,11 +1317,10 @@ func (obj *ModuleObject) installConstructor(ctx context.Context, dag *dagql.Serv
 				})
 			}
 			return fn.Call(ctx, &CallOpts{
-				useRecordedExpertiseOwner: true,
-				Inputs:                    callInput,
-				ParentTyped:               nil,
-				ParentFields:              nil,
-				Server:                    dag,
+				Inputs:       callInput,
+				ParentTyped:  nil,
+				ParentFields: nil,
+				Server:       dag,
 			})
 		},
 	)
@@ -1680,7 +1678,6 @@ func objFun(ctx context.Context, mod dagql.ObjectResult[*Module], objDef *Object
 	spec.Module = moduleID
 	spec.ModuleProvider = moduleProvider
 	spec.GetDynamicInput = modFun.DynamicInputsForCall
-	spec.Args.Add(expertiseOwnerInputSpec())
 	spec.ImplicitInputs = append(spec.ImplicitInputs, modFun.cacheImplicitInputs()...)
 	installed := newInstalledServer(dag)
 
@@ -1688,10 +1685,9 @@ func objFun(ctx context.Context, mod dagql.ObjectResult[*Module], objDef *Object
 		Spec: &spec,
 		Func: func(ctx context.Context, obj dagql.ObjectResult[*ModuleObject], args map[string]dagql.Input, view call.View) (dagql.AnyResult, error) {
 			opts := &CallOpts{
-				useRecordedExpertiseOwner: true,
-				ParentTyped:               obj,
-				ParentFields:              obj.Self().Fields,
-				SkipSelfSchema:            false,
+				ParentTyped:    obj,
+				ParentFields:   obj.Self().Fields,
+				SkipSelfSchema: false,
 				// Only applies ignore patterns to Directory args, which any
 				// server with the core schema can do.
 				Server: installed.orCurrent(ctx),
