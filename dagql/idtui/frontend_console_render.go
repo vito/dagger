@@ -172,6 +172,9 @@ func renderConsoleTranscript(page consoleTranscriptPage) string {
 	} else {
 		fmt.Fprintf(&b, "messages %d-%d of %d matching (%s)\n", page.Offset+1, next, total, page.Filters)
 	}
+	if page.Snapshot.Warning != "" {
+		fmt.Fprintf(&b, "WARNING: %s\n", page.Snapshot.Warning)
+	}
 	if n := len(page.Snapshot.Gaps); n > 0 {
 		fmt.Fprintf(&b, "PARTIAL: %d gap(s) where the checkpoint could not be fully decoded; each appears in place as a GAP message.\n", n)
 	}
