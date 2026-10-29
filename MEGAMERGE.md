@@ -69,6 +69,8 @@ Uncommitted changes to `dagger.lock`, `go.mod`, and `go.sum` were saved and rest
 
 ## Conflict resolutions and local changes
 
+- Restore the `context` import in `internal/cmd/dagger/cloud.go`, required by the merged `CloudCLI.openLocalTrace` callback. This fixes the reported `undefined: context` compilation error.
+
 - #14930: merged cleanly. Engine Cloud metrics now use delta temporality; existing local dependency edits were preserved byte-for-byte.
 
 - #14345: retain the refreshed bounded log caches, archive topology/log indexes and idle store holds. Combine these with upstream’s lightweight append-only reopen path and deferred index construction. Keep oversized archive-row handling, current archive lookup flushing, and bounded terminal search.
