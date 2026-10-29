@@ -51,6 +51,10 @@ func NewReportSession(db *dagui.DB) *ReportSession {
 // DB returns the session's telemetry DB.
 func (s *ReportSession) DB() *dagui.DB { return s.db }
 
+// Close releases the session's log buffers, including any disk-backed storage
+// large logs spilled to. The session must not be used afterwards.
+func (s *ReportSession) Close() { s.logs.Close() }
+
 // LogExporter ingests log records into the session. Logs have to flow through
 // here rather than through db.LogExporter() alone: the rendered ┃ log lines
 // come from these buffers, while the DB only tracks which spans have logs.
@@ -67,7 +71,11 @@ func (e reportLogExporter) Export(ctx context.Context, logs []sdklog.Record) err
 	logsCopy := make([]sdklog.Record, len(logs))
 	copy(logsCopy, logs)
 	logsCopy = e.s.db.IngestLogs(logsCopy)
-	return e.s.logs.Export(ctx, logsCopy)
+	// A log buffer's storage error (e.g. a full TMPDIR) stays on that buffer,
+	// which renders it in place of the span's logs. Like the interactive
+	// frontend, don't let one span's failed spill fail the whole report.
+	_ = e.s.logs.Export(ctx, logsCopy)
+	return nil
 }
 
 func (e reportLogExporter) Shutdown(context.Context) error { return nil }

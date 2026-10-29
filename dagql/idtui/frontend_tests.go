@@ -1412,7 +1412,7 @@ func (tv *TestView) detailLogLineCount(span *dagui.Span) int {
 		return 0
 	}
 	logs := tv.Logs[span.ID]
-	if logs == nil || logs.UsedHeight() == 0 {
+	if logs == nil || !logs.HasOutput() || logs.UsedHeight() == 0 {
 		return 0
 	}
 	return logs.UsedHeight() + 1
@@ -1429,7 +1429,7 @@ func (tv *TestView) renderDetailLogLines(out *termenv.Output, span *dagui.Span, 
 		tv.RequestLogs(span.ID)
 	}
 	logs := tv.Logs[span.ID]
-	if logs == nil || logs.UsedHeight() == 0 {
+	if logs == nil || !logs.HasOutput() || logs.UsedHeight() == 0 {
 		return nil
 	}
 	lines := []string{renderLogSectionHeader(out, width, true)}

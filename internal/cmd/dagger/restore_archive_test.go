@@ -24,12 +24,14 @@ import (
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/trace"
 	collogspb "go.opentelemetry.io/proto/otlp/collector/logs/v1"
 	colmetricspb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	coltracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
 	logspb "go.opentelemetry.io/proto/otlp/logs/v1"
 	resourcepb "go.opentelemetry.io/proto/otlp/resource/v1"
+	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
 )
 
 type restoreTestFrontend struct {
@@ -447,6 +449,330 @@ func TestArchiveRestoreSkipsCaptureFailure(t *testing.T) {
 	require.Contains(t, warnings.String(), "worker (worker)")
 	require.Contains(t, warnings.String(), "capture failed: no committed conversation")
 	require.Contains(t, warnings.String(), "dropped subscription")
+}
+
+type lazyRestoreFrontend struct {
+	*restoreTestFrontend
+	idtui.TraceFrontend
+	provider func(dagui.SpanID, bool)
+	wait     func()
+}
+
+func (fe *lazyRestoreFrontend) SetLogProvider(f func(dagui.SpanID, bool)) { fe.provider = f }
+func (fe *lazyRestoreFrontend) SetFetchWaiter(f func())                   { fe.wait = f }
+
+type lazyRestoreArchive struct {
+	*restoreTestArchive
+	requests chan archive.StreamOptions
+	// spans is the archived history's spans; spansDone closes once they are
+	// imported.
+	spans     *coltracepb.ExportTraceServiceRequest
+	spansDone chan struct{}
+	// releaseSpans, when set, holds the span stream back until closed.
+	releaseSpans chan struct{}
+	// blockSelected makes selected (per-span) log reads block until
+	// cancelled.
+	blockSelected bool
+}
+
+func (s *lazyRestoreArchive) Traces(ctx context.Context, _ string, opts archive.StreamOptions, consume func(int64, *coltracepb.ExportTraceServiceRequest) error) (int64, error) {
+	if s.spansDone != nil {
+		defer close(s.spansDone)
+	}
+	if s.releaseSpans != nil {
+		select {
+		case <-s.releaseSpans:
+		case <-ctx.Done():
+			return 0, ctx.Err()
+		}
+	}
+	if s.spans != nil {
+		if err := consume(opts.HighWater, s.spans); err != nil {
+			return 0, err
+		}
+	}
+	return opts.HighWater, nil
+}
+func (s *lazyRestoreArchive) Metrics(_ context.Context, _ string, opts archive.StreamOptions, _ func(int64, *colmetricspb.ExportMetricsServiceRequest) error) (int64, error) {
+	return opts.HighWater, nil
+}
+func (s *lazyRestoreArchive) Logs(ctx context.Context, _ string, opts archive.StreamOptions, _ func(int64, *collogspb.ExportLogsServiceRequest) error) (int64, error) {
+	s.requests <- opts
+	if s.blockSelected && opts.Logs != nil && opts.Logs.SpanID != "" {
+		<-ctx.Done()
+		return 0, ctx.Err()
+	}
+	return opts.HighWater, nil
+}
+
+// archivedSpanBatch is a span export of the given spans, in the restored trace.
+func archivedSpanBatch(ids ...dagui.SpanID) *coltracepb.ExportTraceServiceRequest {
+	traceID, err := trace.TraceIDFromHex(restoreRequest().traceID)
+	if err != nil {
+		panic(err)
+	}
+	var spans []*tracepb.Span
+	for _, id := range ids {
+		spans = append(spans, &tracepb.Span{
+			TraceId: traceID[:], SpanId: id.SpanID[:], Name: "archived",
+			StartTimeUnixNano: uint64(time.Unix(10, 0).UnixNano()), EndTimeUnixNano: uint64(time.Unix(11, 0).UnixNano()),
+		})
+	}
+	return &coltracepb.ExportTraceServiceRequest{ResourceSpans: []*tracepb.ResourceSpans{{
+		Resource: &resourcepb.Resource{}, ScopeSpans: []*tracepb.ScopeSpans{{Spans: spans}},
+	}}}
+}
+
+func TestArchiveRestoreDefersDisplayLogs(t *testing.T) {
+	base, chief, _, _ := canonicalArchive()
+	base.header.HighWater = archive.HighWater{Spans: 10, Logs: 20, Metrics: 30}
+	id := dagui.SpanID{SpanID: trace.SpanID{1}}
+	source := &lazyRestoreArchive{
+		restoreTestArchive: base, requests: make(chan archive.StreamOptions, 8),
+		spans: archivedSpanBatch(id), spansDone: make(chan struct{}),
+	}
+	fe := &lazyRestoreFrontend{restoreTestFrontend: newRestoreTestFrontend()}
+	target := newFakeRestoreTarget()
+	cleanup, err := restoreArchive(t.Context(), source, fe, target, restoreRequest())
+	require.NoError(t, err)
+	defer cleanup()
+	require.Equal(t, chief.Handle, target.focused, "verified bootstrap still restores before history")
+	var metadata archive.StreamOptions
+	select {
+	case metadata = <-source.requests:
+	case <-time.After(time.Second):
+		t.Fatal("metadata was not loaded")
+	}
+	require.Equal(t, archive.LogRecordsMetadata, metadata.Logs.Records)
+	require.Empty(t, metadata.Logs.SpanID)
+	require.EqualValues(t, 20, metadata.HighWater)
+	select {
+	case <-source.requests:
+		t.Fatal("eager display log request")
+	default:
+	}
+	select {
+	case <-source.spansDone:
+	case <-time.After(time.Second):
+		t.Fatal("archived spans were not imported")
+	}
+
+	fe.provider(id, false)
+	fe.wait()
+	own := <-source.requests
+	require.Equal(t, id.String(), own.Logs.SpanID)
+	require.Equal(t, archive.LogRecordsAll, own.Logs.Records)
+	require.EqualValues(t, 20, own.HighWater)
+	fe.provider(id, false)
+	fe.wait()
+	select {
+	case <-source.requests:
+		t.Fatal("duplicate lazy fetch")
+	default:
+	}
+}
+
+// TestArchiveRestoreSkipsLiveSpanLogs: the resumed session keeps the lazy
+// provider installed, but its own live spans (e.g. a new tool call, which
+// rolls up its descendants) stream their logs in and are never in the
+// archive, so they must not cost an archive read.
+func TestArchiveRestoreSkipsLiveSpanLogs(t *testing.T) {
+	base, _, _, _ := canonicalArchive() //nolint:dogsled // Only the transport fixture is needed here.
+	base.header.HighWater = archive.HighWater{Spans: 10, Logs: 20, Metrics: 30}
+	archived := dagui.SpanID{SpanID: trace.SpanID{1}}
+	source := &lazyRestoreArchive{
+		restoreTestArchive: base, requests: make(chan archive.StreamOptions, 8),
+		spans: archivedSpanBatch(archived), spansDone: make(chan struct{}),
+	}
+	fe := &lazyRestoreFrontend{restoreTestFrontend: newRestoreTestFrontend()}
+	cleanup, err := restoreArchive(t.Context(), source, fe, newFakeRestoreTarget(), restoreRequest())
+	require.NoError(t, err)
+	defer cleanup()
+	<-source.requests // the background metadata stream
+	select {
+	case <-source.spansDone:
+	case <-time.After(time.Second):
+		t.Fatal("archived spans were not imported")
+	}
+
+	for _, descendants := range []bool{false, true} {
+		fe.provider(dagui.SpanID{SpanID: trace.SpanID{2}}, descendants)
+		fe.provider(dagui.SpanID{SpanID: trace.SpanID{3}}, descendants)
+	}
+	fe.provider(archived, true)
+	// Fetches start once the span stream completes, so by the time the
+	// archived span's arrives, the live spans' requests were dropped.
+	select {
+	case opts := <-source.requests:
+		require.Equal(t, archived.String(), opts.Logs.SpanID, "only the archived span is fetched")
+	case <-time.After(time.Second):
+		t.Fatal("archived span was not fetched")
+	}
+	fe.wait()
+	select {
+	case opts := <-source.requests:
+		t.Fatalf("live span fetched from the archive: %+v", opts.Logs)
+	default:
+	}
+}
+
+// TestArchiveRestoreRollUpSkipsCallPayloads: the background metadata stream
+// already imports every call payload, so a rolled-up span's lazy fetch is
+// one descendants request for its text, without the call-payload follow-up
+// 'dagger trace' sends.
+func TestArchiveRestoreRollUpSkipsCallPayloads(t *testing.T) {
+	base, _, _, _ := canonicalArchive() //nolint:dogsled // Only the transport fixture is needed here.
+	base.header.HighWater = archive.HighWater{Spans: 10, Logs: 20, Metrics: 30}
+	id := dagui.SpanID{SpanID: trace.SpanID{1}}
+	source := &lazyRestoreArchive{
+		restoreTestArchive: base, requests: make(chan archive.StreamOptions, 8),
+		spans: archivedSpanBatch(id), spansDone: make(chan struct{}),
+	}
+	fe := &lazyRestoreFrontend{restoreTestFrontend: newRestoreTestFrontend()}
+	cleanup, err := restoreArchive(t.Context(), source, fe, newFakeRestoreTarget(), restoreRequest())
+	require.NoError(t, err)
+	defer cleanup()
+	metadata := <-source.requests
+	require.Equal(t, archive.LogRecordsMetadata, metadata.Logs.Records)
+	<-source.spansDone
+
+	fe.provider(id, true)
+	fe.wait()
+	rollUp := <-source.requests
+	require.Equal(t, id.String(), rollUp.Logs.SpanID)
+	require.True(t, rollUp.Logs.Descendants)
+	require.Equal(t, archive.LogRecordsLogs, rollUp.Logs.Records)
+	select {
+	case opts := <-source.requests:
+		t.Fatalf("redundant follow-up request: %+v", opts.Logs)
+	default:
+	}
+}
+
+// TestArchiveRestoreParksLogsForSpansNotYetArrived: the metadata log stream
+// can make the frontend show an archived span (a stub from its span-name
+// record) before the span stream delivers its row. The frontend asks for its
+// logs only once, so the request is parked and fetched when the row arrives.
+func TestArchiveRestoreParksLogsForSpansNotYetArrived(t *testing.T) {
+	base, _, _, _ := canonicalArchive() //nolint:dogsled // Only the transport fixture is needed here.
+	base.header.HighWater = archive.HighWater{Spans: 10, Logs: 20, Metrics: 30}
+	id := dagui.SpanID{SpanID: trace.SpanID{1}}
+	source := &lazyRestoreArchive{
+		restoreTestArchive: base, requests: make(chan archive.StreamOptions, 8),
+		spans: archivedSpanBatch(id), spansDone: make(chan struct{}), releaseSpans: make(chan struct{}),
+	}
+	fe := &lazyRestoreFrontend{restoreTestFrontend: newRestoreTestFrontend()}
+	cleanup, err := restoreArchive(t.Context(), source, fe, newFakeRestoreTarget(), restoreRequest())
+	require.NoError(t, err)
+	defer cleanup()
+	<-source.requests // the background metadata stream
+
+	fe.provider(id, true)
+	fe.wait()
+	select {
+	case opts := <-source.requests:
+		t.Fatalf("fetched before the span arrived: %+v", opts.Logs)
+	default:
+	}
+
+	close(source.releaseSpans)
+	select {
+	case opts := <-source.requests:
+		require.Equal(t, id.String(), opts.Logs.SpanID)
+		require.True(t, opts.Logs.Descendants, "the parked request keeps its roll-up decision")
+	case <-time.After(time.Second):
+		t.Fatal("parked request was not fetched once its span arrived")
+	}
+}
+
+// TestArchivedSpansDropsUnknownAfterCompletion: once the span stream ends, an
+// unknown span is live: parked requests are released and later ones are
+// dropped without being retained.
+func TestArchivedSpansDropsUnknownAfterCompletion(t *testing.T) {
+	var fetched []dagui.SpanID
+	s := newArchivedSpans(func(id dagui.SpanID, _ bool) { fetched = append(fetched, id) })
+	archived := dagui.SpanID{SpanID: trace.SpanID{1}}
+	live := dagui.SpanID{SpanID: trace.SpanID{2}}
+	late := dagui.SpanID{SpanID: trace.SpanID{3}}
+
+	s.request(live, true)
+	s.record(archivedSpanBatch(archived))
+	require.Empty(t, fetched)
+	require.Len(t, s.pending, 1)
+
+	s.complete()
+	require.Nil(t, s.pending, "completion releases what was parked")
+	s.request(late, true)
+	require.Nil(t, s.pending, "a request after completion is not retained")
+	s.request(archived, false)
+	require.Equal(t, []dagui.SpanID{archived}, fetched, "only the archived span is fetched")
+}
+
+// TestArchivedSpansWaitForTheSpanTree: a fetch for an archived span, even one
+// already delivered, waits for the span stream to complete, so a roll-up's
+// records -- which keep their own span IDs -- are routed through the loaded
+// tree to the roll-up, as in a live session. Its roll-up decision is kept.
+func TestArchivedSpansWaitForTheSpanTree(t *testing.T) {
+	type fetch struct {
+		id          dagui.SpanID
+		descendants bool
+	}
+	var fetched []fetch
+	s := newArchivedSpans(func(id dagui.SpanID, descendants bool) { fetched = append(fetched, fetch{id, descendants}) })
+	rollUp := dagui.SpanID{SpanID: trace.SpanID{1}}
+	child := dagui.SpanID{SpanID: trace.SpanID{2}}
+	s.record(archivedSpanBatch(rollUp))
+	s.request(rollUp, true)
+	require.Empty(t, fetched, "the roll-up's descendants may not be loaded yet")
+	s.record(archivedSpanBatch(child))
+	require.Empty(t, fetched)
+	s.complete()
+	require.Equal(t, []fetch{{rollUp, true}}, fetched)
+}
+
+// TestArchiveRestoreCleanupCancelsLazyFetches: exit cancels lazy log fetches
+// both in flight and queued behind the loader's concurrency limit.
+func TestArchiveRestoreCleanupCancelsLazyFetches(t *testing.T) {
+	base, _, _, _ := canonicalArchive() //nolint:dogsled // Only the transport fixture is needed here.
+	base.header.HighWater = archive.HighWater{Spans: 10, Logs: 20, Metrics: 30}
+	var ids []dagui.SpanID
+	for i := range 20 {
+		ids = append(ids, dagui.SpanID{SpanID: trace.SpanID{byte(i + 1)}})
+	}
+	source := &lazyRestoreArchive{
+		restoreTestArchive: base, requests: make(chan archive.StreamOptions, 64),
+		spans: archivedSpanBatch(ids...), spansDone: make(chan struct{}), blockSelected: true,
+	}
+	fe := &lazyRestoreFrontend{restoreTestFrontend: newRestoreTestFrontend()}
+	cleanup, err := restoreArchive(t.Context(), source, fe, newFakeRestoreTarget(), restoreRequest())
+	require.NoError(t, err)
+	<-source.spansDone
+	for _, id := range ids {
+		fe.provider(id, false)
+	}
+	// Wait for the in-flight fetches to occupy the loader's limit, leaving
+	// the rest queued.
+	inFlight := 0
+	for inFlight < 8 {
+		select {
+		case opts := <-source.requests:
+			if opts.Logs != nil && opts.Logs.SpanID != "" {
+				inFlight++
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("only %d lazy fetches started", inFlight)
+		}
+	}
+	done := make(chan struct{})
+	go func() {
+		cleanup()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("cleanup did not cancel queued lazy fetches")
+	}
 }
 
 func TestHistoricalFailureWarnsWithoutBreakingPrompt(t *testing.T) {

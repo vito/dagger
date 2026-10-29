@@ -229,6 +229,10 @@ type frontendPretty struct {
 	// span; nil for live runs. requestedLogs dedups so each span is fetched once.
 	logProvider   func(dagui.SpanID, bool)
 	requestedLogs map[dagui.SpanID]bool
+	// deferredLogs holds log requests for spans known only from a log record
+	// (a placeholder): whether to roll up their descendants depends on span
+	// metadata that hasn't arrived, so they're requested when it does.
+	deferredLogs map[dagui.SpanID]bool
 
 	// spanProvider lazily fetches a span's children on demand when the user
 	// expands it (or it's surfaced/zoomed). Set by 'dagger trace' to fetch
@@ -1221,6 +1225,9 @@ func newWithTerminalProfile(w io.Writer, db *dagui.DB, term tuist.Terminal, prof
 	tui.AddInputListener(fe.handlePromptBackground)
 	tui.AddInputListener(fe.handleHUDKey)
 	tui.AddChild(fe)
+	// Search rows of evicted logs arrive from background replays; the next
+	// frame refreshes the match list.
+	logs.Cache.onSearched = func() { fe.dispatch(fe.Update) }
 	return fe
 }
 
@@ -1743,7 +1750,13 @@ func traceMessage(profile termenv.Profile, url string, msg string) string {
 
 // Run starts the TUI, calls the run function, stops the TUI, and finally
 // prints the primary output to the appropriate stdout/stderr streams.
-func (fe *frontendPretty) Run(ctx context.Context, opts dagui.FrontendOpts, run func(context.Context) (cleanups.CleanupF, error)) error {
+func (fe *frontendPretty) Run(ctx context.Context, opts dagui.FrontendOpts, run func(context.Context) (cleanups.CleanupF, error)) (rerr error) {
+	defer func() { rerr = errors.Join(rerr, fe.db.ClosePrimaryLogs()) }()
+	defer func() {
+		fe.logs.Close()
+		// Like the span buffers: the --log pager's stream spills to disk too.
+		fe.logStream.close()
+	}()
 	if opts.TooFastThreshold == 0 {
 		opts.TooFastThreshold = 100 * time.Millisecond
 	}
@@ -2417,10 +2430,13 @@ func (fe *frontendPretty) RequestSurfacedLogs() {
 // requestedLogs dedup over setExpanded's own-logs-only request.
 func (fe *frontendPretty) RequestZoomLogs(id dagui.SpanID, descendants bool) {
 	fe.dispatch(func() {
-		if !descendants {
-			descendants = fe.logDescendants(id)
+		if descendants {
+			fe.requestLogsWith(id, true)
+			return
 		}
-		fe.requestLogsWith(id, descendants)
+		// Not loaded yet: its roll-up is decided once it arrives (the
+		// ExportSpans hook), not latched as own-logs-only now.
+		fe.requestLogs(id)
 	})
 }
 
@@ -2548,9 +2564,20 @@ func (fe *frontendPretty) requestLogsOnRender(id dagui.SpanID) {
 // requestLogs asks the log provider for a span's logs, once. It rolls up
 // descendant logs when the span is marked RollUpLogs (e.g. a check or test
 // whose real output lives in a sub-operation), mirroring the web UI.
+//
+// A span not received yet -- unloaded, or only a placeholder a log record
+// created -- doesn't carry the metadata that decision needs, so the request is
+// deferred until the span arrives (the ExportSpans hook) instead of latching
+// an own-logs-only fetch the roll-up could never replace.
 func (fe *frontendPretty) requestLogs(id dagui.SpanID) {
-	if _, ok := fe.db.Spans.Map[id]; !ok {
-		// Span not loaded yet; it'll be requested once it's surfaced.
+	if fe.logProvider == nil || !id.IsValid() || fe.requestedLogs[id] {
+		return
+	}
+	if span, ok := fe.db.Spans.Map[id]; !ok || !span.Received {
+		if fe.deferredLogs == nil {
+			fe.deferredLogs = make(map[dagui.SpanID]bool)
+		}
+		fe.deferredLogs[id] = true
 		return
 	}
 	fe.requestLogsWith(id, fe.logDescendants(id))
@@ -2604,6 +2631,7 @@ func (fe *frontendPretty) requestLogsWith(id dagui.SpanID, descendants bool) {
 		fe.requestedLogs = make(map[dagui.SpanID]bool)
 	}
 	fe.requestedLogs[id] = true
+	delete(fe.deferredLogs, id)
 	fe.logProvider(id, descendants)
 }
 
@@ -2689,6 +2717,7 @@ func (fe *frontendPretty) ImportSnapshots(snapshots []dagui.SpanSnapshot) {
 	fe.dispatch(func() {
 		fe.db.ImportSnapshots(snapshots)
 		for _, id := range ids {
+			fe.requestArrivedSpanLogs(id)
 			if fe.logs.flushResolvedLogsForSpan(id) {
 				fe.updateSpanTreesForLogs(id)
 				fe.updateLogPagerForLogs(id)
@@ -2705,6 +2734,17 @@ func (fe *frontendPretty) ImportSnapshots(snapshots []dagui.SpanSnapshot) {
 		fe.viewDirty = true
 		fe.Update()
 	})
+}
+
+// requestArrivedSpanLogs finishes a log request that waited for the span: a
+// zoom outside the priority window, or a log record ahead of its span, can
+// precede the span itself. The arrived roll-up metadata decides the fetch,
+// without requiring a second expand/zoom gesture. Called by every path that
+// imports spans (ExportSpans, ImportSnapshots).
+func (fe *frontendPretty) requestArrivedSpanLogs(id dagui.SpanID) {
+	if fe.SpanExpanded[id] || fe.deferredLogs[id] {
+		fe.requestLogs(id)
+	}
 }
 
 func (fe *frontendPretty) RevealAllSpans() {
@@ -3138,6 +3178,7 @@ func (fe prettySpanExporter) ExportSpans(ctx context.Context, spans []sdktrace.R
 	fe.dispatch(func() {
 		fe.db.ExportSpans(context.Background(), spansCopy)
 		for _, id := range spanIDs {
+			fe.requestArrivedSpanLogs(id)
 			if fe.logs.flushResolvedLogsForSpan(id) {
 				fe.updateSpanTreesForLogs(id)
 				fe.updateLogPagerForLogs(id)
@@ -3661,6 +3702,9 @@ func (fe *frontendPretty) Render(ctx tuist.Context) {
 		return
 	}
 	fe.claims = newRenderClaims()
+	// The live display keeps the logs it renders materialized for a moment;
+	// the final render shows every log at once, so it must not.
+	fe.logs.Cache.setLive(!fe.finalRender)
 	if !fe.finalRender {
 		// Update window dimensions before choosing the screen body. Command-owned
 		// views embed the same trace renderers, which depend on this state for
@@ -4115,7 +4159,7 @@ func (fe *frontendPretty) renderZoomedFinalLogs(out TermOutput, indent string) [
 	}
 	fe.requestLogsOnRender(fe.ZoomedSpan)
 	logs := fe.logs.Logs[fe.ZoomedSpan]
-	if logs == nil || logs.UsedHeight() == 0 {
+	if logs == nil || !logs.HasOutput() || logs.UsedHeight() == 0 {
 		return nil
 	}
 	var buf strings.Builder
@@ -4473,7 +4517,7 @@ func checkBreakdownPartsFor(out TermOutput, nodes []*dagui.CheckNode) []string {
 func (fe *frontendPretty) renderLogsLines(prefix string) []string {
 	fe.requestLogsOnRender(fe.ZoomedSpan)
 	logs := fe.logs.Logs[fe.ZoomedSpan]
-	if logs == nil || logs.UsedHeight() == 0 || fe.claims.hasLog(fe.ZoomedSpan) || fe.hasShownRootError() {
+	if logs == nil || fe.claims.hasLog(fe.ZoomedSpan) || fe.hasShownRootError() || !logs.HasOutput() || logs.UsedHeight() == 0 {
 		return nil
 	}
 	logs.SetHeight(fe.window.Height / 3)
@@ -4610,7 +4654,7 @@ func (fe *frontendPretty) recalculateViewLocked() {
 
 	if fe.logProvider != nil {
 		// The primary output is written at end of run from OUTSIDE the render
-		// tree (renderPrimaryOutput reads db.PrimaryLogs), so no view fetches it
+		// tree (renderPrimaryOutput reads db.WalkPrimaryLogs), so no view fetches it
 		// on render -- request it eagerly in both modes. It's a single span
 		// (descendants=false), not the rolled-up build log, so it isn't the
 		// over-fetch interactive cares about.
@@ -7828,13 +7872,16 @@ func (fe *frontendPretty) renderRowContentRest(ctx tuist.Context, out TermOutput
 		(span.RollUpLogs || fe.shellTranscript()) && row.Depth == 0 && !row.Expanded &&
 		!fe.shouldRenderInlineTests(row) && !fe.rollsUpSubChecks(row) {
 		// in shell mode, we print top-level command logs unindented, like shells
-		// usually does
-		if logs := fe.logs.Logs[row.Span.ID]; logs != nil && logs.UsedHeight() > 0 {
+		// usually does. Check for output without laying the log out: most of
+		// these rows are completed and draw nothing.
+		if logs := fe.logs.Logs[row.Span.ID]; logs != nil && logs.HasOutput() {
 			if fe.shellTranscript() {
-				unindent := *row
-				unindent.Depth = -1
-				fe.renderLogs(out, r, &unindent, logs, logs.UsedHeight(), prefix, false)
-			} else if row.Span.RollUpLogs && (row.IsRunningOrChildRunning || row.Span.IsFailedOrCausedFailure()) {
+				if height := logs.UsedHeight(); height > 0 {
+					unindent := *row
+					unindent.Depth = -1
+					fe.renderLogs(out, r, &unindent, logs, height, prefix, false)
+				}
+			} else if row.Span.RollUpLogs && (row.IsRunningOrChildRunning || row.Span.IsFailedOrCausedFailure()) && logs.UsedHeight() > 0 {
 				// Show rolled-up logs while the span is running, and keep them on
 				// failure so the reason survives in the final report -- otherwise a
 				// failed rolled-up span (e.g. a generator whose exec failed)
@@ -8297,7 +8344,7 @@ func (fe *frontendPretty) renderRootCauseSection(ctx tuist.Context, r *renderer,
 			// logs the tree didn't show -- a row that printed a bare error
 			// with its logs collapsed still needs its detail surfaced.
 			logs := fe.logs.Logs[origin.ID]
-			if logs == nil || logs.UsedHeight() == 0 || fe.claims.hasLog(origin.ID) {
+			if logs == nil || fe.claims.hasLog(origin.ID) || !logs.HasOutput() || logs.UsedHeight() == 0 {
 				continue
 			}
 		}
@@ -8579,7 +8626,7 @@ func (fe *frontendPretty) renderToolOutputSummary(out TermOutput, span *dagui.Sp
 		return
 	}
 	logs := fe.logs.Logs[span.ID]
-	if exec := toolCallExecSpan(span); (logs == nil || logs.UsedHeight() == 0) && exec != nil {
+	if exec := toolCallExecSpan(span); (logs == nil || !logs.HasOutput() || logs.UsedHeight() == 0) && exec != nil {
 		logs = fe.logs.Logs[exec.ID]
 	}
 	if logs == nil {
@@ -9640,10 +9687,12 @@ type prettyLogs struct {
 	Output         TermOutput
 	Images         *kittyImages
 	tableRuleColor termenv.Color
+	Cache          *terminalCache
 }
 
 func newPrettyLogs(profile termenv.Profile, db *dagui.DB) *prettyLogs {
 	return &prettyLogs{
+		Cache:         newTerminalCache(),
 		DB:            db,
 		Logs:          make(map[dagui.SpanID]*Vterm),
 		ToolArgs:      make(map[dagui.SpanID]*Vterm),
@@ -9656,6 +9705,20 @@ func newPrettyLogs(profile termenv.Profile, db *dagui.DB) *prettyLogs {
 }
 
 func (l *prettyLogs) Export(ctx context.Context, logs []sdklog.Record) error {
+	// A buffer's storage error is sticky and reported by the buffer itself;
+	// collect it (once per buffer) and keep exporting, so one failed spill
+	// can't drop every later record in the batch, other spans' included.
+	var errs []error
+	var failed map[*Vterm]bool
+	report := func(vt *Vterm) {
+		if err := vt.Err(); err != nil && !failed[vt] {
+			if failed == nil {
+				failed = map[*Vterm]bool{}
+			}
+			failed[vt] = true
+			errs = append(errs, err)
+		}
+	}
 	for _, log := range logs {
 		body, isText := dagui.LogBodyString(log)
 		if !isText {
@@ -9707,13 +9770,16 @@ func (l *prettyLogs) Export(ctx context.Context, logs []sdklog.Record) error {
 			if isMedia {
 				l.spanLogs(rollUpID).WriteMedia(media, pw.Prefix+body)
 			} else {
-				fmt.Fprint(pw, body)
+				// A write error is the roll-up buffer's own, reported below.
+				_, _ = fmt.Fprint(pw, body)
 			}
+			report(l.spanLogs(rollUpID))
 		}
 
 		vterm := l.spanLogs(spanID)
 		if isMedia {
 			vterm.WriteMedia(media, body)
+			report(vterm)
 			continue
 		}
 		if contentType == "application/json" {
@@ -9729,8 +9795,9 @@ func (l *prettyLogs) Export(ctx context.Context, logs []sdklog.Record) error {
 		default:
 			_, _ = fmt.Fprint(vterm, body)
 		}
+		report(vterm)
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 func (l *prettyLogs) flushResolvedLogsForSpan(spanID dagui.SpanID) bool {
@@ -9810,6 +9877,7 @@ func (l *prettyLogs) spanLogs(spanID dagui.SpanID) *Vterm {
 	if !found {
 		term = NewVterm(l.Profile)
 		term.setMarkdownTableRuleColor(l.tableRuleColor)
+		term.cache = l.Cache
 		term.images = l.Images
 		if l.LogWidth > -1 {
 			term.SetWidth(l.LogWidth)
@@ -9824,6 +9892,7 @@ func (l *prettyLogs) spanToolArgs(spanID dagui.SpanID) *Vterm {
 	if !found {
 		term = NewVterm(l.Profile)
 		term.setMarkdownTableRuleColor(l.tableRuleColor)
+		term.cache = l.Cache
 		if l.LogWidth > -1 {
 			term.SetWidth(l.LogWidth)
 		}
@@ -9853,6 +9922,18 @@ func (l *prettyLogs) SetWidth(width int) {
 	for _, vt := range l.ToolArgs {
 		vt.SetWidth(width)
 	}
+}
+
+// Close is separate from exporter Shutdown: final reports still need logs
+// after the telemetry SDK has shut its exporters down.
+func (l *prettyLogs) Close() {
+	for _, term := range l.Logs {
+		term.Close()
+	}
+	for _, term := range l.ToolArgs {
+		term.Close()
+	}
+	l.Cache = newTerminalCache()
 }
 
 func (l *prettyLogs) Shutdown(ctx context.Context) error {

@@ -283,7 +283,7 @@ func (fe *frontendPretty) spanHasLogs(span *dagui.Span) bool {
 		return false
 	}
 	logs := fe.logs.Logs[span.ID]
-	return logs != nil && logs.UsedHeight() > 0
+	return logs != nil && logs.HasOutput() && logs.UsedHeight() > 0
 }
 
 func (fe *frontendPretty) currentLogSpan() *dagui.Span {
@@ -436,6 +436,18 @@ type logStream struct {
 	id    dagui.SpanID
 	title string
 	vt    *Vterm
+	// closed is set, on the UI goroutine, once vt's storage is released;
+	// writes still in flight for it are dropped.
+	closed bool
+}
+
+// close releases the stream's disk-backed storage. UI goroutine only.
+func (s *logStream) close() {
+	if s == nil || s.closed {
+		return
+	}
+	s.closed = true
+	s.vt.Close()
 }
 
 func (fe *frontendPretty) logStreamFor(id dagui.SpanID) *logStream {
@@ -454,8 +466,10 @@ func (fe *frontendPretty) OpenLogStream(id dagui.SpanID, title string) io.Writer
 		if fe.logPager != nil {
 			fe.closeLogPager()
 		}
-		// Size the buffer before the first write: text written at width 0 is
-		// lost. The pager keeps it sized after that.
+		fe.logStream.close()
+		// Give the pager its initial viewport; layout is lazy, so text is
+		// wrapped at whatever width the pager has when it renders, and the
+		// pager keeps it sized after that.
 		if fe.window.Width > 0 {
 			stream.vt.SetPrefix("")
 			stream.vt.SetWidth(fe.window.Width)
@@ -476,6 +490,9 @@ func (w logStreamWriter) Write(p []byte) (int, error) {
 	// Dispatch runs later on the UI goroutine; the caller may reuse p.
 	buf := append([]byte(nil), p...)
 	w.fe.dispatch(func() {
+		if w.stream.closed {
+			return
+		}
 		_, _ = w.stream.vt.Write(buf)
 		w.fe.updateLogPagerForLogs(w.stream.id)
 	})

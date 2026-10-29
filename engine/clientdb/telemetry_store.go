@@ -568,14 +568,47 @@ func (l *spanLookup) markedSpanIDs() (checks, tests map[string]struct{}) {
 type logLookup struct {
 	mu         sync.RWMutex
 	rowsBySpan map[string][]int64
+	// archive holds one archiveLogMeta per log row, indexed by row ID - 1.
+	// Its trace and span fields index the intern tables below.
+	archive     []archiveLogMeta
+	archiveErrs map[int64]error
+	traceIDs    []string
+	traceIndex  map[string]uint32
+	spanIDs     []string
+	spanIndex   map[string]uint32
+
+	// memoMu guards attrMemo, which caches attribute classes by their bytes.
+	memoMu   sync.Mutex
+	attrMemo map[string]archiveAttrClassResult
 }
 
 func newLogLookup() *logLookup {
-	return &logLookup{rowsBySpan: make(map[string][]int64)}
+	return &logLookup{
+		rowsBySpan:  make(map[string][]int64),
+		archiveErrs: make(map[int64]error),
+		traceIndex:  make(map[string]uint32),
+		spanIndex:   make(map[string]uint32),
+		attrMemo:    make(map[string]archiveAttrClassResult),
+	}
 }
 
+func (l *logLookup) add(row Log) { l.addAll([]Log{row}) }
+
 func (l *logLookup) addAll(rows []Log) {
+	flags, errs := l.archiveClassify(rows)
 	l.mu.Lock()
+	for i, row := range rows {
+		if errs != nil && errs[i] != nil {
+			l.archiveErrs[int64(len(l.archive))] = errs[i]
+		}
+		l.archive = append(l.archive, archiveLogMeta{
+			timestamp: row.Timestamp,
+			size:      logCodec.size(row),
+			trace:     internLocked(l.traceIndex, &l.traceIDs, row.TraceID.String),
+			span:      internLocked(l.spanIndex, &l.spanIDs, row.SpanID.String),
+			flags:     flags[i],
+		})
+	}
 	for _, row := range rows {
 		if !row.SpanID.Valid {
 			continue
@@ -615,6 +648,9 @@ type DB struct {
 	logIdx     *logLookup
 	callIdx    *callLookup
 	archiveIdx *archiveLookup
+	// archiveTopos caches archive span topologies built from this store; it
+	// is released with the store.
+	archiveTopos *archiveTopologyCache
 
 	clientID string
 	refCount int
@@ -651,11 +687,12 @@ func openStoreStreams(ctx context.Context, root, clientID string, tailBudget int
 	}
 
 	store := &DB{
-		lookup:     newSpanLookup(),
-		logIdx:     newLogLookup(),
-		callIdx:    newCallLookup(),
-		archiveIdx: newArchiveLookup(),
-		clientID:   clientID,
+		lookup:       newSpanLookup(),
+		logIdx:       newLogLookup(),
+		callIdx:      newCallLookup(),
+		archiveIdx:   newArchiveLookup(),
+		archiveTopos: newArchiveTopologyCache(),
+		clientID:     clientID,
 	}
 	defer func() {
 		if rerr != nil {

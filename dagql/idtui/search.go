@@ -18,8 +18,8 @@ type searchMatch struct {
 
 // buildSearchMatches finds every span in the view whose name or logs match
 // the current searchQuery, not just those on visible rows, and populates
-// fe.searchMatches with every hit. Reads midterm's cached search results
-// (populated by syncVtermSearchHighlights). Results are ordered by tree
+// fe.searchMatches with every hit. Reads each Vterm's cached search results, refreshed when its content,
+// layout, or query changes. Results are ordered by tree
 // position so n/N navigation follows a logical sequence.
 //
 // The view only builds the trees its rows show, so rather than walk a tree of
@@ -47,7 +47,7 @@ func (fe *frontendPretty) buildSearchMatches() {
 	}
 	for toolArgs, logs := range map[bool]map[dagui.SpanID]*Vterm{false: fe.logs.Logs, true: fe.logs.ToolArgs} {
 		for spanID, vt := range logs {
-			if len(vt.Term().SearchMatchRows()) == 0 {
+			if len(vt.SearchMatchRows()) == 0 {
 				continue
 			}
 			span := fe.db.Spans.Map[spanID]
@@ -83,7 +83,7 @@ func (fe *frontendPretty) buildSearchMatches() {
 					if logs == nil {
 						return
 					}
-					for _, r := range logs.Term().SearchMatchRows() {
+					for _, r := range logs.SearchMatchRows() {
 						fe.searchMatches = append(fe.searchMatches, searchMatch{
 							spanID:   spanID,
 							logRow:   r,

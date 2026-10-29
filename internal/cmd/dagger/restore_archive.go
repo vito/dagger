@@ -12,6 +12,7 @@ import (
 	"github.com/dagger/dagger/engine/agentcontrol"
 	"github.com/dagger/dagger/engine/archive"
 	enginetel "github.com/dagger/dagger/engine/telemetry"
+	"github.com/dagger/dagger/internal/tracesource"
 	collogspb "go.opentelemetry.io/proto/otlp/collector/logs/v1"
 	colmetricspb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	coltracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
@@ -135,11 +136,47 @@ func restoreArchive(ctx context.Context, source archiveRestoreSource, fe archive
 		return nil, err
 	}
 
-	return startHistoricalImport(ctx, func(ctx context.Context) error {
-		return importArchiveRemainder(ctx, source, req.traceID, importer, cut)
+	// Keep the verified bootstrap and span sealing path unchanged. Interactive
+	// frontends load display logs on demand; semantic metadata still arrives in
+	// the background so names, progress and call rendering do not require an
+	// expanded log pane. Lazy reads stay pinned to the bootstrap's cut.
+	//
+	// Queued and in-flight lazy fetches run on historyCtx, so the cleanup's
+	// cancel stops them before it joins them.
+	historyCtx, cancel := context.WithCancel(ctx)
+	var logFg fetchGroup
+	var archived *archivedSpans
+	tf, lazy := fe.(idtui.TraceFrontend)
+	if lazy {
+		display := tracesource.NewArchive(source, archive.Manifest{
+			TraceID: req.traceID, SealAt: &cut.SealAt,
+			HighWater: archive.HighWater{Spans: cut.HighWater.Spans, Logs: cut.HighWater.Logs, Metrics: cut.HighWater.Metrics},
+		})
+		loader := newTraceLoaderForFrontend(historyCtx, display, req.traceID, fe)
+		// The background metadata log stream already imports every call
+		// payload up to the cut, so a roll-up only needs its text, and the
+		// full span tree is loaded, so its records keep their own spans.
+		loader.skipCallPayloads = true
+		loader.keepRollUpSpanIDs = true
+		// The provider stays installed for the whole resumed session, whose
+		// own live spans stream their logs in and are never in the archive.
+		// Only spans the archived history delivers are fetched from it.
+		archived = newArchivedSpans(func(id dagui.SpanID, descendants bool) {
+			loader.fetchLogs(&logFg, id, descendants)
+		})
+		tf.SetLogProvider(archived.request)
+		tf.SetFetchWaiter(func() { _ = logFg.Wait() })
+	}
+	stop := startHistoricalImport(historyCtx, func(ctx context.Context) error {
+		return importArchiveRemainderMode(ctx, source, req.traceID, importer, cut, lazy, archived)
 	}, func(err error) {
 		restoreNotice(ctx, fmt.Sprintf("historical telemetry import incomplete: %v; restored agents remain usable", err))
-	}), nil
+	})
+	return func() {
+		cancel()
+		stop()
+		_ = logFg.Wait()
+	}, nil
 }
 
 func archiveRestoreError(traceID string, err error) error {
@@ -168,17 +205,127 @@ func startHistoricalImport(ctx context.Context, run func(context.Context) error,
 // applied; the frontend ignores digests it already has, and a sealed archive's
 // history never includes control records.
 func importArchiveRemainder(ctx context.Context, source archiveRestoreSource, traceID string, importer *enginetel.ArchiveTraceImporter, cut enginetel.ArchiveCut) error {
+	return importArchiveRemainderMode(ctx, source, traceID, importer, cut, false, nil)
+}
+
+// archivedSpans gates lazy log fetches to the spans the archived history
+// delivers: only those can be found in the archive.
+//
+// Fetches wait for the span stream to complete. A roll-up's descendant records
+// keep their own span IDs (the loader's keepRollUpSpanIDs), and the frontend
+// routes each to its span and a prefixed copy to the enclosing roll-up only
+// when the spans between them are loaded -- as in a live session, where spans
+// precede their logs. The history's log stream also runs beside its span
+// stream, so a metadata record (e.g. a span name) can make the frontend show
+// a span before its row has arrived; the frontend asks for a span's logs once,
+// so such requests are parked rather than dropped. Once the span stream is
+// complete the parked requests for archived spans are fetched, and an unknown
+// span is definitively live: its request is dropped and nothing is retained.
+//
+// Waiting costs a late first expansion on a very large archive, never output:
+// before lazy display, restore imported every log eagerly instead.
+type archivedSpans struct {
+	fetch func(dagui.SpanID, bool)
+
+	mu  sync.Mutex
+	ids map[dagui.SpanID]struct{}
+	// pending holds parked requests (span -> descendants); nil once the span
+	// stream is complete.
+	pending map[dagui.SpanID]bool
+}
+
+func newArchivedSpans(fetch func(dagui.SpanID, bool)) *archivedSpans {
+	return &archivedSpans{
+		fetch:   fetch,
+		ids:     map[dagui.SpanID]struct{}{},
+		pending: map[dagui.SpanID]bool{},
+	}
+}
+
+// request is the frontend's log provider.
+func (s *archivedSpans) request(id dagui.SpanID, descendants bool) {
+	if !id.IsValid() {
+		return
+	}
+	s.mu.Lock()
+	_, known := s.ids[id]
+	if s.pending != nil {
+		s.pending[id] = s.pending[id] || descendants
+		s.mu.Unlock()
+		return
+	}
+	s.mu.Unlock()
+	if known {
+		s.fetch(id, descendants)
+	}
+}
+
+// record notes a batch of archived spans before the frontend can see it.
+func (s *archivedSpans) record(req *coltracepb.ExportTraceServiceRequest) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, rs := range req.GetResourceSpans() {
+		for _, ss := range rs.GetScopeSpans() {
+			for _, span := range ss.GetSpans() {
+				var id dagui.SpanID
+				copy(id.SpanID[:], span.GetSpanId())
+				if id.IsValid() {
+					s.ids[id] = struct{}{}
+				}
+			}
+		}
+	}
+}
+
+// complete marks the span stream finished (or abandoned), every delivered span
+// imported: parked requests for archived spans are fetched, the rest dropped,
+// and later requests are fetched or dropped at once.
+func (s *archivedSpans) complete() {
+	type parked struct {
+		id          dagui.SpanID
+		descendants bool
+	}
+	var fire []parked
+	s.mu.Lock()
+	for id, descendants := range s.pending {
+		if _, known := s.ids[id]; known {
+			fire = append(fire, parked{id, descendants})
+		}
+	}
+	s.pending = nil
+	s.mu.Unlock()
+	for _, p := range fire {
+		s.fetch(p.id, p.descendants)
+	}
+}
+
+// importArchiveRemainderMode is importArchiveRemainder, optionally leaving
+// display log bodies for the frontend to load on demand. Each span batch is
+// recorded in archived (when non-nil) before the frontend imports it, and
+// archived is completed once the span stream ends.
+func importArchiveRemainderMode(ctx context.Context, source archiveRestoreSource, traceID string, importer *enginetel.ArchiveTraceImporter, cut enginetel.ArchiveCut, lazyLogs bool, archived *archivedSpans) error {
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	var resultErr error
 	for _, signal := range []enginetel.ArchiveSignal{enginetel.ArchiveSpans, enginetel.ArchiveLogs, enginetel.ArchiveMetrics} {
 		wg.Go(func() {
+			if signal == enginetel.ArchiveSpans && archived != nil {
+				defer archived.complete()
+			}
 			var opts archive.StreamOptions
 			switch signal {
 			case enginetel.ArchiveSpans:
 				opts.HighWater = cut.HighWater.Spans
+				if lazyLogs {
+					// The display view adds the has-logs hints lazy log
+					// loading needs.
+					opts.Spans = &archive.SpanSelection{Full: true, DagUIView: true}
+				}
 			case enginetel.ArchiveLogs:
 				opts.HighWater = cut.HighWater.Logs
+				if lazyLogs {
+					opts.Logs = &archive.LogSelection{Records: archive.LogRecordsMetadata}
+				}
 			case enginetel.ArchiveMetrics:
 				opts.HighWater = cut.HighWater.Metrics
 			}
@@ -187,6 +334,9 @@ func importArchiveRemainder(ctx context.Context, source archiveRestoreSource, tr
 				switch signal {
 				case enginetel.ArchiveSpans:
 					opts.Cursor, err = source.Traces(ctx, traceID, opts, func(cursor int64, batch *coltracepb.ExportTraceServiceRequest) error {
+						if archived != nil {
+							archived.record(batch)
+						}
 						return importer.ImportAndWait(ctx, enginetel.ArchiveImportBatch{Spans: batch, Cursor: cursor})
 					})
 				case enginetel.ArchiveLogs:

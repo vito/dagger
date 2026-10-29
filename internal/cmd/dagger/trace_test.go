@@ -16,6 +16,7 @@ import (
 	"github.com/dagger/dagger/internal/cloud"
 	"github.com/dagger/dagger/internal/cloud/auth"
 	"github.com/dagger/dagger/internal/cloud/otlpstream"
+	"github.com/dagger/dagger/internal/tracesource"
 	"github.com/dagger/dagger/util/cleanups"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"
@@ -30,6 +31,41 @@ import (
 	"golang.org/x/oauth2"
 	"google.golang.org/protobuf/proto"
 )
+
+type sealedTraceSource struct {
+	tracesource.Source
+	seal time.Time
+}
+
+func (s sealedTraceSource) SealTime() time.Time { return s.seal }
+
+func TestTraceLoaderUsesArchiveSeal(t *testing.T) {
+	loader, db, _ := testTraceLoader(t)
+	seal := time.Unix(123, 0)
+	loader.client = sealedTraceSource{seal: seal}
+	span := &tracepb.Span{SpanId: []byte{1, 2, 3, 4, 5, 6, 7, 8}, StartTimeUnixNano: uint64(time.Unix(100, 0).UnixNano())}
+	require.NoError(t, loader.ingest(t.Context(), spanExport(span)))
+	require.NoError(t, loader.seal(t.Context()))
+	for _, got := range db.Spans.Map {
+		require.Equal(t, seal, got.EndTime)
+	}
+}
+
+func TestTraceLoaderIgnoresRequestsAfterClose(t *testing.T) {
+	loader, _, _ := testTraceLoader(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	loader.ctx = ctx
+	var fg fetchGroup
+	id := dagui.SpanID{}
+	id.SpanID[0] = 1
+	loader.fetchLogs(&fg, id, false)
+	loader.listen(id)
+	require.NoError(t, fg.Wait())
+	require.NoError(t, loader.wait())
+	require.Empty(t, loader.logReq)
+	require.Empty(t, loader.pending)
+}
 
 func TestTraceUsesGlobalFrontendOpts(t *testing.T) {
 	prevFrontend := Frontend
@@ -292,6 +328,100 @@ func TestTraceLoaderFetchLogs(t *testing.T) {
 	mu.Lock()
 	require.Equal(t, []url.Values{{"span_id": {own.String()}}}, requests, "own logs are every record, one request")
 	mu.Unlock()
+}
+
+// rollUpSource serves a roll-up span R with one child C: R's descendant text
+// is both spans' output; C's own logs are its own.
+type rollUpSource struct {
+	tracesource.Source
+	r, c     dagui.SpanID
+	mu       sync.Mutex
+	requests []cloud.LogSelection
+}
+
+func (s *rollUpSource) FetchLogs(ctx context.Context, _ string, sel cloud.LogSelection, cb func(context.Context, *collogspb.ExportLogsServiceRequest) error) error {
+	s.mu.Lock()
+	s.requests = append(s.requests, sel)
+	s.mu.Unlock()
+	record := func(id dagui.SpanID, body string) *logspb.LogRecord {
+		return &logspb.LogRecord{SpanId: id.SpanID[:], Body: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: body}}}
+	}
+	var records []*logspb.LogRecord
+	switch {
+	case sel.SpanID == s.r.String() && sel.Descendants:
+		records = []*logspb.LogRecord{record(s.r, "r\n"), record(s.c, "c\n")}
+	case sel.SpanID == s.c.String():
+		records = []*logspb.LogRecord{record(s.c, "c\n")}
+	}
+	return cb(ctx, &collogspb.ExportLogsServiceRequest{ResourceLogs: []*logspb.ResourceLogs{{ScopeLogs: []*logspb.ScopeLogs{{LogRecords: records}}}}})
+}
+
+// importedLog is one record a loader handed the frontend.
+type importedLog struct {
+	span dagui.SpanID
+	body string
+}
+
+type recordingLogExporter struct {
+	mu   sync.Mutex
+	logs []importedLog
+}
+
+func (e *recordingLogExporter) Export(_ context.Context, records []sdklog.Record) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for _, r := range records {
+		e.logs = append(e.logs, importedLog{dagui.SpanID{SpanID: r.SpanID()}, r.Body().AsString()})
+	}
+	return nil
+}
+func (*recordingLogExporter) Shutdown(context.Context) error   { return nil }
+func (*recordingLogExporter) ForceFlush(context.Context) error { return nil }
+
+// TestTraceLoaderRollUpKeepsSpanIDsOnce: with the whole span tree loaded
+// (archive restore), a roll-up's descendant text keeps its real span IDs, so
+// the frontend routes it as in a live session -- to each child, plus one
+// prefixed copy on the roll-up -- and each span's text is imported once
+// whichever of the roll-up and the child's own request comes first. Re-keyed
+// roll-up text plus a child's later own fetch rendered the child's output
+// twice in the roll-up.
+func TestTraceLoaderRollUpKeepsSpanIDsOnce(t *testing.T) {
+	r, c := dagui.SpanID{}, dagui.SpanID{}
+	r.SpanID[0], c.SpanID[0] = 1, 2
+	for _, tc := range []struct {
+		name  string
+		order []bool // descendants per request: true is R's roll-up, false is C's own
+		want  []importedLog
+		reqs  int
+	}{
+		{"roll-up first", []bool{true, false}, []importedLog{{r, "r\n"}, {c, "c\n"}}, 1},
+		{"child first", []bool{false, true}, []importedLog{{c, "c\n"}, {r, "r\n"}}, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logs := &recordingLogExporter{}
+			db := dagui.NewDB()
+			fe := &idtui.FrontendMock{
+				SpanExporterFunc:   func() sdktrace.SpanExporter { return db },
+				LogExporterFunc:    func() sdklog.Exporter { return logs },
+				MetricExporterFunc: func() sdkmetric.Exporter { return db.MetricExporter() },
+			}
+			source := &rollUpSource{r: r, c: c}
+			loader := newTraceLoaderForFrontend(t.Context(), source, "trace-id", fe)
+			loader.keepRollUpSpanIDs = true
+			loader.skipCallPayloads = true
+			var fg fetchGroup
+			for _, descendants := range tc.order {
+				id := c
+				if descendants {
+					id = r
+				}
+				loader.fetchLogs(&fg, id, descendants)
+				require.NoError(t, fg.Wait())
+			}
+			require.Equal(t, tc.want, logs.logs, "each span's text once, under its own span")
+			require.Len(t, source.requests, tc.reqs, "a child the roll-up imported is not fetched again")
+		})
+	}
 }
 
 // resolvingFrontend is the slice of TraceFrontend resolveTraceTarget drives.

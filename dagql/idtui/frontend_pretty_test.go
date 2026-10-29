@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"image/color"
 	"io"
+	"os"
 	"reflect"
 	"regexp"
 	"slices"
@@ -30,13 +31,111 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/vektah/gqlparser/v2/ast"
 	"github.com/vito/tuist"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	otellog "go.opentelemetry.io/otel/log"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/protobuf/proto"
 )
+
+func TestLazyZoomRequestsLogsWhenSpanArrives(t *testing.T) {
+	for _, rollup := range []bool{false, true} {
+		t.Run(fmt.Sprintf("rollup=%v", rollup), func(t *testing.T) {
+			fe := NewWithDB(io.Discard, dagui.NewDB())
+			fe.reportOnly = true
+			id := prettyTestSpanID(42)
+			var requests []bool
+			fe.SetLogProvider(func(got dagui.SpanID, descendants bool) {
+				require.Equal(t, id, got)
+				requests = append(requests, descendants)
+			})
+			fe.ZoomToSpan(id)
+			require.Empty(t, requests, "wait for metadata rather than guessing roll-up")
+			span := tracetest.SpanStub{
+				Name:        "late zoom target",
+				SpanContext: trace.NewSpanContext(trace.SpanContextConfig{TraceID: trace.TraceID{1}, SpanID: id.SpanID}),
+				StartTime:   time.Unix(100, 0), EndTime: time.Unix(101, 0),
+				Attributes: []attribute.KeyValue{attribute.Bool(telemetry.UIRollUpLogsAttr, rollup)},
+			}.Snapshot()
+			require.NoError(t, fe.SpanExporter().ExportSpans(t.Context(), []sdktrace.ReadOnlySpan{span}))
+			require.Equal(t, []bool{rollup}, requests, "the first zoom must finish fetching its logs")
+			require.NoError(t, fe.SpanExporter().ExportSpans(t.Context(), []sdktrace.ReadOnlySpan{span}))
+			require.Len(t, requests, 1, "repeated span snapshots must not duplicate logs")
+		})
+	}
+}
+
+// TestLogBeforeSpanDefersRollUpDecision: a log record can reach a span before
+// the span itself, leaving a placeholder without its roll-up metadata. A log
+// request made then must not latch an own-logs fetch: it waits for the span,
+// whichever path asked (a zoom, or an unexpanded request such as a render
+// site or RequestZoomLogs), and whichever path delivers the span (OTLP
+// ExportSpans, or ImportSnapshots).
+func TestLogBeforeSpanDefersRollUpDecision(t *testing.T) {
+	arrivals := []struct {
+		name   string
+		arrive func(t *testing.T, fe *frontendPretty, id dagui.SpanID)
+	}{
+		{"export", func(t *testing.T, fe *frontendPretty, id dagui.SpanID) {
+			span := tracetest.SpanStub{
+				Name:        "rolled-up span",
+				SpanContext: trace.NewSpanContext(trace.SpanContextConfig{TraceID: trace.TraceID{1}, SpanID: id.SpanID}),
+				StartTime:   time.Unix(100, 0), EndTime: time.Unix(101, 0),
+				Attributes: []attribute.KeyValue{attribute.Bool(telemetry.UIRollUpLogsAttr, true)},
+			}.Snapshot()
+			require.NoError(t, fe.SpanExporter().ExportSpans(t.Context(), []sdktrace.ReadOnlySpan{span}))
+		}},
+		{"snapshot", func(_ *testing.T, fe *frontendPretty, id dagui.SpanID) {
+			fe.ImportSnapshots([]dagui.SpanSnapshot{{
+				ID: id, Name: "rolled-up span", RollUpLogs: true,
+				StartTime: time.Unix(100, 0), EndTime: time.Unix(101, 0),
+			}})
+		}},
+	}
+	for _, tc := range []struct {
+		name    string
+		request func(fe *frontendPretty, id dagui.SpanID)
+	}{
+		{"zoom", func(fe *frontendPretty, id dagui.SpanID) { fe.ZoomToSpan(id) }},
+		{"zoom logs", func(fe *frontendPretty, id dagui.SpanID) { fe.RequestZoomLogs(id, false) }},
+		{"lazy request", func(fe *frontendPretty, id dagui.SpanID) {
+			// What render sites and LogsView.OnMount call.
+			fe.dispatch(func() { fe.requestLogs(id) })
+		}},
+	} {
+		for _, arrival := range arrivals {
+			t.Run(tc.name+"/"+arrival.name, func(t *testing.T) {
+				fe := NewWithDB(io.Discard, dagui.NewDB())
+				// Run dispatches inline, without a TUI event loop.
+				fe.reportOnly = true
+				id := prettyTestSpanID(42)
+				var requests []bool
+				fe.SetLogProvider(func(got dagui.SpanID, descendants bool) {
+					require.Equal(t, id, got)
+					requests = append(requests, descendants)
+				})
+				require.NoError(t, fe.LogExporter().Export(t.Context(), []sdklog.Record{
+					frontendTestLogRecord(id.SpanID, otellog.StringValue("early name"),
+						otellog.String(telemetryattrs.LogRoleAttr, telemetryattrs.LogRoleSpanName)),
+				}))
+				placeholder := fe.db.Spans.Map[id]
+				require.NotNil(t, placeholder, "the log record creates a placeholder")
+				require.False(t, placeholder.Received)
+
+				tc.request(fe, id)
+				require.Empty(t, requests, "a placeholder's roll-up is unknown")
+
+				arrival.arrive(t, fe, id)
+				require.Equal(t, []bool{true}, requests, "the arrived span's roll-up decides the fetch")
+				arrival.arrive(t, fe, id)
+				require.Len(t, requests, 1)
+			})
+		}
+	}
+}
 
 func frontendTestLogRecord(spanID trace.SpanID, body otellog.Value, attrs ...otellog.KeyValue) sdklog.Record {
 	record := new(sdklog.Record)
@@ -116,6 +215,77 @@ func requireRenderableFrontendLogs(t *testing.T, records []sdklog.Record) {
 	require.Empty(t, records[2].Body().AsString(), "stdio EOF must remain available to frontends")
 }
 
+// breakSpilledLog makes a span's spilled log storage unusable: its file is
+// gone, so it can neither be appended to nor cut back for an in-memory tail.
+func breakSpilledLog(t *testing.T, term *Vterm) {
+	t.Helper()
+	require.NotEmpty(t, term.terminalBuf.path, "the log must have spilled")
+	require.NoError(t, os.Remove(term.terminalBuf.path))
+}
+
+func TestPrettyLogsExportContinuesPastStorageError(t *testing.T) {
+	logs := newPrettyLogs(termenv.Ascii, dagui.NewDB())
+	t.Cleanup(logs.Close)
+	failing, healthy := trace.SpanID{1}, trace.SpanID{2}
+	require.NoError(t, logs.Export(t.Context(), []sdklog.Record{
+		frontendTestLogRecord(failing, otellog.StringValue(strings.Repeat("line\n", 10000))),
+	}))
+	breakSpilledLog(t, logs.Logs[dagui.SpanID{SpanID: failing}])
+
+	err := logs.Export(t.Context(), []sdklog.Record{
+		frontendTestLogRecord(failing, otellog.StringValue("more\n")),
+		frontendTestLogRecord(healthy, otellog.StringValue("hello\n")),
+	})
+	require.Error(t, err)
+	require.Equal(t, "hello\n", rawLog(logs.Logs[dagui.SpanID{SpanID: healthy}]),
+		"a failed buffer must not drop other spans' records in the batch")
+
+	// The failed buffer's error is sticky; later batches still reach others.
+	err = logs.Export(t.Context(), []sdklog.Record{
+		frontendTestLogRecord(failing, otellog.StringValue("more\n")),
+		frontendTestLogRecord(healthy, otellog.StringValue("world\n")),
+	})
+	require.Error(t, err)
+	require.Equal(t, "hello\nworld\n", rawLog(logs.Logs[dagui.SpanID{SpanID: healthy}]))
+}
+
+// TestPrettyLogsWithoutTempStorage: a span's log past the in-memory limit
+// stays readable from memory when TMPDIR cannot be written.
+func TestPrettyLogsWithoutTempStorage(t *testing.T) {
+	t.Setenv("TMPDIR", t.TempDir()+"/missing")
+	logs := newPrettyLogs(termenv.Ascii, dagui.NewDB())
+	t.Cleanup(logs.Close)
+	id := trace.SpanID{1}
+	content := strings.Repeat("line\n", 10000)
+	require.NoError(t, logs.Export(t.Context(), []sdklog.Record{
+		frontendTestLogRecord(id, otellog.StringValue(content[:len(content)/2])),
+		frontendTestLogRecord(id, otellog.StringValue(content[len(content)/2:])),
+	}))
+	term := logs.Logs[dagui.SpanID{SpanID: id}]
+	require.NoError(t, term.Err())
+	require.Equal(t, content, rawLog(term))
+	require.NotContains(t, term.View(), "log storage error")
+}
+
+func TestReportSessionToleratesLogStorageError(t *testing.T) {
+	session := NewReportSession(dagui.NewDB())
+	t.Cleanup(session.Close)
+	failing, healthy := trace.SpanID{1}, trace.SpanID{2}
+	require.NoError(t, session.LogExporter().Export(t.Context(), []sdklog.Record{
+		frontendTestLogRecord(failing, otellog.StringValue(strings.Repeat("line\n", 10000))),
+	}))
+	breakSpilledLog(t, session.logs.Logs[dagui.SpanID{SpanID: failing}])
+
+	// One span's failed storage must not fail the whole report's ingestion.
+	require.NoError(t, session.LogExporter().Export(t.Context(), []sdklog.Record{
+		frontendTestLogRecord(failing, otellog.StringValue("more\n")),
+		frontendTestLogRecord(healthy, otellog.StringValue("hello\n")),
+	}))
+	require.Error(t, session.logs.Logs[dagui.SpanID{SpanID: failing}].Err(),
+		"the failed buffer keeps its error to render in place")
+	require.Equal(t, "hello\n", rawLog(session.logs.Logs[dagui.SpanID{SpanID: healthy}]))
+}
+
 func TestTelemetryDataRecordsExcludedFromFrontendLogs(t *testing.T) {
 	knownSpanID := trace.SpanID{1}
 	unknownSpanID := trace.SpanID{2}
@@ -136,7 +306,7 @@ func TestTelemetryDataRecordsExcludedFromFrontendLogs(t *testing.T) {
 		require.NotContains(t, output.String(), "reserved malformed payload")
 		knownLogs := fe.logs.testLogs[dagui.SpanID{SpanID: knownSpanID}]
 		require.NotNil(t, knownLogs)
-		require.Equal(t, "before\nafter\n", knownLogs.rawBuf.String())
+		require.Equal(t, "before\nafter\n", rawLog(knownLogs))
 		requireRenderableFrontendLogs(t, fe.logs.pendingLogs[dagui.SpanID{SpanID: unknownSpanID}])
 		require.Len(t, fe.logs.pendingLogs, 1, "reserved records remained buffered for missing spans")
 	})
@@ -159,7 +329,7 @@ func TestTelemetryDataRecordsExcludedFromFrontendLogs(t *testing.T) {
 		require.NoError(t, fe.LogExporter().Export(context.Background(), knownRecords))
 		spanLogs := fe.logs.Logs[dagui.SpanID{SpanID: knownSpanID}]
 		require.NotNil(t, spanLogs)
-		require.Equal(t, "before\nafter\n", spanLogs.rawBuf.String())
+		require.Equal(t, "before\nafter\n", rawLog(spanLogs))
 	})
 
 	t.Run("report", func(t *testing.T) {
@@ -168,7 +338,7 @@ func TestTelemetryDataRecordsExcludedFromFrontendLogs(t *testing.T) {
 		require.NoError(t, session.LogExporter().Export(context.Background(), knownRecords))
 		spanLogs := session.logs.Logs[dagui.SpanID{SpanID: knownSpanID}]
 		require.NotNil(t, spanLogs)
-		require.Equal(t, "before\nafter\n", spanLogs.rawBuf.String())
+		require.Equal(t, "before\nafter\n", rawLog(spanLogs))
 	})
 }
 
@@ -3355,10 +3525,10 @@ func TestFinalRenderPrimaryOutputWithoutReport(t *testing.T) {
 	db := dagui.NewDB()
 	spanID := dagui.SpanID{SpanID: trace.SpanID{1}}
 	db.PrimarySpan = spanID
-	db.PrimaryLogs[spanID] = []sdklog.Record{
+	db.IngestLogs([]sdklog.Record{
 		frontendTestLogRecord(spanID.SpanID, otellog.StringValue("/work/root\n"),
 			otellog.Int(telemetry.StdioStreamAttr, 2)),
-	}
+	})
 
 	fe := NewWithDB(io.Discard, db)
 	fe.reportOnly = true
@@ -3371,10 +3541,11 @@ func TestFinalRenderPrimaryOutputWithoutReport(t *testing.T) {
 func TestWritePrimaryOutputSeparate(t *testing.T) {
 	db := dagui.NewDB()
 	spanID := dagui.SpanID{SpanID: trace.SpanID{1}}
-	db.PrimaryLogs[spanID] = []sdklog.Record{
+	db.PrimarySpan = spanID
+	db.IngestLogs([]sdklog.Record{
 		frontendTestLogRecord(spanID.SpanID, otellog.StringValue("out\n"),
 			otellog.Int(telemetry.StdioStreamAttr, 2)),
-	}
+	})
 
 	var buf bytes.Buffer
 	require.NoError(t, writePrimaryOutput(&buf, db, spanID, true, false))
@@ -3405,4 +3576,32 @@ func TestOpenLogStreamPagesAndReopens(t *testing.T) {
 	require.NotNil(t, fe.logPager, "L reopens the stream")
 	require.Equal(t, "lint", fe.logPager.Title)
 	require.Contains(t, fe.logPager.Logs.View(), "hello from lint")
+}
+
+func TestOpenLogStreamReleasesSpilledStorage(t *testing.T) {
+	fe := NewWithDB(io.Discard, dagui.NewDB())
+	fe.reportOnly = true // run dispatched work synchronously
+	fe.tui.SetFocus(fe)
+	fe.window = windowSize{Width: 80, Height: 20}
+
+	first := fe.OpenLogStream(prettyTestSpanID(1), "first")
+	_, err := io.WriteString(first, strings.Repeat("spilled line\n", 10000))
+	require.NoError(t, err)
+	firstPath := fe.logStream.vt.terminalBuf.path
+	require.NotEmpty(t, firstPath, "the stream spilled to disk")
+	require.FileExists(t, firstPath)
+
+	// Replacing the stream releases the old one; its late writes are dropped.
+	second := fe.OpenLogStream(prettyTestSpanID(2), "second")
+	require.NoFileExists(t, firstPath)
+	_, err = io.WriteString(first, strings.Repeat("late line\n", 10000))
+	require.NoError(t, err)
+	require.NoFileExists(t, firstPath)
+
+	_, err = io.WriteString(second, strings.Repeat("spilled line\n", 10000))
+	require.NoError(t, err)
+	secondPath := fe.logStream.vt.terminalBuf.path
+	require.FileExists(t, secondPath)
+	fe.logStream.close()
+	require.NoFileExists(t, secondPath)
 }
