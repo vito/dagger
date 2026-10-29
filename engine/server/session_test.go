@@ -218,7 +218,7 @@ func TestNestedTransportRegistrationBindsExactExecAttachables(t *testing.T) {
 	// must not replace the exec bootstrap, an existing identity, or a channel
 	// that a logical SDK client was already sealed to.
 	cliMetadata := nestedTransportTestMetadata("interactive-cli")
-	cli, err := srv.RegisterNestedClientTransportForExec(ctx, cliMetadata, parent.clientID, cliMetadata.ClientID)
+	cli, err := srv.RegisterNestedClientTransportForExec(ctx, cliMetadata, parent.clientID, cliMetadata.ClientID, false)
 	require.NoError(t, err)
 	defer cli.Close()
 	cliRecord := sess.clientRecords[cliMetadata.ClientID]
@@ -228,7 +228,7 @@ func TestNestedTransportRegistrationBindsExactExecAttachables(t *testing.T) {
 	caller, err = srv.clientAttachableCaller(ctx, sess.sessionID, cliMetadata.ClientID, true)
 	require.NoError(t, err)
 	require.Same(t, cliCaller, caller)
-	_, err = srv.RegisterNestedClientTransportForExec(ctx, cliMetadata, parent.clientID, cliMetadata.ClientID)
+	_, err = srv.RegisterNestedClientTransportForExec(ctx, cliMetadata, parent.clientID, cliMetadata.ClientID, false)
 	require.ErrorContains(t, err, "already registered")
 	req := httptest.NewRequest(http.MethodGet, engine.SessionAttachablesEndpoint, nil)
 	err = srv.serveSessionAttachables(httptest.NewRecorder(), req, cliRecord)

@@ -27,7 +27,7 @@ func BenchmarkArchiveLogIndexReopen(b *testing.B) {
 		case i%100 == 0:
 			// Rows with unique attributes defeat any per-blob memoization.
 			row = payload
-			row.Attributes, err = MarshalProtoJSONs([]*commonpb.KeyValue{selectionAttr(telemetry.ContentTypeAttr, "text/markdown"), selectionAttr("log.uid", fmt.Sprint(i))})
+			row.Attributes, err = MarshalProtoList([]*commonpb.KeyValue{selectionAttr(telemetry.ContentTypeAttr, "text/markdown"), selectionAttr("log.uid", fmt.Sprint(i))})
 			require.NoError(b, err)
 		case i%50 == 0:
 			row = progress

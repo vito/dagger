@@ -65,11 +65,11 @@ type recordingNestedTransportSessionHandler struct {
 }
 
 func (handler *recordingNestedTransportSessionHandler) RegisterNestedClientTransportForExec(
-	ctx context.Context, metadata *engine.ClientMetadata, parent, attachables string,
+	ctx context.Context, metadata *engine.ClientMetadata, parent, attachables string, fromExecHelper bool,
 ) (*engine.NestedClientTransport, error) {
 	handler.bindings[metadata.ClientID] = attachables
 	handler.parents[metadata.ClientID] = parent
-	return handler.nestedTransportSessionHandler.RegisterNestedClientTransportForExec(ctx, metadata, parent, attachables)
+	return handler.nestedTransportSessionHandler.RegisterNestedClientTransportForExec(ctx, metadata, parent, attachables, fromExecHelper)
 }
 
 func TestNestedCLIRegistersOwnAttachablesWithoutRebindingSDK(t *testing.T) {
@@ -77,7 +77,7 @@ func TestNestedCLIRegistersOwnAttachablesWithoutRebindingSDK(t *testing.T) {
 	handler := &recordingNestedTransportSessionHandler{bindings: map[string]string{}, parents: map[string]string{}}
 	manager := newNestedClientTransportManager(t.Context(), handler, &engine.ClientMetadata{
 		SessionID: "sealed-session", ClientID: "bootstrap", ClientSecretToken: "sealed-secret",
-	}, "sealed-parent")
+	}, "sealed-parent", false)
 	defer manager.Close()
 
 	request := func(id, path string) *engine.NestedClientTransport {

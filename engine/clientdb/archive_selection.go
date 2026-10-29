@@ -52,12 +52,12 @@ const (
 
 func (f archiveLogFlags) has(flag archiveLogFlags) bool { return f&flag != 0 }
 
-// archiveLogAttrClass classifies a row's protojson-encoded attributes: the
+// archiveLogAttrClass classifies a row's protobuf-encoded attributes: the
 // hidden, control, metadata and call flags. It depends on the attribute bytes
 // alone, so its results may be memoized by those bytes.
 func archiveLogAttrClass(raw []byte) (archiveLogFlags, error) {
 	var attrs []*commonpb.KeyValue
-	if err := UnmarshalProtoJSONs(raw, &commonpb.KeyValue{}, &attrs); err != nil {
+	if err := UnmarshalProtoList(raw, &commonpb.KeyValue{}, &attrs); err != nil {
 		return 0, err
 	}
 	var flags archiveLogFlags
@@ -126,7 +126,7 @@ func archiveLogClass(attrFlags archiveLogFlags, attrErr error, body []byte) (arc
 
 // Bounds of logLookup's attribute class memo. Log rows overwhelmingly repeat
 // a few small attribute blobs (stdio streams and the like), so a small memo
-// skips nearly every protojson decode while retaining little.
+// skips nearly every protobuf decode while retaining little.
 const (
 	archiveAttrMemoEntries  = 256
 	archiveAttrMemoMaxBytes = 512
@@ -242,7 +242,7 @@ func (s *DB) buildArchiveTopology(ctx context.Context, traceID string, cut HighW
 			}
 			node := archiveSpanNode{row: row.ID, parent: row.ParentSpanID.String, causes: causalLinkTargets(row)}
 			var attrs []*commonpb.KeyValue
-			if err := UnmarshalProtoJSONs(row.Attributes, &commonpb.KeyValue{}, &attrs); err != nil {
+			if err := UnmarshalProtoList(row.Attributes, &commonpb.KeyValue{}, &attrs); err != nil {
 				return nil, err
 			}
 			node.priority, node.passthrough = archiveSpanClass(attrs)

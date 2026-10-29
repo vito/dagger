@@ -18,7 +18,7 @@ func appendTopologyChain(t *testing.T, db *DB, n int) HighWater {
 	t.Helper()
 	var spans []Span
 	for i := 1; i <= n; i++ {
-		row := Span{TraceID: selectionTrace, SpanID: fmt.Sprint(i), Attributes: []byte("[]"), Links: []byte("[]")}
+		row := Span{TraceID: selectionTrace, SpanID: fmt.Sprint(i), Attributes: nil, Links: nil}
 		if i > 1 {
 			row.ParentSpanID = sql.NullString{String: fmt.Sprint(i - 1), Valid: true}
 		}
@@ -63,7 +63,7 @@ func TestArchiveSpanViewSharesTopology(t *testing.T) {
 	require.True(t, initial.nodes["2"].hasLogs)
 
 	// A later cut is a different topology; the earlier one is unchanged.
-	_, err = db.AppendSpans([]Span{{TraceID: selectionTrace, SpanID: "9", ParentSpanID: sql.NullString{String: "8", Valid: true}, Attributes: []byte("[]"), Links: []byte("[]")}})
+	_, err = db.AppendSpans([]Span{{TraceID: selectionTrace, SpanID: "9", ParentSpanID: sql.NullString{String: "8", Valid: true}, Attributes: nil, Links: nil}})
 	require.NoError(t, err)
 	later, err := db.Checkpoint(t.Context())
 	require.NoError(t, err)

@@ -23,7 +23,7 @@ const selectionTrace = "01000000000000000000000000000000"
 
 func selectionLog(t testing.TB, span string, body *commonpb.AnyValue, attrs ...*commonpb.KeyValue) Log {
 	t.Helper()
-	encoded, err := MarshalProtoJSONs(attrs)
+	encoded, err := MarshalProtoList(attrs)
 	require.NoError(t, err)
 	payload, err := proto.Marshal(body)
 	require.NoError(t, err)
@@ -135,7 +135,7 @@ func TestArchiveSpanPrioritySubtreeAndCut(t *testing.T) {
 	defer db.Close()
 	var spans []Span
 	for i := 1; i <= 8; i++ {
-		row := Span{TraceID: selectionTrace, SpanID: fmt.Sprint(i), Attributes: []byte("[]"), Links: []byte("[]")}
+		row := Span{TraceID: selectionTrace, SpanID: fmt.Sprint(i), Attributes: nil, Links: nil}
 		if i > 1 {
 			row.ParentSpanID = sql.NullString{String: fmt.Sprint(i - 1), Valid: true}
 		}
@@ -183,7 +183,7 @@ func TestArchivePriorityChecksAndPassthrough(t *testing.T) {
 	defer db.Close()
 	var rows []Span
 	for i := 1; i <= 7; i++ {
-		row := Span{TraceID: selectionTrace, SpanID: fmt.Sprint(i), Attributes: []byte("[]"), Links: []byte("[]")}
+		row := Span{TraceID: selectionTrace, SpanID: fmt.Sprint(i), Attributes: nil, Links: nil}
 		if i > 1 {
 			row.ParentSpanID = sql.NullString{String: fmt.Sprint(i - 1), Valid: true}
 		}
@@ -192,11 +192,11 @@ func TestArchivePriorityChecksAndPassthrough(t *testing.T) {
 			if i == 3 {
 				key = telemetry.UIPassthroughAttr
 			}
-			row.Attributes, err = MarshalProtoJSONs([]*commonpb.KeyValue{{Key: key, Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_BoolValue{BoolValue: true}}}})
+			row.Attributes, err = MarshalProtoList([]*commonpb.KeyValue{{Key: key, Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_BoolValue{BoolValue: true}}}})
 			require.NoError(t, err)
 		}
 		if i == 5 {
-			row.Attributes, err = MarshalProtoJSONs([]*commonpb.KeyValue{selectionAttr(telemetry.CheckNameAttr, "check")})
+			row.Attributes, err = MarshalProtoList([]*commonpb.KeyValue{selectionAttr(telemetry.CheckNameAttr, "check")})
 			require.NoError(t, err)
 		}
 		rows = append(rows, row)
@@ -228,12 +228,12 @@ func TestArchivePriorityConversation(t *testing.T) {
 	}
 	var rows []Span
 	for i := 1; i <= 9; i++ {
-		row := Span{TraceID: selectionTrace, SpanID: fmt.Sprint(i), Attributes: []byte("[]"), Links: []byte("[]")}
+		row := Span{TraceID: selectionTrace, SpanID: fmt.Sprint(i), Attributes: nil, Links: nil}
 		if i > 1 {
 			row.ParentSpanID = sql.NullString{String: fmt.Sprint(i - 1), Valid: true}
 		}
 		if a, ok := attrs[i]; ok {
-			row.Attributes, err = MarshalProtoJSONs(a)
+			row.Attributes, err = MarshalProtoList(a)
 			require.NoError(t, err)
 		}
 		rows = append(rows, row)

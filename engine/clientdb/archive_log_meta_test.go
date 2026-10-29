@@ -25,7 +25,7 @@ type referenceArchiveLogMeta struct {
 func referenceArchiveLogMetadata(row Log) referenceArchiveLogMeta {
 	m := referenceArchiveLogMeta{trace: row.TraceID.String, span: row.SpanID.String}
 	var attrs []*commonpb.KeyValue
-	if err := UnmarshalProtoJSONs(row.Attributes, &commonpb.KeyValue{}, &attrs); err != nil {
+	if err := UnmarshalProtoList(row.Attributes, &commonpb.KeyValue{}, &attrs); err != nil {
 		m.err = err
 		return m
 	}
@@ -108,10 +108,10 @@ func TestArchiveLogIndexMatchesReference(t *testing.T) {
 		selectionLog(t, "c", selectionText("md"), selectionAttr(telemetry.ContentTypeAttr, "text/markdown")),
 		selectionLog(t, "c", selectionText("role"), selectionAttr(telemetryattrs.LogRoleAttr, telemetryattrs.LogRoleSpanName)),
 		selectionLog(t, "c", selectionText("progress"), selectionAttr(telemetryattrs.ProgressItemAttr, "x")),
-		{TraceID: sql.NullString{String: selectionTrace, Valid: true}, SpanID: sql.NullString{String: "d", Valid: true}, Body: []byte{0x0a}, Attributes: []byte("[]")},
+		{TraceID: sql.NullString{String: selectionTrace, Valid: true}, SpanID: sql.NullString{String: "d", Valid: true}, Body: []byte{0x0a}, Attributes: nil},
 		{TraceID: sql.NullString{String: selectionTrace, Valid: true}, SpanID: sql.NullString{String: "d", Valid: true}, Attributes: []byte(`[{"nope":1}]`)},
 		{TraceID: sql.NullString{String: selectionTrace, Valid: true}, SpanID: sql.NullString{String: "d", Valid: true}},
-		{SpanID: sql.NullString{String: "e", Valid: true}, Attributes: []byte("[]")},
+		{SpanID: sql.NullString{String: "e", Valid: true}, Attributes: nil},
 	}
 	// Repeat every row so the second pass hits the attribute memo.
 	rows = append(rows, rows...)
@@ -164,7 +164,7 @@ func TestArchiveLogsSurfaceMalformedRows(t *testing.T) {
 	require.Len(t, rows, 1)
 	require.Equal(t, cut.Logs, next)
 	_, _, err = db.SelectArchiveLogsRange(t.Context(), SelectLogsRangeParams{ThroughID: cut.Logs, Limit: 10}, selectionTrace, nil, nil, false)
-	require.ErrorContains(t, err, "protojson")
+	require.ErrorContains(t, err, "protobuf")
 	rows, _, err = db.SelectArchiveLogsRange(t.Context(), SelectLogsRangeParams{ThroughID: cut.Logs, Limit: 10}, "02000000000000000000000000000000", nil, nil, false)
 	require.NoError(t, err)
 	require.Empty(t, rows, "an unknown trace matches nothing")
