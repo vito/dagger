@@ -4,7 +4,7 @@ Last rebuilt: 2026-10-28.
 
 ## Branch foundation
 
-Recreated local `megamerge` from `upstream/main` at `5c4cdd243bed2e274c6c08a75e4971965d9735a2`. Nine tracked PRs remain open and are merged locally; thirty-three requested PRs are inherited from upstream. PR statuses and open heads were refreshed for this rebuild. #14739 has landed, and #14345 has a newer head.
+Recreated local `megamerge` from `upstream/main` at `5c4cdd243bed2e274c6c08a75e4971965d9735a2`. Ten tracked PRs are listed as open and merged locally; thirty-three requested PRs are inherited from upstream. PR statuses and open heads were refreshed for this rebuild. #14739 has landed, and #14345 has a newer head. Subsequently added #14930 at its fetched head without recreating the branch or refreshing the other PRs.
 
 Historically, this branch started as `upstream/main` with #14345 merged fast-forward, followed by the local artifact agents/editor configuration. The original foundation is preserved at `backup/main-before-megamerge-20261004` (`fb1ca4d899c27040e9e28b16340a276d9924bb50`). The integration branch was later renamed `megamerge`.
 
@@ -25,6 +25,7 @@ Uncommitted changes to `dagger.lock`, `go.mod`, and `go.sum` were saved and rest
 | [#14546](https://github.com/dagger/dagger/pull/14546) | engine: keep handler error status codes; let nested clients read archives | `f8777423f435eb6090386fb522bbb2bf04ac486c` | `e5fd647d14` |
 | [#14548](https://github.com/dagger/dagger/pull/14548) | tui console: salvage agents from broken traces | `491c17053c3ab62e94bd91140c735929eb2b5b8f` | `8eb21f1317` |
 | [#14715](https://github.com/dagger/dagger/pull/14715) | core: read agent transcripts with ReadTrace | `6b48de0599c4af1846a91f79a884623e5a3fea31` | `eae944e5d3` |
+| [#14930](https://github.com/dagger/dagger/pull/14930) | engine: send Cloud metrics with delta temporality | `b3f5dbe9128be9701fe6fe9939380597a5bdfa7f` | `23adc87d50` |
 
 #14479 is the corrected number for the original request's #11479.
 
@@ -68,6 +69,8 @@ Uncommitted changes to `dagger.lock`, `go.mod`, and `go.sum` were saved and rest
 
 ## Conflict resolutions and local changes
 
+- #14930: merged cleanly. Engine Cloud metrics now use delta temporality; existing local dependency edits were preserved byte-for-byte.
+
 - #14345: retain the refreshed bounded log caches, archive topology/log indexes and idle store holds. Combine these with upstream’s lightweight append-only reopen path and deferred index construction. Keep oversized archive-row handling, current archive lookup flushing, and bounded terminal search.
 - #14474/#14464: retain nested output, deferred error aggregation and own-output fallback while hiding sub-agent conversations from tool results.
 - #14393: preserve upstream’s asynchronous nested-client registration and exec-helper flag. Select attachables identity from the first request. Keep both upstream and prompt-handling fixtures.
@@ -81,6 +84,6 @@ Uncommitted changes to `dagger.lock`, `go.mod`, and `go.sum` were saved and rest
 
 ## Validation policy and result
 
-The branch owner requested skipping automated builds and tests in favor of dogfooding. No builds or tests were run. All nine open PR heads are ancestors of this branch; all thirty-three landed PR merge commits are ancestors of the fetched upstream base. Merge conflicts are resolved and Git whitespace checks pass. The only uncommitted changes are the three restored dependency files. Runtime and compilation behavior have not been verified.
+The branch owner requested skipping automated builds and tests in favor of dogfooding. No builds or tests were run. All ten included open PR heads are ancestors of this branch; all thirty-three landed PR merge commits are ancestors of the fetched upstream base. Merge conflicts are resolved and Git whitespace checks pass. The only uncommitted changes are the three restored dependency files. Runtime and compilation behavior have not been verified.
 
-Code tip before this tracking-document commit: `f2c1904d73328e713a22d1b507b550fe21b6c031`.
+Code tip before this tracking-document update: `23adc87d502600ebcfdde3f3bf0fc73915549cdd`.
