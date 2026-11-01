@@ -903,6 +903,7 @@ func TestClientMetadataBootstrapDeepCloneAndScopeSnapshot(t *testing.T) {
 		WorkspaceEnv:          &workspaceEnv,
 		UseRecipeIDsByDefault: true,
 		SDKEntrypoint:         true,
+		LineageAgent:          "worker",
 	}
 	client := &clientRuntime{clientRecord: &clientRecord{clientID: input.ClientID, accepting: true}}
 	sess := &daggerSession{}
@@ -926,6 +927,7 @@ func TestClientMetadataBootstrapDeepCloneAndScopeSnapshot(t *testing.T) {
 	require.Equal(t, "main", lookupAgain.Labels["branch"])
 	require.Equal(t, "github.com/acme/extra@v1", lookupAgain.ExtraModules[0].Ref)
 	require.True(t, lookupAgain.SDKEntrypoint)
+	require.Equal(t, "worker", lookupAgain.LineageAgent)
 
 	lease := engine.NewClientLifecycleLease(engine.ClientLeaseRequest, "test", func() {}, nil)
 	scope, err := engine.NewClientScope(client.clientMetadata, lease)
@@ -941,6 +943,7 @@ func TestClientMetadataBootstrapDeepCloneAndScopeSnapshot(t *testing.T) {
 	require.Equal(t, "ci", *first.WorkspaceEnv)
 	require.True(t, first.UseRecipeIDsByDefault)
 	require.True(t, first.SDKEntrypoint)
+	require.Equal(t, "worker", first.LineageAgent)
 
 	first.Labels["branch"] = "lookup-mutated"
 	first.ExtraModules[0].Ref = "lookup-mutated"
@@ -5406,6 +5409,7 @@ func TestNestedClientMetadataForRequest(t *testing.T) {
 			WorkspaceModuleScope:  "parent-scope",
 			UseRecipeIDsByDefault: true,
 			SDKEntrypoint:         true,
+			LineageAgent:          "worker",
 		}
 	}
 
@@ -5432,6 +5436,7 @@ func TestNestedClientMetadataForRequest(t *testing.T) {
 		require.Empty(t, md.WorkspaceModuleScope)
 		require.True(t, md.UseRecipeIDsByDefault)
 		require.True(t, md.SDKEntrypoint)
+		require.Equal(t, "worker", md.LineageAgent)
 
 		base.AllowedLLMModules[0] = "mutated"
 		require.Equal(t, []string{"parent"}, md.AllowedLLMModules)
@@ -5498,16 +5503,19 @@ func TestNestedClientMetadataForRequest(t *testing.T) {
 		base := baseMetadata()
 		base.UseRecipeIDsByDefault = false
 		base.SDKEntrypoint = false
+		base.LineageAgent = ""
 		forwarded := engine.ClientMetadata{
 			ClientVersion:         "v-test",
 			UseRecipeIDsByDefault: true,
 			SDKEntrypoint:         true,
+			LineageAgent:          "forged",
 		}
 
 		md := nestedClientMetadataForRequest(forwarded.AppendToHTTPHeaders(http.Header{}), base)
 
 		require.False(t, md.UseRecipeIDsByDefault)
 		require.False(t, md.SDKEntrypoint)
+		require.Empty(t, md.LineageAgent)
 	})
 }
 
