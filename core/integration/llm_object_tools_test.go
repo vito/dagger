@@ -978,7 +978,7 @@ func (LLMSuite) TestChangesetToolEditsMounts(ctx context.Context, t *testctx.T) 
 	require.Contains(t, transcript, "mount done")
 	require.Contains(t, transcript, "+edited\n")
 
-	check := func(ctx context.Context, t *testctx.T, ws *dagger.Workspace) {
+	check := func(ctx context.Context, t *testctx.T, ws *core.Workspace) {
 		t.Helper()
 		for name, want := range map[string]string{
 			"ok.txt":               "ok\n",
@@ -1005,7 +1005,7 @@ func (LLMSuite) TestChangesetToolEditsMounts(ctx context.Context, t *testctx.T) 
 
 	require.NoError(t, c.Close())
 	target := connect(ctx, t)
-	check(ctx, t, dagger.Ref[*dagger.LLM](target, recipe).Workspace())
+	check(ctx, t, core.Ref[*core.LLM](core.NewQuery(target), recipe).Workspace())
 }
 
 // TestChangesetToolFailsUnappliablePatch covers a patch git refuses to apply

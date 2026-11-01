@@ -98,7 +98,7 @@ func (c *conversationBuilder) payloadLogs(traceID, spanID string, skip ...string
 		logs = append(logs, clientdb.Log{
 			TraceID: validSpanID(traceID), SpanID: validSpanID(spanID), Body: body,
 			Attributes: marshalSpanAttrs(c.t, strAttr(telemetry.ContentTypeAttr, telemetryattrs.CallPayloadContentType)),
-			Resource:   []byte("{}"), InstrumentationScope: []byte("{}"),
+			Resource:   nil, InstrumentationScope: nil,
 		})
 	}
 	return logs
@@ -143,24 +143,21 @@ func controlLog(t *testing.T, a agentcontrol.Agent) clientdb.Log {
 		attrs = append(attrs, &otlpcommonv1.KeyValue{Key: kv.Key, Value: telemetry.LogValueToPB(kv.Value)})
 		return true
 	})
-	encoded, err := clientdb.MarshalProtoJSONs(attrs)
+	encoded, err := clientdb.MarshalProtoList(attrs)
 	require.NoError(t, err)
 	body, err := proto.Marshal(telemetry.LogValueToPB(rec.Body()))
 	require.NoError(t, err)
-	return clientdb.Log{TraceID: validSpanID(a.Trace), Attributes: encoded, Body: body, Resource: []byte("{}"), InstrumentationScope: []byte("{}")}
+	return clientdb.Log{TraceID: validSpanID(a.Trace), Attributes: encoded, Body: body, Resource: nil, InstrumentationScope: nil}
 }
 
 func finishSpanRows(rows []clientdb.Span) []clientdb.Span {
 	for i := range rows {
 		rows[i].StartTime = int64(100 + i)
 		rows[i].EndTime = sql.NullInt64{Int64: 1000, Valid: true}
-		if rows[i].Attributes == nil {
-			rows[i].Attributes = []byte("[]")
-		}
-		rows[i].Links = []byte("[]")
-		rows[i].Events = []byte("[]")
-		rows[i].Resource = []byte("{}")
-		rows[i].InstrumentationScope = []byte("{}")
+		rows[i].Links = nil
+		rows[i].Events = nil
+		rows[i].Resource = nil
+		rows[i].InstrumentationScope = nil
 	}
 	return rows
 }
