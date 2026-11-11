@@ -1,0 +1,692 @@
+package dangv2
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io/fs"
+	"path"
+	"strings"
+	"unicode/utf8"
+
+	"github.com/charmbracelet/x/ansi"
+	"github.com/vito/dang/v2/pkg/dang"
+	"github.com/vito/dang/v2/pkg/dang/analysis"
+	"github.com/vito/dang/v2/pkg/hm"
+	"github.com/vito/dang/v2/pkg/introspection"
+)
+
+// This file is the Dang side of the DangCheck builtin (see
+// core/llm_dang_tools.go): it analyzes source read from an fs.FS against a
+// schema, and renders what it finds for a model. tools.go resolves a call's
+// scope in the engine and hands it here.
+
+const (
+	// dangSnippetName names a snippet in positions and messages.
+	dangSnippetName = "<check>"
+	// dangSnippetFile is the file a snippet is checked as, beside the
+	// scope's own files. Its name can't clash with a workspace file's in
+	// practice, and is displayed as dangSnippetName.
+	dangSnippetFile = "<check>.dang"
+	// dangWorkspaceFile declares `ws` in the workspace scope.
+	dangWorkspaceFile = "<workspace>.dang"
+
+	// dangMembersWithDocs is how many members a listing shows with their
+	// signatures and docs; the rest are only named.
+	dangMembersWithDocs = 40
+	// dangSearchLimit is how many search results are shown.
+	dangSearchLimit = 20
+	// dangDocLineMax caps a doc line shown beside a signature.
+	dangDocLineMax = 120
+	// dangDocMax caps the docs shown for one member.
+	dangDocMax = 1500
+)
+
+// dangScope is where a Dang tool call's source is checked and run: the
+// workspace scope, or a module's directory of .dang files.
+type dangScope struct {
+	// fsys holds the source, at its workspace-relative path, so positions
+	// and errors name files as the workspace does.
+	fsys fs.FS
+
+	// dir is the directory of .dang files in fsys: the module's, or "." for
+	// the workspace scope (which has only dangWorkspaceFile, if anything).
+	dir string
+
+	// cwd is the workspace's cwd, relative to its root: paths are shown
+	// relative to it, as `at` resolves them.
+	cwd string
+
+	// module says dir is a module of the workspace, which DangCheck checks
+	// without a source and DangEval runs the top level of.
+	module bool
+
+	// file is a .dang file of dir the call is about (`at` a file or a
+	// position in one), or "".
+	file string
+
+	// pos is a position in file, or nil.
+	pos *analysis.Pos
+
+	// label names the scope in footers.
+	label string
+
+	// wsDecl, for the workspace scope, declares `ws` (see
+	// workspaceDeclaration); "" without a workspace.
+	wsDecl string
+
+	// schema is the API the Dagger import (auto-imported) exposes.
+	schema *introspection.Schema
+}
+
+// source returns the scope's source: its directory's files, any declaration
+// of `ws`, and extra files (a snippet) laid over them.
+func (sc *dangScope) source(extra map[string]string) analysis.Source {
+	files := map[string]string{}
+	if sc.wsDecl != "" {
+		files[path.Join(sc.dir, dangWorkspaceFile)] = sc.wsDecl
+	}
+	for p, text := range extra {
+		files[p] = text
+	}
+	if len(files) == 0 {
+		return sc.fsys
+	}
+	return analysis.Overlay(sc.fsys, files)
+}
+
+func (sc *dangScope) imports() []dang.ImportConfig {
+	if sc.schema == nil {
+		return nil
+	}
+	return []dang.ImportConfig{{Name: "Dagger", Schema: sc.schema, AutoImport: true}}
+}
+
+// snippetPath is where a snippet is checked as one more file of the scope.
+func (sc *dangScope) snippetPath() string {
+	return path.Join(sc.dir, dangSnippetFile)
+}
+
+// display names a Source path for a reader, as `at` takes it back.
+func (sc *dangScope) display(p string) string {
+	switch path.Base(p) {
+	case dangSnippetFile:
+		return dangSnippetName
+	case dangWorkspaceFile:
+		return "<workspace>"
+	}
+	if strings.HasPrefix(p, "<") || sc.cwd == "" || sc.cwd == "." {
+		return p
+	}
+	return displayWorkspacePath(sc.cwd, p)
+}
+
+// workspaceDeclaration is the source binding `ws` to the workspace whose ID
+// is id, as a module function's `ws: Workspace!` argument is bound.
+func workspaceDeclaration(id string) string {
+	return fmt.Sprintf("let ws: Workspace! = node(id: %q).{{... on Workspace!}}\n", id)
+}
+
+// dangReport accumulates a tool's text output.
+type dangReport struct {
+	strings.Builder
+	errors, warnings int
+}
+
+func (r *dangReport) line(format string, args ...any) {
+	fmt.Fprintf(r, format, args...)
+	r.WriteByte('\n')
+}
+
+// diagnostics counts diags and renders them, their paths named for a reader.
+// Every Dang diagnostic the tools show goes through here.
+func (r *dangReport) diagnostics(sc *dangScope, diags []analysis.Diagnostic) {
+	shown := make([]analysis.Diagnostic, len(diags))
+	for i, d := range diags {
+		if d.Severity == analysis.SeverityError {
+			r.errors++
+		} else {
+			r.warnings++
+		}
+		if d.Path != "" {
+			d.Path = sc.display(d.Path)
+		}
+		shown[i] = d
+	}
+	r.WriteString(renderDiagnostics(shown))
+}
+
+// renderDiagnostics renders diagnostics one per line as
+// `path:line:col: severity: message`, continuation lines indented. It is the
+// one place to switch to analysis.Render once vito/dang ships it, which adds
+// each diagnostic's context (what a receiver missing a member has, the
+// closest names, doc-search hits for an unknown one).
+func renderDiagnostics(diags []analysis.Diagnostic) string {
+	var b strings.Builder
+	for _, d := range diags {
+		msg := strings.TrimSpace(ansi.Strip(d.Message))
+		msg = strings.ReplaceAll(msg, "\n", "\n  ")
+		if d.Replacement != "" {
+			msg += fmt.Sprintf(" (quick fix: %s)", d.Replacement)
+		}
+		if d.Path != "" {
+			fmt.Fprintf(&b, "%s:%d:%d: ", d.Path, d.Range.Start.Line, d.Range.Start.Column)
+		}
+		fmt.Fprintf(&b, "%s: %s\n", d.Severity, msg)
+	}
+	return b.String()
+}
+
+// counts renders the diagnostic counts for a footer.
+func (r *dangReport) counts() string {
+	if r.errors == 0 && r.warnings == 0 {
+		return "ok"
+	}
+	var parts []string
+	if r.errors > 0 {
+		parts = append(parts, plural(r.errors, "error"))
+	}
+	if r.warnings > 0 {
+		parts = append(parts, plural(r.warnings, "warning"))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func plural(n int, noun string) string {
+	if n == 1 {
+		return "1 " + noun
+	}
+	return fmt.Sprintf("%d %ss", n, noun)
+}
+
+// checkDang is DangCheck: diagnostics for the scope's module or file, or a
+// snippet's diagnostics or description, then search results.
+func checkDang(ctx context.Context, sc *dangScope, source, search string) (string, error) {
+	source = strings.TrimSpace(source)
+	search = strings.TrimSpace(search)
+	if source == "" && search == "" && !sc.module {
+		return "", errors.New("nothing to check: pass source, search, or at (a module, file or position)")
+	}
+
+	var r dangReport
+	var scope dang.TypeScope
+	files := 0
+	switch {
+	case source == "":
+		// The module's or file's own diagnostics.
+		a, err := analysis.Analyze(ctx, sc.source(nil), sc.dir, analysis.Options{
+			Focus:         sc.file,
+			ImportConfigs: sc.imports(),
+		})
+		if err != nil {
+			return "", err
+		}
+		files = countFiles(a, sc)
+		if sc.module {
+			if files == 0 {
+				return "", fmt.Errorf("no .dang files in %s", sc.dir)
+			}
+			r.diagnostics(sc, a.Diagnostics())
+		}
+		scope = searchScope(a, sc)
+	case sc.pos != nil:
+		// A snippet as if written at a position of a file.
+		a, err := analysis.Analyze(ctx, sc.source(nil), sc.dir, analysis.Options{
+			Focus:         sc.file,
+			ImportConfigs: sc.imports(),
+		})
+		if err != nil {
+			return "", err
+		}
+		files = countFiles(a, sc)
+		scope = a.ScopeAt(sc.file, *sc.pos)
+		if scope == nil {
+			// The file doesn't parse: say why.
+			r.diagnostics(sc, a.Diagnostics())
+			break
+		}
+		forms, diags := checkInScope(ctx, scope, source)
+		describeSnippet(ctx, &r, sc, nil, scope, source, forms, diags)
+	default:
+		// A snippet as one more file of the scope.
+		snippet := sc.snippetPath()
+		a, err := analysis.Analyze(ctx, sc.source(map[string]string{snippet: source}), sc.dir, analysis.Options{
+			Focus:         snippet,
+			ImportConfigs: sc.imports(),
+		})
+		if err != nil {
+			return "", err
+		}
+		files = countFiles(a, sc)
+		scope = a.FileScope(snippet)
+		var forms []dang.Node
+		if f := a.File(snippet); f != nil && f.Block != nil {
+			forms = f.Block.Forms
+		}
+		describeSnippet(ctx, &r, sc, a, scope, source, forms, a.Diagnostics())
+	}
+
+	if search != "" {
+		if r.Len() > 0 {
+			r.WriteByte('\n')
+		}
+		renderSearch(&r, scope, search)
+	}
+
+	footer := []string{r.counts(), sc.label}
+	if sc.module {
+		footer = append(footer, plural(files, "file"))
+	}
+	footer = append(footer, "nothing ran")
+	r.line("%s", strings.Join(footer, " · "))
+	return r.String(), nil
+}
+
+// countFiles counts the scope's own analyzed files.
+func countFiles(a *analysis.Analysis, sc *dangScope) int {
+	n := 0
+	for _, f := range a.Files {
+		switch path.Base(f.Path) {
+		case dangSnippetFile, dangWorkspaceFile:
+		default:
+			n++
+		}
+	}
+	return n
+}
+
+// searchScope is the scope search ranks names in, without a snippet.
+func searchScope(a *analysis.Analysis, sc *dangScope) dang.TypeScope {
+	if sc.file != "" {
+		if sc.pos != nil {
+			return a.ScopeAt(sc.file, *sc.pos)
+		}
+		return a.FileScope(sc.file)
+	}
+	if len(a.Files) > 0 {
+		return a.FileScope(a.Files[0].Path)
+	}
+	return a.Scope
+}
+
+// checkInScope type-checks a snippet in a scope, e.g. one inside a function
+// body, without evaluating it.
+func checkInScope(ctx context.Context, scope dang.TypeScope, source string) ([]dang.Node, []analysis.Diagnostic) {
+	parsed, err := dang.Parse(dangSnippetName, []byte(source),
+		dang.GlobalStore("filePath", dangSnippetName),
+		dang.WithVersion(dang.VersionFromContext(ctx)))
+	if err != nil {
+		return nil, errorDiagnostics(err)
+	}
+	block, ok := parsed.(*dang.FileBlock)
+	if !ok {
+		return nil, nil
+	}
+	ctx, warnings := dang.WithInferWarningSink(ctx)
+	// Infer in a clone, so the snippet's declarations stay out of scope.
+	_, err = dang.InferFormsWithPhases(ctx, block.Forms, scope.Clone(), hm.NewSimpleFresher())
+	diags := errorDiagnostics(err)
+	for _, w := range warnings.Take() {
+		d := analysis.Diagnostic{Severity: analysis.SeverityWarning, Code: analysis.CodeWarning, Message: w.Message}
+		if w.Location != nil {
+			d.Path = w.Location.Filename
+			d.Range.Start = analysis.Pos{Line: w.Location.Line, Column: w.Location.Column}
+		}
+		diags = append(diags, d)
+	}
+	return block.Forms, diags
+}
+
+// errorDiagnostics converts a Dang error into diagnostics, one per error an
+// *dang.InferenceErrors collects, located where Dang located them.
+func errorDiagnostics(err error) []analysis.Diagnostic {
+	if err == nil {
+		return nil
+	}
+	var errs *dang.InferenceErrors
+	if errors.As(err, &errs) {
+		var diags []analysis.Diagnostic
+		for _, e := range errs.Errors {
+			diags = append(diags, errorDiagnostics(e)...)
+		}
+		return diags
+	}
+	d := analysis.Diagnostic{Severity: analysis.SeverityError, Code: analysis.CodeType}
+	var (
+		loc       *dang.SourceLocation
+		sourceErr *dang.SourceError
+		inferErr  *dang.InferError
+		parseErr  interface {
+			ParseErrorLocation() *dang.SourceLocation
+		}
+	)
+	switch {
+	case errors.As(err, &sourceErr):
+		loc, d.Message = sourceErr.Location, sourceErr.Inner.Error()
+	case errors.As(err, &parseErr):
+		loc, d.Message, d.Code = parseErr.ParseErrorLocation(), err.Error(), analysis.CodeSyntax
+	case errors.As(err, &inferErr):
+		loc, d.Message = inferErr.Location, inferErr.Error()
+	default:
+		d.Message = err.Error()
+	}
+	if loc != nil {
+		d.Path = loc.Filename
+		d.Range.Start = analysis.Pos{Line: loc.Line, Column: loc.Column}
+	}
+	return []analysis.Diagnostic{d}
+}
+
+// describeSnippet reports a checked snippet: its diagnostics, or, when it
+// checks, what its last form is. a is the analysis the snippet is a file of,
+// if it is one, for declaration sites.
+func describeSnippet(ctx context.Context, r *dangReport, sc *dangScope, a *analysis.Analysis, scope dang.TypeScope, source string, forms []dang.Node, diags []analysis.Diagnostic) {
+	var last dang.Node
+	if len(forms) > 0 {
+		last = forms[len(forms)-1]
+	}
+
+	// A type name, or a member of one (`Container`, `JSON.encode`,
+	// `Container.withExec`): a lookup, whatever checking it as an
+	// expression says.
+	if scope != nil && isQualifiedName(source) {
+		if named, ok := lookupTypeName(scope, source); ok {
+			describeType(ctx, r, scope, source, named)
+			return
+		}
+		if recv, _, ok := cutLast(source, "."); ok {
+			if _, isType := lookupTypeName(scope, recv); isType {
+				if m, err := analysis.Doc(ctx, scope, source); err == nil {
+					describeMember(r, *m, "")
+					return
+				}
+			}
+		}
+	}
+
+	// A selection naming a member that exists (`xs.reduce`) is a lookup too:
+	// the errors of using it bare don't matter.
+	var member *analysis.Member
+	if sel, ok := last.(*dang.Select); ok {
+		if m, ok := analysis.SelectedMember(sel); ok {
+			member = &m
+			diags = dropWithin(diags, sel)
+		}
+	}
+
+	errs := 0
+	for _, d := range diags {
+		if d.Severity == analysis.SeverityError {
+			errs++
+		}
+	}
+	r.diagnostics(sc, diags)
+	if errs > 0 || last == nil {
+		return
+	}
+	if len(last.DeclaredSymbols()) > 0 {
+		// A declaration describes nothing; the diagnostics say it checks.
+		return
+	}
+
+	if sym, ok := last.(*dang.Symbol); ok && scope != nil {
+		if m, ok := analysis.Lookup(scope, sym.Name); ok {
+			member = &m
+		}
+	}
+	if member != nil {
+		describeMember(r, *member, definitionOf(a, sc, last))
+		if member.Kind == analysis.KindFunction {
+			return
+		}
+	}
+	t := last.GetInferredType()
+	if t == nil {
+		return
+	}
+	if member != nil {
+		r.WriteByte('\n')
+	}
+	describeMembers(r, dang.FormatType(t), analysis.TypeMembers(t))
+}
+
+// dropWithin leaves out the diagnostics located inside node.
+func dropWithin(diags []analysis.Diagnostic, node dang.Node) []analysis.Diagnostic {
+	loc := node.GetSourceLocation()
+	if loc == nil {
+		return diags
+	}
+	end := analysis.Pos{Line: loc.Line, Column: loc.Column + loc.Length}
+	if loc.End != nil {
+		end = analysis.Pos{Line: loc.End.Line, Column: loc.End.Column}
+	}
+	var kept []analysis.Diagnostic
+	for _, d := range diags {
+		start := d.Range.Start
+		inside := !posBefore(start, analysis.Pos{Line: loc.Line, Column: loc.Column}) && !posBefore(end, start)
+		if !inside {
+			kept = append(kept, d)
+		}
+	}
+	return kept
+}
+
+func posBefore(p, q analysis.Pos) bool {
+	if p.Line != q.Line {
+		return p.Line < q.Line
+	}
+	return p.Column < q.Column
+}
+
+// definitionOf returns where the name a snippet's last form refers to is
+// declared in the scope's own files, if it is.
+func definitionOf(a *analysis.Analysis, sc *dangScope, node dang.Node) string {
+	if a == nil {
+		return ""
+	}
+	var loc *dang.SourceLocation
+	switch n := node.(type) {
+	case *dang.Symbol:
+		loc = n.Loc
+	case *dang.Select:
+		if n.Field != nil {
+			loc = n.Field.Loc
+		}
+	}
+	if loc == nil {
+		return ""
+	}
+	sym, err := a.Inspect(sc.snippetPath(), analysis.Pos{Line: loc.Line, Column: loc.Column})
+	if err != nil || sym.Definition == nil {
+		return ""
+	}
+	switch path.Base(sym.Definition.Path) {
+	case dangSnippetFile, dangWorkspaceFile:
+		return ""
+	}
+	return fmt.Sprintf("%s:%s", sc.display(sym.Definition.Path), sym.Definition.Range.Start)
+}
+
+// describeMember renders one member: its signature, docs, deprecation,
+// example and declaration site.
+func describeMember(r *dangReport, m analysis.Member, definedAt string) {
+	r.line("%s", m.QualifiedSignature())
+	if doc := strings.TrimSpace(m.Doc); doc != "" {
+		r.line("  %s", strings.ReplaceAll(capRunes(doc, dangDocMax), "\n", "\n  "))
+	}
+	if m.Deprecated != "" {
+		dep := "deprecated: " + m.Deprecated
+		if m.Replacement != "" {
+			dep += " (use " + m.Replacement + ")"
+		}
+		r.line("  %s", dep)
+	}
+	if m.Example != "" {
+		r.line("  example: %s", strings.ReplaceAll(m.Example, "\n", "\n    "))
+	}
+	if definedAt != "" {
+		r.line("  declared at %s", definedAt)
+	}
+}
+
+// describeType renders a type a name names: its docs and members.
+func describeType(ctx context.Context, r *dangReport, scope dang.TypeScope, name string, named dang.TypeScope) {
+	list, err := analysis.Members(ctx, scope, name)
+	if err != nil {
+		r.line("%s: %s", name, err)
+		return
+	}
+	r.line("%s %s", kindOf(named), name)
+	if doc := strings.TrimSpace(named.GetTypeDocString()); doc != "" {
+		r.line("  %s", strings.ReplaceAll(capRunes(doc, dangDocMax), "\n", "\n  "))
+	}
+	r.WriteByte('\n')
+	describeMembers(r, name, list.Members)
+}
+
+// kindOf names the kind of a named type.
+func kindOf(named dang.TypeScope) string {
+	if mod, ok := named.(*dang.Type); ok {
+		if mod.IsMeta() {
+			mod = mod.InstanceType()
+		}
+		switch mod.Kind {
+		case dang.EnumKind:
+			return "enum"
+		case dang.ScalarKind:
+			return "scalar"
+		case dang.InterfaceKind:
+			return "interface"
+		case dang.UnionKind:
+			return "union"
+		case dang.InputKind:
+			return "input"
+		}
+	}
+	return "type"
+}
+
+// describeMembers lists members of what has type typ: the first
+// dangMembersWithDocs with their signatures and docs, the rest by name.
+func describeMembers(r *dangReport, typ string, members []analysis.Member) {
+	if len(members) == 0 {
+		r.line("%s has no members", typ)
+		return
+	}
+	r.line("%s has %s:", typ, plural(len(members), "member"))
+	for i, m := range members {
+		if i == dangMembersWithDocs {
+			names := make([]string, 0, len(members)-i)
+			for _, rest := range members[i:] {
+				names = append(names, rest.Name)
+			}
+			r.line("  … %d more (check one as a member reference for its docs): %s", len(names), strings.Join(names, " "))
+			break
+		}
+		r.line("  %s", memberLine(m, false))
+	}
+}
+
+// memberLine renders a member on one line: its signature and the first line
+// of its docs.
+func memberLine(m analysis.Member, qualified bool) string {
+	sig := m.Signature()
+	if qualified {
+		sig = m.QualifiedSignature()
+	}
+	if m.Static && !qualified {
+		sig = "(static) " + sig
+	}
+	if m.Deprecated != "" {
+		sig += " (deprecated)"
+	}
+	if doc := firstLine(m.Doc); doc != "" {
+		sig += " — " + capRunes(doc, dangDocLineMax)
+	}
+	return sig
+}
+
+// renderSearch ranks what the scope can reach by name and docs.
+func renderSearch(r *dangReport, scope dang.TypeScope, query string) {
+	results := analysis.Search(scope, query, dangSearchLimit)
+	if len(results) == 0 {
+		r.line("search %q: no matches", query)
+		return
+	}
+	r.line("search %q:", query)
+	for _, m := range results {
+		r.line("  %s", memberLine(m, true))
+	}
+}
+
+// isQualifiedName reports whether s is a name, or names joined by dots.
+func isQualifiedName(s string) bool {
+	for _, part := range strings.Split(s, ".") {
+		if !isIdent(part) {
+			return false
+		}
+	}
+	return true
+}
+
+func isIdent(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i, r := range s {
+		switch {
+		case r == '_', r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9' && i > 0:
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// lookupTypeName resolves a possibly qualified type name (e.g. "List",
+// "Dagger.Container") in scope, as analysis.Members does.
+func lookupTypeName(scope dang.TypeScope, name string) (dang.TypeScope, bool) {
+	if !isQualifiedName(name) {
+		return nil, false
+	}
+	parts := strings.Split(name, ".")
+	current := scope
+	for _, part := range parts {
+		next, ok := current.NamedType(part)
+		if !ok {
+			if len(parts) == 1 && part == "Map" {
+				return dang.MapTypeModule, true
+			}
+			return nil, false
+		}
+		current = next
+	}
+	return current, true
+}
+
+// cutLast is strings.Cut on the last occurrence of sep.
+func cutLast(s, sep string) (before, after string, found bool) {
+	i := strings.LastIndex(s, sep)
+	if i < 0 {
+		return s, "", false
+	}
+	return s[:i], s[i+len(sep):], true
+}
+
+func firstLine(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = strings.TrimSpace(s[:i])
+	}
+	return s
+}
+
+// capRunes keeps max runes of s, marking a cut with an ellipsis.
+func capRunes(s string, max int) string {
+	if utf8.RuneCountInString(s) <= max {
+		return s
+	}
+	runes := []rune(s)
+	return string(runes[:max-1]) + "…"
+}
