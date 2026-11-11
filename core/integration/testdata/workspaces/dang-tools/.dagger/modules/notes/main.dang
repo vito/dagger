@@ -1,0 +1,19 @@
+"""
+Notes about the workspace.
+"""
+type Notes {
+  """
+  Greets someone.
+  """
+  pub greet(name: String!): String! {
+    let greeting = "hello, "
+    greeting + shout(name)
+  }
+}
+
+"""
+Shouts a name.
+"""
+let shout(name: String!): String! {
+  name.toUpper
+}
