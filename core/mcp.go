@@ -295,9 +295,19 @@ func (m *MCP) LastResult() dagql.Typed {
 // of the schema (and listed by FindArtifacts as a load failure) instead of
 // failing every step.
 func (m *MCP) baseServer(ctx context.Context) (*dagql.Server, error) {
-	query, err := CurrentQuery(ctx)
+	ctx, deps, err := m.baseDeps(ctx)
 	if err != nil {
 		return nil, err
+	}
+	return deps.Schema(ctx)
+}
+
+// baseDeps returns the dependencies baseServer serves, with the context to
+// build from them in (a live workspace's owner context).
+func (m *MCP) baseDeps(ctx context.Context) (context.Context, *SchemaBuilder, error) {
+	query, err := CurrentQuery(ctx)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	var deps *SchemaBuilder
@@ -309,14 +319,14 @@ func (m *MCP) baseServer(ctx context.Context) (*dagql.Server, error) {
 	default:
 		ctx, err = loadWorkspaceOwnerContext(ctx, m.workspace)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		deps, err = query.CurrentServedDeps(ctx)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("load tool base schema dependencies: %w", err)
+		return nil, nil, fmt.Errorf("load tool base schema dependencies: %w", err)
 	}
-	return deps.Schema(ctx)
+	return ctx, deps, nil
 }
 
 func (m *MCP) WithMCPServer(srv *MCPServerConfig) *MCP {
@@ -358,6 +368,7 @@ func (m *MCP) Tools(ctx context.Context) ([]LLMTool, error) {
 	}
 	m.loadSkillTools(srv, allTools)
 	m.loadArtifactTools(srv, allTools)
+	m.loadDangTools(srv, allTools)
 	m.loadBuiltins(srv, allTools)
 	return allTools.Order, nil
 }
