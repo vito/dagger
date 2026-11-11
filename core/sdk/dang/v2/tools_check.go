@@ -133,7 +133,7 @@ type dangReport struct {
 	errors, warnings int
 }
 
-func (r *dangReport) line(format string, args ...any) {
+func (r *dangReport) linef(format string, args ...any) {
 	fmt.Fprintf(r, format, args...)
 	r.WriteByte('\n')
 }
@@ -221,7 +221,7 @@ func checkDang(ctx context.Context, sc *dangScope, source, search string) (strin
 		if err != nil {
 			return "", err
 		}
-		files = countFiles(a, sc)
+		files = countFiles(a)
 		if sc.module {
 			if files == 0 {
 				return "", fmt.Errorf("no .dang files in %s", sc.dir)
@@ -238,7 +238,7 @@ func checkDang(ctx context.Context, sc *dangScope, source, search string) (strin
 		if err != nil {
 			return "", err
 		}
-		files = countFiles(a, sc)
+		files = countFiles(a)
 		scope = a.ScopeAt(sc.file, *sc.pos)
 		if scope == nil {
 			// The file doesn't parse: say why.
@@ -257,7 +257,7 @@ func checkDang(ctx context.Context, sc *dangScope, source, search string) (strin
 		if err != nil {
 			return "", err
 		}
-		files = countFiles(a, sc)
+		files = countFiles(a)
 		scope = a.FileScope(snippet)
 		var forms []dang.Node
 		if f := a.File(snippet); f != nil && f.Block != nil {
@@ -278,12 +278,12 @@ func checkDang(ctx context.Context, sc *dangScope, source, search string) (strin
 		footer = append(footer, plural(files, "file"))
 	}
 	footer = append(footer, "nothing ran")
-	r.line("%s", strings.Join(footer, " · "))
+	r.linef("%s", strings.Join(footer, " · "))
 	return r.String(), nil
 }
 
 // countFiles counts the scope's own analyzed files.
-func countFiles(a *analysis.Analysis, sc *dangScope) int {
+func countFiles(a *analysis.Analysis) int {
 	n := 0
 	for _, f := range a.Files {
 		switch path.Base(f.Path) {
@@ -510,22 +510,22 @@ func definitionOf(a *analysis.Analysis, sc *dangScope, node dang.Node) string {
 // describeMember renders one member: its signature, docs, deprecation,
 // example and declaration site.
 func describeMember(r *dangReport, m analysis.Member, definedAt string) {
-	r.line("%s", m.QualifiedSignature())
+	r.linef("%s", m.QualifiedSignature())
 	if doc := strings.TrimSpace(m.Doc); doc != "" {
-		r.line("  %s", strings.ReplaceAll(capRunes(doc, dangDocMax), "\n", "\n  "))
+		r.linef("  %s", strings.ReplaceAll(capRunes(doc, dangDocMax), "\n", "\n  "))
 	}
 	if m.Deprecated != "" {
 		dep := "deprecated: " + m.Deprecated
 		if m.Replacement != "" {
 			dep += " (use " + m.Replacement + ")"
 		}
-		r.line("  %s", dep)
+		r.linef("  %s", dep)
 	}
 	if m.Example != "" {
-		r.line("  example: %s", strings.ReplaceAll(m.Example, "\n", "\n    "))
+		r.linef("  example: %s", strings.ReplaceAll(m.Example, "\n", "\n    "))
 	}
 	if definedAt != "" {
-		r.line("  declared at %s", definedAt)
+		r.linef("  declared at %s", definedAt)
 	}
 }
 
@@ -533,12 +533,12 @@ func describeMember(r *dangReport, m analysis.Member, definedAt string) {
 func describeType(ctx context.Context, r *dangReport, scope dang.TypeScope, name string, named dang.TypeScope) {
 	list, err := analysis.Members(ctx, scope, name)
 	if err != nil {
-		r.line("%s: %s", name, err)
+		r.linef("%s: %s", name, err)
 		return
 	}
-	r.line("%s %s", kindOf(named), name)
+	r.linef("%s %s", kindOf(named), name)
 	if doc := strings.TrimSpace(named.GetTypeDocString()); doc != "" {
-		r.line("  %s", strings.ReplaceAll(capRunes(doc, dangDocMax), "\n", "\n  "))
+		r.linef("  %s", strings.ReplaceAll(capRunes(doc, dangDocMax), "\n", "\n  "))
 	}
 	r.WriteByte('\n')
 	describeMembers(r, name, list.Members)
@@ -570,20 +570,20 @@ func kindOf(named dang.TypeScope) string {
 // dangMembersWithDocs with their signatures and docs, the rest by name.
 func describeMembers(r *dangReport, typ string, members []analysis.Member) {
 	if len(members) == 0 {
-		r.line("%s has no members", typ)
+		r.linef("%s has no members", typ)
 		return
 	}
-	r.line("%s has %s:", typ, plural(len(members), "member"))
+	r.linef("%s has %s:", typ, plural(len(members), "member"))
 	for i, m := range members {
 		if i == dangMembersWithDocs {
 			names := make([]string, 0, len(members)-i)
 			for _, rest := range members[i:] {
 				names = append(names, rest.Name)
 			}
-			r.line("  … %d more (check one as a member reference for its docs): %s", len(names), strings.Join(names, " "))
+			r.linef("  … %d more (check one as a member reference for its docs): %s", len(names), strings.Join(names, " "))
 			break
 		}
-		r.line("  %s", memberLine(m, false))
+		r.linef("  %s", memberLine(m, false))
 	}
 }
 
@@ -610,12 +610,12 @@ func memberLine(m analysis.Member, qualified bool) string {
 func renderSearch(r *dangReport, scope dang.TypeScope, query string) {
 	results := analysis.Search(scope, query, dangSearchLimit)
 	if len(results) == 0 {
-		r.line("search %q: no matches", query)
+		r.linef("search %q: no matches", query)
 		return
 	}
-	r.line("search %q:", query)
+	r.linef("search %q:", query)
 	for _, m := range results {
-		r.line("  %s", memberLine(m, true))
+		r.linef("  %s", memberLine(m, true))
 	}
 }
 

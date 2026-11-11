@@ -51,7 +51,7 @@ func evalDang(ctx context.Context, sc *dangScope, source string, client graphql.
 	}
 	if diags := a.Diagnostics(); hasErrors(diags) {
 		r.diagnostics(sc, diags)
-		r.line("%s · %s · nothing ran", r.counts(), sc.label)
+		r.linef("%s · %s · nothing ran", r.counts(), sc.label)
 		return "", errors.New(r.String())
 	}
 
@@ -78,7 +78,7 @@ func evalDang(ctx context.Context, sc *dangScope, source string, client graphql.
 	}
 	writeOutput := func() {
 		if out := printed.String(); out != "" {
-			r.line("output:")
+			r.linef("output:")
 			r.WriteString(calls.secrets.scrub(out))
 			if !strings.HasSuffix(out, "\n") {
 				r.WriteByte('\n')
@@ -92,7 +92,7 @@ func evalDang(ctx context.Context, sc *dangScope, source string, client graphql.
 			diags = []analysis.Diagnostic{{Severity: analysis.SeverityError, Message: err.Error()}}
 		}
 		r.diagnostics(sc, diags)
-		r.line("%s", footer("failed"))
+		r.linef("%s", footer("failed"))
 		return "", errors.New(calls.secrets.scrub(r.String()))
 	}
 
@@ -107,7 +107,7 @@ func evalDang(ctx context.Context, sc *dangScope, source string, client graphql.
 	}
 
 	writeOutput()
-	r.line("%s", calls.secrets.scrub(dang.Describe(ctx, val, typ, dang.DescribeOptions{})))
+	r.linef("%s", calls.secrets.scrub(dang.Describe(ctx, val, typ, dang.DescribeOptions{})))
 	if typ != nil {
 		if members := analysis.TypeMembers(typ); len(members) > 0 {
 			names := make([]string, 0, len(members))
@@ -118,10 +118,10 @@ func evalDang(ctx context.Context, sc *dangScope, source string, client graphql.
 				}
 				names = append(names, m.Name)
 			}
-			r.line("members: %s", strings.Join(names, " "))
+			r.linef("members: %s", strings.Join(names, " "))
 		}
 	}
-	r.line("%s", footer("ok"))
+	r.linef("%s", footer("ok"))
 	return r.String(), nil
 }
 

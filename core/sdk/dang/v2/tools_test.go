@@ -157,9 +157,9 @@ func TestDangCheckWorkspaceScope(t *testing.T) {
 	})
 
 	t.Run("a type error", func(t *testing.T) {
-		out := checkTest(t, sc, "let xs = [\"b\"]\nxs.lenght", "")
+		out := checkTest(t, sc, "let xs = [\"b\"]\nxs.size", "")
 		require.Contains(t, out, "<check>:2:1: error: ")
-		require.Contains(t, out, "lenght")
+		require.Contains(t, out, `"size"`)
 		require.True(t, strings.HasSuffix(out, "1 error · workspace scope · nothing ran\n"), out)
 	})
 
@@ -245,7 +245,7 @@ func TestDangCheckModuleScope(t *testing.T) {
 		sc.pos = &analysis.Pos{Line: 10, Column: 3}
 		out := checkTest(t, sc, "greeting + name", "")
 		require.True(t, strings.HasPrefix(out, "String! has "), out)
-		out = checkTest(t, sc, "name.lenght", "")
+		out = checkTest(t, sc, "name.size", "")
 		require.Contains(t, out, "<check>:1:1: error: ")
 		require.Contains(t, out, "1 error · module mod (mod) · 1 file · nothing ran\n")
 		// Outside the function, its locals aren't in scope.
