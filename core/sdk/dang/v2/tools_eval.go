@@ -58,8 +58,9 @@ func evalDang(ctx context.Context, sc *dangScope, source string, client graphql.
 	// Check first: a type error runs nothing.
 	snippet := sc.snippetPath()
 	a, err := analysis.Analyze(ctx, sc.source(map[string]string{snippet: source}), sc.dir, analysis.Options{
-		Focus:         snippet,
-		ImportConfigs: sc.imports(),
+		Focus:             snippet,
+		ImportConfigs:     sc.imports(),
+		DiagnosticContext: true,
 	})
 	if err != nil {
 		return "", err

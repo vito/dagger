@@ -173,23 +173,26 @@ func (r *dangReport) diagnostics(sc *dangScope, diags []analysis.Diagnostic) {
 	r.WriteString(renderDiagnostics(shown))
 }
 
-// renderDiagnostics renders diagnostics one per line as
-// `path:line:col: severity: message`, continuation lines indented. It is the
-// one place to switch to analysis.Render once vito/dang ships it, which adds
-// each diagnostic's context (what a receiver missing a member has, the
-// closest names, doc-search hits for an unknown one).
+// renderDiagnostics renders diagnostics with analysis.Render, as
+// `path:line:col: severity: message` with each one's context (the member a
+// selection names, or a receiver's members and the closest names to an
+// unknown one) on indented lines. Messages are cleaned up first: Dang's
+// source reports carry ANSI color, and a multi-line message is indented
+// under its first line. A diagnostic without a file (a failure Dang
+// reported without a position) has no position either.
 func renderDiagnostics(diags []analysis.Diagnostic) string {
 	var b strings.Builder
 	for _, d := range diags {
-		msg := strings.TrimSpace(ansi.Strip(d.Message))
-		msg = strings.ReplaceAll(msg, "\n", "\n  ")
-		if d.Replacement != "" {
-			msg += fmt.Sprintf(" (quick fix: %s)", d.Replacement)
+		d.Message = strings.ReplaceAll(strings.TrimSpace(ansi.Strip(d.Message)), "\n", "\n  ")
+		if d.Path == "" {
+			msg := d.Message
+			if d.Replacement != "" {
+				msg += fmt.Sprintf(" (quick fix: %s)", d.Replacement)
+			}
+			fmt.Fprintf(&b, "%s: %s\n", d.Severity, msg)
+			continue
 		}
-		if d.Path != "" {
-			fmt.Fprintf(&b, "%s:%d:%d: ", d.Path, d.Range.Start.Line, d.Range.Start.Column)
-		}
-		fmt.Fprintf(&b, "%s: %s\n", d.Severity, msg)
+		b.WriteString(analysis.Render([]analysis.Diagnostic{d}, analysis.RenderOptions{}))
 	}
 	return b.String()
 }
@@ -234,6 +237,9 @@ func checkDang(ctx context.Context, sc *dangScope, source, search string) (strin
 		a, err := analysis.Analyze(ctx, sc.source(nil), sc.dir, analysis.Options{
 			Focus:         sc.file,
 			ImportConfigs: sc.imports(),
+			// A model reads the diagnostics: give an unknown name what
+			// exists instead.
+			DiagnosticContext: true,
 		})
 		if err != nil {
 			return "", err
@@ -251,6 +257,9 @@ func checkDang(ctx context.Context, sc *dangScope, source, search string) (strin
 		a, err := analysis.Analyze(ctx, sc.source(nil), sc.dir, analysis.Options{
 			Focus:         sc.file,
 			ImportConfigs: sc.imports(),
+			// A model reads the diagnostics: give an unknown name what
+			// exists instead.
+			DiagnosticContext: true,
 		})
 		if err != nil {
 			return "", err
@@ -270,6 +279,9 @@ func checkDang(ctx context.Context, sc *dangScope, source, search string) (strin
 		a, err := analysis.Analyze(ctx, sc.source(map[string]string{snippet: source}), sc.dir, analysis.Options{
 			Focus:         snippet,
 			ImportConfigs: sc.imports(),
+			// A model reads the diagnostics: give an unknown name what
+			// exists instead.
+			DiagnosticContext: true,
 		})
 		if err != nil {
 			return "", err

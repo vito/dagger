@@ -93,12 +93,16 @@ func (LLMSuite) TestDangTools(ctx context.Context, t *testctx.T) {
 			// ws is bound, and written, in a module's scope too.
 			{"DangEval", map[string]string{"at": "notes", "source": `ws = ws.withNewFile(path: "from-module.txt", contents: shout("m"))`}},
 			{"DangEval", map[string]string{"source": `ws.file("from-module.txt").contents`}},
+			// A value read before ws is reassigned keeps the one it read.
+			{"DangEval", map[string]string{"source": "let before = ws\nws = ws.withNewFile(path: \"after.txt\", contents: \"a\")\n[before.directory(\"/\").entries.contains(\"after.txt\"), ws.directory(\"/\").entries.contains(\"after.txt\")]"}},
+			{"DangEval", map[string]string{"source": `ws.file("after.txt").contents`}},
 		})
 		for _, want := range []string{
 			// A member reference describes the member.
 			"List.reduce(initial: b) { acc: b, item: a => b }: b",
-			// A type error, at its position in the snippet.
+			// A type error, at its position in the snippet, with what exists.
 			"<check>:1:1: error: ",
+			"  closest: node(id: ID!)",
 			"1 error · workspace scope · nothing ran",
 			// Search.
 			`search "accumulator":`,
@@ -130,6 +134,9 @@ func (LLMSuite) TestDangTools(ctx context.Context, t *testctx.T) {
 			"(not applied; to write it, assign it: ws = …)",
 			"0 writes",
 			`String! = "M"`,
+			// before and ws, side by side; ws is written.
+			"[Boolean!]! = [false, true]",
+			`String! = "a"`,
 		} {
 			require.Contains(t, out, want)
 		}

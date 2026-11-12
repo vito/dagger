@@ -169,6 +169,14 @@ func TestDangCheckWorkspaceScope(t *testing.T) {
 		require.True(t, strings.HasSuffix(out, "1 error · workspace scope · nothing ran\n"), out)
 	})
 
+	t.Run("a type error says what exists", func(t *testing.T) {
+		out := checkTest(t, sc, "let names = [\"b\", \"a\"]\nnames.findFirst { n => n == \"a\" }", "")
+		require.Contains(t, out, "<check>:2:1: error: list does not have method \"findFirst\"\n  closest: find { item: a => Boolean! }: a?  returns the first element")
+		require.Contains(t, out, "\n  [String!]! has 25 members: all any contains")
+		out = checkTest(t, sc, `ws.directry(path: ".")`, "")
+		require.Contains(t, out, "\n  closest: directory(path: String!): Dagger.Directory!  Returns a Directory from the workspace.\n")
+	})
+
 	t.Run("a deprecation", func(t *testing.T) {
 		out := checkTest(t, sc, `toJSON([1])`, "")
 		require.Contains(t, out, "<check>:1:1: warning: toJSON is deprecated: use JSON.encode instead (quick fix: JSON.encode)")
@@ -473,6 +481,13 @@ func TestDangEvalWrites(t *testing.T) {
 		out, got, _ := eval(t, scope(workspaceTestScope(t)), `ws.changes`)
 		require.Empty(t, got)
 		require.Contains(t, out, "(not applied; to write it, assign it: ws = ws.withChanges(…, path: \".\"))")
+	})
+
+	t.Run("an earlier value stays readable", func(t *testing.T) {
+		out, got, _ := eval(t, scope(workspaceTestScope(t)), "let before = ws\nws = ws.withNewFile(path: \"a\", contents: \"b\")\n[before, ws]")
+		require.Equal(t, []dangWrite{{name: "ws", typeName: "Workspace", id: "ws-2"}}, got)
+		require.Contains(t, out, "<Workspace: node(id: …)>")
+		require.Contains(t, out, "<Workspace: node(id: …).withNewFile(contents: …, path: …)>")
 	})
 
 	t.Run("a failure writes nothing", func(t *testing.T) {
