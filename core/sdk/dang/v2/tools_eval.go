@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -15,6 +14,7 @@ import (
 	"github.com/Khan/genqlient/graphql"
 	"github.com/vito/dang/v2/pkg/dang"
 	"github.com/vito/dang/v2/pkg/dang/analysis"
+	"github.com/vito/dang/v2/pkg/hm"
 	"github.com/vito/dang/v2/pkg/ioctx"
 )
 
@@ -34,8 +34,9 @@ const (
 // evalDang is DangEval: it checks source as one more file of the scope, and
 // only if that succeeds loads the scope (a module's top level runs) and runs
 // source in it, with the Dagger import's queries sent to client. Printed
-// output goes to output as well as into the result. A type error or a
-// failure is returned as an error carrying the report.
+// output goes to output as well as into the report. A type error or a
+// failure is reported like a result, as DangCheck reports diagnostics: the
+// error return is for what keeps it from running at all.
 func evalDang(ctx context.Context, sc *dangScope, source string, client graphql.Client, output io.Writer) (string, error) {
 	start := time.Now()
 	var r dangReport
@@ -52,7 +53,7 @@ func evalDang(ctx context.Context, sc *dangScope, source string, client graphql.
 	if diags := a.Diagnostics(); hasErrors(diags) {
 		r.diagnostics(sc, diags)
 		r.linef("%s · %s · nothing ran", r.counts(), sc.label)
-		return "", errors.New(r.String())
+		return r.String(), nil
 	}
 
 	calls := &countingClient{inner: client}
@@ -93,7 +94,7 @@ func evalDang(ctx context.Context, sc *dangScope, source string, client graphql.
 		}
 		r.diagnostics(sc, diags)
 		r.linef("%s", footer("failed"))
-		return "", errors.New(calls.secrets.scrub(r.String()))
+		return calls.secrets.scrub(r.String()), nil
 	}
 
 	mod, err := dang.LoadDir(ctx, sc.dir, dang.LoadOptions{FS: sc.source(nil), Eager: sc.module})
@@ -107,22 +108,35 @@ func evalDang(ctx context.Context, sc *dangScope, source string, client graphql.
 	}
 
 	writeOutput()
-	r.linef("%s", calls.secrets.scrub(dang.Describe(ctx, val, typ, dang.DescribeOptions{})))
-	if typ != nil {
-		if members := analysis.TypeMembers(typ); len(members) > 0 {
-			names := make([]string, 0, len(members))
-			for i, m := range members {
-				if i == dangMemberNamesMax {
-					names = append(names, fmt.Sprintf("… (%d more)", len(members)-i))
-					break
-				}
-				names = append(names, m.Name)
-			}
-			r.linef("members: %s", strings.Join(names, " "))
-		}
-	}
+	reportEvalResult(ctx, &r, calls, val, typ)
 	r.linef("%s", footer("ok"))
 	return r.String(), nil
+}
+
+// reportEvalResult reports a snippet's result: its value and its type's
+// members. This is where the result of an eval is produced, and all that
+// is done with it: it is described, never applied. In particular a
+// Changeset or a bound tool object's new state the snippet returns changes
+// neither the workspace nor the bindings; acting on a result (as a tool
+// call's is, MCP.routeObjectMethodResult) would start here.
+func reportEvalResult(ctx context.Context, r *dangReport, calls *countingClient, val dang.Value, typ hm.Type) {
+	r.linef("%s", calls.secrets.scrub(dang.Describe(ctx, val, typ, dang.DescribeOptions{})))
+	if typ == nil {
+		return
+	}
+	members := analysis.TypeMembers(typ)
+	if len(members) == 0 {
+		return
+	}
+	names := make([]string, 0, len(members))
+	for i, m := range members {
+		if i == dangMemberNamesMax {
+			names = append(names, fmt.Sprintf("… (%d more)", len(members)-i))
+			break
+		}
+		names = append(names, m.Name)
+	}
+	r.linef("members: %s", strings.Join(names, " "))
 }
 
 func hasErrors(diags []analysis.Diagnostic) bool {

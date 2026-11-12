@@ -39,7 +39,7 @@ type dangTools struct{}
 func (dangTools) Check(ctx context.Context, env core.DangToolEnv, args core.DangCheckArgs) (string, error) {
 	ctx = withDangSyntaxCache(ctx)
 	var out string
-	err := withDangScope(ctx, env, args.At, true, func(ctx context.Context, sc *dangScope, _ dagql.ObjectResult[*core.ModuleSource]) error {
+	err := withDangScope(ctx, env, args.At, true, func(ctx context.Context, sc *dangScope, _ dangRuntime) error {
 		var err error
 		out, err = checkDang(ctx, sc, args.Source, args.Search)
 		return err
@@ -57,21 +57,18 @@ func (dangTools) Eval(ctx context.Context, env core.DangToolEnv, args core.DangE
 		return "", err
 	}
 	var out string
-	err = withDangScope(ctx, env, args.At, false, func(ctx context.Context, sc *dangScope, src dagql.ObjectResult[*core.ModuleSource]) error {
+	err = withDangScope(ctx, env, args.At, false, func(ctx context.Context, sc *dangScope, rt dangRuntime) error {
 		nestedClientMetadata, err := dangshared.NewNestedClientMetadata(ctx)
 		if err != nil {
 			return err
 		}
 		// The nested client serves the API the snippet was checked against:
 		// a module scope's module, as for its own functions, or else the
-		// conversation's, installed modules included.
-		modCtx := dangModuleContext(ctx, env.Server, src)
-		if src.Self() == nil {
-			deps, err := env.Deps(ctx)
-			if err != nil {
-				return fmt.Errorf("load the workspace schema: %w", err)
-			}
-			nestedClientMetadata.ServedDeps = deps
+		// conversation's, installed modules and bound tool objects'
+		// modules included.
+		modCtx := dangModuleContext(ctx, env.Server, rt.src)
+		if rt.src.Self() == nil {
+			nestedClientMetadata.ServedDeps = rt.deps
 		}
 		// Printed output goes to the tool call's span, as a module
 		// function's goes to its call's.
@@ -85,6 +82,13 @@ func (dangTools) Eval(ctx context.Context, env core.DangToolEnv, args core.DangE
 		return err
 	})
 	return out, err
+}
+
+// dangRuntime is what running code in a scope needs beyond its source: the
+// module source of a module scope, or else the API to serve.
+type dangRuntime struct {
+	src  dagql.ObjectResult[*core.ModuleSource]
+	deps *core.SchemaBuilder
 }
 
 // dangModuleContext loads a module scope's module, best effort, so the nested
@@ -133,15 +137,15 @@ func withDangScope(
 	env core.DangToolEnv,
 	at string,
 	allowPosition bool,
-	fn func(context.Context, *dangScope, dagql.ObjectResult[*core.ModuleSource]) error,
+	fn func(context.Context, *dangScope, dangRuntime) error,
 ) error {
-	var noSource dagql.ObjectResult[*core.ModuleSource]
 	if strings.TrimSpace(at) == "" {
-		schema, err := workspaceDangSchema(ctx, env)
+		scope, schema, err := workspaceDangScope(ctx, env)
 		if err != nil {
 			return err
 		}
 		sc := &dangScope{fsys: fstest.MapFS{}, dir: ".", label: "workspace scope", schema: schema}
+		var ids []dangValue
 		if ws := env.Workspace; ws.Self() != nil {
 			id, err := ws.ID()
 			if err != nil {
@@ -151,9 +155,16 @@ func withDangScope(
 			if err != nil {
 				return err
 			}
-			sc.wsDecl = workspaceDeclaration(encoded)
+			ids = append(ids, dangValue{name: "ws", typeName: "Workspace", id: encoded})
 		}
-		return fn(ctx, sc, noSource)
+		for _, b := range scope.Bindings {
+			if schema.Types.Get(b.TypeName) == nil {
+				continue
+			}
+			ids = append(ids, dangValue{name: b.Name, typeName: b.TypeName, id: b.ID})
+		}
+		sc.values = valueDeclarations(ids)
+		return fn(ctx, sc, dangRuntime{deps: scope.Deps})
 	}
 
 	ws := env.Workspace
@@ -194,14 +205,20 @@ func withDangScope(
 	}
 
 	var schema *introspection.Schema
+	var rt dangRuntime
 	if loc.src.Self() != nil {
+		rt.src = loc.src
 		var file dagql.ObjectResult[*core.File]
 		if err := env.Server.Select(ctx, loc.src, &file, dagql.Selector{View: env.Server.View, Field: "introspectionSchemaJson"}); err != nil {
 			return fmt.Errorf("load the schema of %s: %w", label, err)
 		}
 		schema, err = loadDangSchema(ctx, file.Result)
 	} else {
-		schema, err = workspaceDangSchema(ctx, env)
+		var scope *core.DangScope
+		scope, schema, err = workspaceDangScope(ctx, env)
+		if scope != nil {
+			rt.deps = scope.Deps
+		}
 	}
 	if err != nil {
 		return err
@@ -234,17 +251,22 @@ func withDangScope(
 				return fmt.Errorf("at %q: no file %s in the workspace", at, sc.display(loc.file))
 			}
 		}
-		return fn(ctx, sc, loc.src)
+		return fn(ctx, sc, rt)
 	})
 }
 
-// workspaceDangSchema loads the workspace scope's API: the conversation's.
-func workspaceDangSchema(ctx context.Context, env core.DangToolEnv) (*introspection.Schema, error) {
-	file, err := env.SchemaFile(ctx)
+// workspaceDangScope loads the default scope: the conversation's API, with
+// its bound tool objects.
+func workspaceDangScope(ctx context.Context, env core.DangToolEnv) (*core.DangScope, *introspection.Schema, error) {
+	scope, err := env.Scope(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("load the workspace schema: %w", err)
+		return nil, nil, fmt.Errorf("load the workspace schema: %w", err)
 	}
-	return loadDangSchema(ctx, file)
+	schema, err := loadDangSchema(ctx, scope.SchemaFile)
+	if err != nil {
+		return nil, nil, err
+	}
+	return scope, schema, nil
 }
 
 // dangLocation is where `at` points in the workspace.

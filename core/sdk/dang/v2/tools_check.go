@@ -28,7 +28,7 @@ const (
 	// scope's own files. Its name can't clash with a workspace file's in
 	// practice, and is displayed as dangSnippetName.
 	dangSnippetFile = "<check>.dang"
-	// dangWorkspaceFile declares `ws` in the workspace scope.
+	// dangWorkspaceFile declares the workspace scope's values.
 	dangWorkspaceFile = "<workspace>.dang"
 
 	// dangMembersWithDocs is how many members a listing shows with their
@@ -71,20 +71,20 @@ type dangScope struct {
 	// label names the scope in footers.
 	label string
 
-	// wsDecl, for the workspace scope, declares `ws` (see
-	// workspaceDeclaration); "" without a workspace.
-	wsDecl string
+	// values, for the workspace scope, declares `ws` and the bound tool
+	// objects (see valueDeclarations).
+	values string
 
 	// schema is the API the Dagger import (auto-imported) exposes.
 	schema *introspection.Schema
 }
 
 // source returns the scope's source: its directory's files, any declaration
-// of `ws`, and extra files (a snippet) laid over them.
+// of its values, and extra files (a snippet) laid over them.
 func (sc *dangScope) source(extra map[string]string) analysis.Source {
 	files := map[string]string{}
-	if sc.wsDecl != "" {
-		files[path.Join(sc.dir, dangWorkspaceFile)] = sc.wsDecl
+	if sc.values != "" {
+		files[path.Join(sc.dir, dangWorkspaceFile)] = sc.values
 	}
 	for p, text := range extra {
 		files[p] = text
@@ -121,10 +121,21 @@ func (sc *dangScope) display(p string) string {
 	return displayWorkspacePath(sc.cwd, p)
 }
 
-// workspaceDeclaration is the source binding `ws` to the workspace whose ID
-// is id, as a module function's `ws: Workspace!` argument is bound.
-func workspaceDeclaration(id string) string {
-	return fmt.Sprintf("let ws: Workspace! = node(id: %q).{{... on Workspace!}}\n", id)
+// dangValue is a value the workspace scope binds by name, loaded from its ID:
+// the workspace as `ws`, and each bound tool object.
+type dangValue struct {
+	name, typeName, id string
+}
+
+// valueDeclarations is the source binding each value by name, as a module
+// function's `ws: Workspace!` argument is bound. Each is lazy: a value a
+// snippet never reads is never loaded.
+func valueDeclarations(values []dangValue) string {
+	var b strings.Builder
+	for _, v := range values {
+		fmt.Fprintf(&b, "let %s: %s! = node(id: %q).{{... on %s!}}\n", v.name, v.typeName, v.id, v.typeName)
+	}
+	return b.String()
 }
 
 // dangReport accumulates a tool's text output.
@@ -591,7 +602,13 @@ func describeMembers(r *dangReport, typ string, members []analysis.Member) {
 // of its docs.
 func memberLine(m analysis.Member, qualified bool) string {
 	sig := m.Signature()
-	if qualified {
+	switch {
+	case isTypeMember(m):
+		// "type Dagger.Workspace", not "Dagger.type Workspace".
+		if qualified && m.Receiver != "" {
+			sig = fmt.Sprintf("%s %s.%s", m.Kind, m.Receiver, m.Name)
+		}
+	case qualified:
 		sig = m.QualifiedSignature()
 	}
 	if m.Static && !qualified {
@@ -606,9 +623,29 @@ func memberLine(m analysis.Member, qualified bool) string {
 	return sig
 }
 
-// renderSearch ranks what the scope can reach by name and docs.
+// isTypeMember reports whether m names a type rather than a value.
+func isTypeMember(m analysis.Member) bool {
+	return m.Kind != analysis.KindFunction && m.Kind != analysis.KindValue
+}
+
+// renderSearch ranks what the scope can reach by name and docs. A type the
+// scope names directly and through its import (Workspace, Dagger.Workspace)
+// is listed once, by its shorter name, which Search ranks first.
 func renderSearch(r *dangReport, scope dang.TypeScope, query string) {
-	results := analysis.Search(scope, query, dangSearchLimit)
+	var results []analysis.Member
+	types := map[string]bool{}
+	for _, m := range analysis.Search(scope, query, 2*dangSearchLimit) {
+		if isTypeMember(m) {
+			key := string(m.Kind) + " " + m.Name
+			if types[key] {
+				continue
+			}
+			types[key] = true
+		}
+		if results = append(results, m); len(results) == dangSearchLimit {
+			break
+		}
+	}
 	if len(results) == 0 {
 		r.linef("search %q: no matches", query)
 		return

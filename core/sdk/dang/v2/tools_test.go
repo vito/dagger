@@ -82,7 +82,7 @@ func workspaceTestScope(t *testing.T) *dangScope {
 		fsys:   fstest.MapFS{},
 		dir:    ".",
 		label:  "workspace scope",
-		wsDecl: workspaceDeclaration("ws-id"),
+		values: valueDeclarations([]dangValue{{name: "ws", typeName: "Workspace", id: "ws-id"}}),
 		schema: dangToolsTestSchema(t),
 	}
 }
@@ -175,6 +175,13 @@ func TestDangCheckWorkspaceScope(t *testing.T) {
 		require.Contains(t, out, "  Container.withExec(args: [String!]!): Dagger.Container! — Execute a command in the container.\n")
 		out = checkTest(t, sc, "", "zzznothing")
 		require.Contains(t, out, `search "zzznothing": no matches`)
+	})
+
+	t.Run("search lists a type once", func(t *testing.T) {
+		out := checkTest(t, sc, "", "container")
+		require.Equal(t, 1, strings.Count(out, "type Container"), out)
+		require.Contains(t, out, "  type Container — An OCI-compatible container.\n")
+		require.NotContains(t, out, "Dagger.type")
 	})
 
 	t.Run("nothing to check", func(t *testing.T) {
@@ -316,19 +323,19 @@ func TestDangEval(t *testing.T) {
 	})
 
 	t.Run("a type error runs nothing", func(t *testing.T) {
-		_, err := evalTest(t, sc, "print(\"never\")\nnope", nil)
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "<check>:2:1: error: ")
-		require.Contains(t, err.Error(), "1 error · workspace scope · nothing ran")
-		require.NotContains(t, err.Error(), "never\n")
+		out, err := evalTest(t, sc, "print(\"never\")\nnope", nil)
+		require.NoError(t, err, "a type error is reported, not a tool error")
+		require.Contains(t, out, "<check>:2:1: error: ")
+		require.Contains(t, out, "1 error · workspace scope · nothing ran")
+		require.NotContains(t, out, "never\n")
 	})
 
 	t.Run("a failure keeps its output", func(t *testing.T) {
-		_, err := evalTest(t, sc, "print(\"before\")\nraise \"boom\"", nil)
-		require.Error(t, err)
-		require.True(t, strings.HasPrefix(err.Error(), "output:\nbefore\n"), err.Error())
-		require.Contains(t, err.Error(), "boom")
-		require.Contains(t, err.Error(), "failed · ")
+		out, err := evalTest(t, sc, "print(\"before\")\nraise \"boom\"", nil)
+		require.NoError(t, err, "a failure is reported, not a tool error")
+		require.True(t, strings.HasPrefix(out, "output:\nbefore\n"), out)
+		require.Contains(t, out, "boom")
+		require.Contains(t, out, "failed · ")
 	})
 
 	t.Run("secrets are scrubbed", func(t *testing.T) {
@@ -351,6 +358,30 @@ func TestDangEval(t *testing.T) {
 		require.True(t, strings.HasPrefix(out, "output:\nmodule loaded\nString! = \"hello, dang\"\n"), out)
 		require.Contains(t, out, " · module mod (mod)\n")
 	})
+}
+
+func TestDangBoundValues(t *testing.T) {
+	t.Parallel()
+	sc := workspaceTestScope(t)
+	sc.values = valueDeclarations([]dangValue{
+		{name: "ws", typeName: "Workspace", id: "ws-id"},
+		{name: "scratch", typeName: "Directory", id: "dir-id"},
+	})
+
+	out := checkTest(t, sc, "scratch", "")
+	require.True(t, strings.HasPrefix(out, "scratch: Dagger.Directory!\n"), out)
+
+	api := &fakeAPI{answer: func(q string) string {
+		require.Contains(t, q, "dir-id", "the bound value is loaded from its ID")
+		if strings.Contains(q, "__typename") {
+			return `{"node":{"__typename":"Directory"}}`
+		}
+		return `{"node":{"entries":["a.txt"]}}`
+	}}
+	out, err := evalTest(t, sc, "scratch.entries", api)
+	require.NoError(t, err)
+	require.Contains(t, out, `[String!]! = ["a.txt"]`)
+	require.Regexp(t, ` · \d engine calls · `, out)
 }
 
 func TestParseDangAt(t *testing.T) {
