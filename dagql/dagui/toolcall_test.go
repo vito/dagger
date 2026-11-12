@@ -69,6 +69,40 @@ func TestToolCallViewArgsFallback(t *testing.T) {
 	assert.Equal(t, "", NewToolCallView("frobnicate", nil).ArgsFallback())
 }
 
+func TestToolCallViewWrapsAndCollapses(t *testing.T) {
+	traceID := trace.TraceID{1}
+	timeoutID := SpanID{SpanID: trace.SpanID{2}}
+	nestedID := SpanID{SpanID: trace.SpanID{3}}
+	db := NewDB()
+	db.ImportSnapshots([]SpanSnapshot{
+		{
+			ID: timeoutID, TraceID: TraceID{traceID}, Name: "Timeout",
+			LLMRole: "assistant", LLMTool: "Timeout",
+			LLMToolArgNames:  []string{"arguments", "duration", "tool"},
+			LLMToolArgValues: []string{`{"path":"main.go"}`, "30s", "editor_read"},
+		},
+		{
+			ID: nestedID, TraceID: TraceID{traceID}, Name: "read", ParentID: timeoutID,
+			LLMRole: "assistant", LLMTool: "read", LLMToolServer: "Editor",
+		},
+	})
+	timeout, nested := db.Spans.Map[timeoutID], db.Spans.Map[nestedID]
+
+	// The span names the tool bare; the model, with its server.
+	assert.True(t, db.ToolCallView(timeout).Wraps(nested))
+	assert.Equal(t, nested, db.WrappedCallSpan(timeout))
+	assert.Nil(t, db.WrappedCallSpan(nested))
+	assert.True(t, NewToolCallView("Timeout", map[string]any{"tool": "read_file"}).
+		Wraps(&Span{SpanSnapshot: SpanSnapshot{LLMRole: "assistant", LLMTool: "read_file"}}))
+	assert.False(t, NewToolCallView("Timeout", map[string]any{"tool": "write"}).Wraps(nested))
+
+	// A Timeout running Read collapses as Read does.
+	assert.False(t, timeout.CollapsesToolOutput())
+	assert.True(t, db.CollapsesToolOutput(timeout))
+	assert.True(t, db.CollapsesToolOutput(nested))
+	assert.False(t, db.CollapsesToolOutput(nil))
+}
+
 func TestDangSnippet(t *testing.T) {
 	snippet, ok := NewToolCallView("DangEval", map[string]any{"source": "1", "at": "notes"}).DangSnippet()
 	require.True(t, ok)

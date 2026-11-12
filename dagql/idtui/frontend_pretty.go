@@ -8703,7 +8703,15 @@ func (fe *frontendPretty) renderSpanErrorMessage(out TermOutput, r *renderer, ro
 }
 
 func (fe *frontendPretty) renderToolOutputSummary(out TermOutput, span *dagui.Span) {
-	if !isToolCallDisplay(span) || !dagui.ToolNameIs(span.LLMTool, "grep") {
+	if !isToolCallDisplay(span) {
+		return
+	}
+	tool := span.LLMTool
+	if dagui.RendersToolArgs(tool) {
+		// a Timeout summarizes as the call it wraps
+		tool = fe.db.ToolCallView(span).Tool
+	}
+	if !dagui.ToolNameIs(tool, "grep") {
 		return
 	}
 	logs := fe.logs.Logs[span.ID]

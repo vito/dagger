@@ -174,7 +174,7 @@ func (s *SpanTreeView) renderInlineLogs(ctx tuist.Context, r *renderer, row *dag
 		argsView.sync(logPrefix, trimPrefix, limit, s.fe.finalRender, false)
 		lines = append(lines, s.RenderChildResult(ctx, argsView).Lines...)
 	}
-	if span.CollapsesToolOutput() && !row.Expanded {
+	if s.fe.db.CollapsesToolOutput(span) && !row.Expanded {
 		return lines
 	}
 

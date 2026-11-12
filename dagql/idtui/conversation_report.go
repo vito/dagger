@@ -123,6 +123,14 @@ func (fe *frontendPretty) renderMessageNode(ctx tuist.Context, out TermOutput, r
 	}
 
 	for _, child := range node.Children {
+		if wrapped := fe.db.WrappedCallSpan(node.Span); wrapped != nil && child.Span == wrapped {
+			// A Timeout's row already presents as the call it runs: its
+			// nested call would say it all again. Keep what's beneath it.
+			for _, grandchild := range child.Children {
+				fe.renderMessageNode(ctx, out, r, grandchild, depth+1)
+			}
+			continue
+		}
 		fe.renderMessageNode(ctx, out, r, child, depth+1)
 	}
 }
@@ -238,15 +246,19 @@ func (fe *frontendPretty) indentMessageNodeLogs(span *dagui.Span, width int) {
 // (recalculateViewLocked).
 func (fe *frontendPretty) renderMessageLogs(out TermOutput, span *dagui.Span, width int) {
 	// A Dang snippet is the call: show it as code, in full, in place of its
-	// JSON arguments.
-	if source := fe.dangSourceLines(span, width, 0); len(source) > 0 {
+	// JSON arguments, lined up under the call as the live row has it.
+	indent := ""
+	if fe.shellTranscript() && span.LLMTool != "" {
+		indent = "  "
+	}
+	if source := fe.dangSourceLines(span, width-len(indent), 0); len(source) > 0 {
 		for _, line := range source {
-			fmt.Fprintln(out, line)
+			fmt.Fprintln(out, indent+line)
 		}
 	} else if fe.spanVerbosity(span) >= toolArgsVerbosity {
 		fe.renderSpanLogBlock(out, span, span, 0, true)
 	}
-	if span.CollapsesToolOutput() {
+	if fe.db.CollapsesToolOutput(span) {
 		return
 	}
 	fe.renderSpanLogBlock(out, span, span, 0, false)

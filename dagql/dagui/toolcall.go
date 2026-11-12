@@ -201,6 +201,52 @@ func (view ToolCallView) Wrapped() bool {
 	return view.Timeout != ""
 }
 
+// Wraps reports whether span is the display span of the call a Timeout
+// wrapper presenting as view runs: the nested tool call it opens beneath
+// itself, which says nothing the wrapper's row doesn't.
+func (view ToolCallView) Wraps(span *Span) bool {
+	return view.Wrapped() && span != nil && span.LLMRole != "" && span.LLMTool != "" &&
+		// the span names the tool bare, the model maybe with its server
+		(strings.EqualFold(view.Tool, span.LLMTool) || ToolNameIs(view.Tool, span.LLMTool))
+}
+
+// CollapsesOutput is SpanSnapshot.CollapsesToolOutput for the call the view
+// presents as.
+func (view ToolCallView) CollapsesOutput() bool {
+	return toolCollapsesOutput(view.Tool)
+}
+
+// CollapsesToolOutput is SpanSnapshot.CollapsesToolOutput for the call a
+// tool-call span presents as (see ToolCallView): a Timeout wrapping Read
+// collapses as Read does.
+func (db *DB) CollapsesToolOutput(span *Span) bool {
+	if span == nil || span.LLMRole == "" || span.LLMTool == "" {
+		return false
+	}
+	if RendersToolArgs(span.LLMTool) {
+		return db.ToolCallView(span).CollapsesOutput()
+	}
+	return span.CollapsesToolOutput()
+}
+
+// WrappedCallSpan returns the display span of the call a Timeout wrapper
+// runs (see ToolCallView.Wraps), once it has started; nil otherwise.
+func (db *DB) WrappedCallSpan(span *Span) *Span {
+	if span == nil || !RendersToolArgs(span.LLMTool) {
+		return nil
+	}
+	view := db.ToolCallView(span)
+	if !view.Wrapped() {
+		return nil
+	}
+	for _, child := range span.ChildSpans.Spans() {
+		if view.Wraps(child) {
+			return child
+		}
+	}
+	return nil
+}
+
 // ArgsSummary is SpanSnapshot.ToolArgsSummary for the view's tool and
 // arguments.
 func (view ToolCallView) ArgsSummary() []ToolArgPart {

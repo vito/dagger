@@ -239,6 +239,88 @@ func TestDangToolCallTranscriptCollapsesLongSnippets(t *testing.T) {
 	assert.Equal(t, `     ┆ … 4 more lines`, lines[dangSourceCollapsedLines+1])
 }
 
+// timeoutWithNestedCall builds a conversation of Timeout calls as the engine
+// runs them: each opens the display span of the call it wraps beneath its
+// own, under the tool's bare name and server, and carries the wrapped call's
+// result as its own logs.
+func timeoutWithNestedCall(t *testing.T, profile termenv.Profile, calls ...[2]dagui.SpanSnapshot) *frontendPretty {
+	t.Helper()
+	db := dagui.NewDB()
+	rootID := prettyTestSpanID(1)
+	start := time.Unix(100, 0)
+	snapshots := []dagui.SpanSnapshot{{
+		ID: rootID, TraceID: prettyTestTraceID(), Name: "shell",
+		StartTime: start, EndTime: start.Add(time.Minute), Final: true,
+	}}
+	results := map[dagui.SpanID]string{}
+	for i, call := range calls {
+		timeout, nested := call[0], call[1]
+		timeout.ID = prettyTestSpanID(byte(10 + 2*i))
+		nested.ID = prettyTestSpanID(byte(11 + 2*i))
+		timeout.ParentID, nested.ParentID = rootID, timeout.ID
+		for _, s := range []*dagui.SpanSnapshot{&timeout, &nested} {
+			s.TraceID = prettyTestTraceID()
+			s.LLMRole = "assistant"
+			s.Name = s.LLMTool
+			s.Boundary, s.RollUpSpans, s.RollUpLogs = true, true, true
+			s.StartTime = start.Add(time.Duration(2*i+1) * time.Second)
+			s.EndTime = s.StartTime.Add(time.Second)
+			s.Final = true
+		}
+		results[timeout.ID] = "RESULT OF " + nested.LLMTool
+		snapshots = append(snapshots, timeout, nested)
+	}
+	db.ImportSnapshots(snapshots)
+	db.SetPrimarySpan(rootID)
+
+	term := tuist.NewHeadlessTerminal(100, 80)
+	fe := newWithTerminal(io.Discard, db, term)
+	fe.profile = profile
+	fe.logs.Profile = profile
+	fe.shell = stubShellHandler{}
+	fe.FrontendOpts.Verbosity = dagui.ShowCompletedVerbosity
+	fe.autoFocus = false
+	for id, result := range results {
+		fe.logs.Logs[id] = testVterm(t, result)
+	}
+	fe.recalculateViewLocked()
+	return fe
+}
+
+// TestTimeoutPresentsAsItsNestedCall covers what a Timeout borrows from the
+// call it runs, once that call's own span is there: its tool's server and
+// bare name (the model names it with its server, "editor_read"), and whether
+// its output stays collapsed -- a Timeout running Read is as quiet as Read.
+// The final report shows the call once, not again for the nested span.
+func TestTimeoutPresentsAsItsNestedCall(t *testing.T) {
+	nestedRead := toolCallSnapshot("read", "path", "main.go")
+	nestedRead.LLMToolServer = "Editor"
+	fe := timeoutWithNestedCall(t, termenv.Ascii,
+		[2]dagui.SpanSnapshot{
+			toolCallSnapshot("Timeout", "arguments", `{"path":"main.go"}`, "duration", "30s", "tool", "editor_read"),
+			nestedRead,
+		},
+		[2]dagui.SpanSnapshot{
+			toolCallSnapshot("Timeout", "arguments", `{"source":"1 + 1"}`, "duration", "2m", "tool", "DangEval"),
+			toolCallSnapshot("DangEval", "source", "1 + 1"),
+		},
+	)
+
+	live := stripANSICodes(strings.Join(fe.tui.Frame(), "\n"))
+	assert.Contains(t, live, "• editor Read main.go timeout=30s")
+	assert.NotContains(t, live, "RESULT OF read", "a wrapped Read stays collapsed")
+	assert.Contains(t, live, "• DangEval timeout=2m")
+	assert.Contains(t, live, "RESULT OF DangEval")
+
+	r := newRenderer(fe.db, 0, fe.FrontendOpts, true)
+	report := strings.Join(fe.conversationReport(tuist.Context{Width: 100}, r, false), "\n")
+	assert.Equal(t, 1, strings.Count(report, "Read main.go"), report)
+	assert.NotContains(t, report, "RESULT OF read", report)
+	assert.Equal(t, 1, strings.Count(report, "1 │ 1 + 1"), report)
+	assert.Contains(t, strings.Split(report, "\n"), "  1 │ 1 + 1", "lined up under the call")
+	assert.Equal(t, 1, strings.Count(report, "RESULT OF DangEval"), report)
+}
+
 // TestConversationReportRendersDangSource covers the final report: a Dang
 // call shows its whole snippet as code, in place of its JSON arguments.
 func TestConversationReportRendersDangSource(t *testing.T) {

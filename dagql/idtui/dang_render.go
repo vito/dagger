@@ -36,11 +36,21 @@ func (r *renderer) renderToolCallTitle(out TermOutput, span *dagui.Span) bool {
 		// A Timeout whose wrapped tool isn't known yet.
 		return false
 	}
-	if !view.Wrapped() && span.LLMToolServer != "" {
-		fmt.Fprint(out, out.String(dagui.ToolServerLabel(span.LLMToolServer)).Foreground(termenv.ANSIBrightMagenta))
+	server, name := span.LLMToolServer, view.Tool
+	if view.Wrapped() {
+		// The model names the wrapped tool as it sees it, e.g.
+		// "engineLab_engineTest"; once the call runs, its own span knows
+		// the tool's server and bare name.
+		server = ""
+		if wrapped := r.db.WrappedCallSpan(span); wrapped != nil {
+			server, name = wrapped.LLMToolServer, wrapped.LLMTool
+		}
+	}
+	if server != "" {
+		fmt.Fprint(out, out.String(dagui.ToolServerLabel(server)).Foreground(termenv.ANSIBrightMagenta))
 		fmt.Fprint(out, " ")
 	}
-	fmt.Fprint(out, out.String(dagui.ToolNameLabel(view.Tool)).Bold())
+	fmt.Fprint(out, out.String(dagui.ToolNameLabel(name)).Bold())
 	switch {
 	case isDang:
 		if at := dagui.SanitizeInline(firstLineOf(snippet.At)); at != "" {

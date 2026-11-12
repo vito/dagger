@@ -219,7 +219,11 @@ func (snapshot *SpanSnapshot) CollapsesToolOutput() bool {
 	if snapshot.LLMRole == "" || snapshot.LLMTool == "" {
 		return false
 	}
-	return ToolNameIs(snapshot.LLMTool, "read") || ToolNameIs(snapshot.LLMTool, "grep")
+	return toolCollapsesOutput(snapshot.LLMTool)
+}
+
+func toolCollapsesOutput(tool string) bool {
+	return ToolNameIs(tool, "read") || ToolNameIs(tool, "grep")
 }
 
 // ToolServerLabel returns how a tool call's server is displayed, e.g.
