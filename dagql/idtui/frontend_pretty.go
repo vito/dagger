@@ -227,6 +227,10 @@ type frontendPretty struct {
 	promotedConversation      []*dagui.MessageNode
 	promotedConversationHost  *dagui.Span
 
+	// logRequestDiag explains requests with descendants (DIAGNOSTICS; see
+	// SetLogRequestDiagnostics).
+	logRequestDiag func(LogRequest, LogRequestDiag)
+
 	// logProvider lazily fetches a span's logs on demand (e.g. on expand, or
 	// when a failure is surfaced). The bool is whether to roll up descendant
 	// logs (span.RollUpLogs). Set by 'dagger trace' to pull recorded logs per

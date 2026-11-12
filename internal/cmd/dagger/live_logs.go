@@ -100,6 +100,16 @@ type liveLogs struct {
 	// frontend is the frontend reading, which finishLiveLogs finishes.
 	frontend idtui.LiveLogsFrontend
 
+	// DIAGNOSTICS (live_logs_diag.go): diag, when set, reports what widened
+	// the follow and what was imported twice; running tells what keeps a
+	// span active (idtui.LiveLogsDiagnostics). treeKey, treeSince and
+	// treeReported track the spans followed with their descendants, under mu.
+	diag         *liveLogsDiag
+	running      func([]dagui.SpanID) []idtui.LogRunning
+	treeKey      string
+	treeSince    map[string]time.Time
+	treeReported map[string]bool
+
 	mu sync.Mutex
 	// spans are followed (or, without following, read at finish);
 	// pending joined since and are not caught up yet.
@@ -197,6 +207,12 @@ func startLiveLogs(ctx context.Context, fe idtui.Frontend, client tracesource.Li
 	l.frontend = lf
 	l.coverage = lf.LiveLogsCoverage
 	l.activity = lf.LiveLogsActivity
+	l.diag = startLiveLogsDiag(ctx)
+	l.diag.emit("started", "follow", follow, "trace", traceID.String())
+	if d, ok := lf.(idtui.LiveLogsDiagnostics); ok {
+		l.running = d.LiveLogsRunning
+		d.SetLogRequestDiagnostics(l.diagRequest)
+	}
 	l.export = lf.SetLiveLogs(traceID, l.subscribe)
 	if cf, ok := fe.(idtui.LogCacheFrontend); ok {
 		cf.SetLogRelease(traceID, l.release)
@@ -302,6 +318,7 @@ func (l *liveLogs) release(r idtui.LogRelease) {
 			l.reactivating = ""
 		}
 	}
+	l.noteTreeLocked("release")
 	if left {
 		l.notify()
 	}
@@ -443,6 +460,7 @@ func (l *liveLogs) poll(ctx context.Context) {
 		case <-ticker.C:
 		}
 		l.pollActive()
+		l.reportLongRollUps()
 	}
 }
 
@@ -517,6 +535,7 @@ func (l *liveLogs) pollActive() {
 func (l *liveLogs) retire(readStart time.Time) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	defer l.noteTreeLocked("retire")
 	retiring := map[[8]byte]uint64{}
 	retiringDigests := map[string]uint64{}
 	for id, since := range l.idleSince {
@@ -625,6 +644,7 @@ func (l *liveLogs) reactivate(ctx context.Context) error {
 		default:
 			l.spans[id] = r.span
 			l.through[id] = r.through
+			l.noteTreeLocked("reactivate")
 		}
 		l.reactivating = ""
 		l.mu.Unlock()
@@ -683,6 +703,7 @@ func (l *liveLogs) catchUp(ctx context.Context) error {
 	// A partial catch-up is not retried, which would import its rows
 	// twice; the follow carries on from the cursor.
 	maps.Copy(l.spans, batch)
+	l.noteTreeLocked("join")
 	return err
 }
 
@@ -732,6 +753,11 @@ func (l *liveLogs) importLogs(ctx context.Context, req *collogspb.ExportLogsServ
 	// Keep only this batch's claim lifetimes. The read may end, clearing
 	// released, before the frontend applies its queued export.
 	claims := make(map[logOwner]uint64)
+	// DIAGNOSTICS: the records kept of each pair, unclaimed and claimed.
+	var diagUnclaimed, diagClaimed map[logOwner]int
+	if l.diag != nil {
+		diagUnclaimed, diagClaimed = map[logOwner]int{}, map[logOwner]int{}
+	}
 	l.mu.Lock()
 	i, kept := 0, 0
 	for _, rl := range req.GetResourceLogs() {
@@ -756,6 +782,9 @@ func (l *liveLogs) importLogs(ctx context.Context, req *collogspb.ExportLogsServ
 				case idtui.LogUnknown:
 					// Its span is not placed yet: import it, but without
 					// claiming the pair this read may not keep selecting.
+					if diagUnclaimed != nil && !l.diag.own(key.span) {
+						diagUnclaimed[key]++
+					}
 					return false
 				}
 				claim, ok := l.owned[key]
@@ -766,12 +795,16 @@ func (l *liveLogs) importLogs(ctx context.Context, req *collogspb.ExportLogsServ
 					return true
 				}
 				claims[key] = claim.generation
+				if diagClaimed != nil {
+					diagClaimed[key]++
+				}
 				return false
 			})
 			kept += len(sl.LogRecords)
 		}
 	}
 	l.mu.Unlock()
+	l.diag.imported(read, diagUnclaimed, diagClaimed)
 	if kept == 0 {
 		return nil
 	}
@@ -1043,6 +1076,8 @@ func finishLiveLogs(ctx context.Context, sess liveLogsSession, live *liveLogs) {
 		slog.Warn("error reading the primary output", "err", err)
 	}
 	lf.SetPrimaryOutput(records)
+	// Before the session closes, so the engine stores the last lines.
+	live.diag.finish()
 }
 
 // readPrimaryOutput reads the primary span's output, the process's own

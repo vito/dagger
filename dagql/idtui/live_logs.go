@@ -152,7 +152,9 @@ func (fe *frontendPretty) SetLiveLogs(traceID dagui.TraceID, subscribe func(LogR
 				fe.liveRequests = make(map[dagui.SpanID]bool)
 			}
 			fe.liveRequests[id] = descendants
-			subscribe(LogRequest{Span: id, Descendants: descendants, Digests: fe.logDigests(id)})
+			req := LogRequest{Span: id, Descendants: descendants, Digests: fe.logDigests(id)}
+			fe.diagnoseLogRequest(req)
+			subscribe(req)
 		}
 		// Forget what this process's own display text rendered so far: the
 		// store returns it to the spans that ask.
