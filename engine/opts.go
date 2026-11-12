@@ -280,11 +280,13 @@ type ClientMetadata struct {
 	// client headers.
 	EngineWork bool `json:"-"`
 
-	// ServedDeps, set on an in-engine nested client that runs outside any
-	// module (such as a DangEval snippet), is the *core.SchemaBuilder it
-	// serves instead of the core API alone: the API of the conversation the
-	// snippet runs for, installed modules included. It is opaque here, since
-	// this package can't name core's types. Engine-internal: never read from
+	// ServedDeps, set on an in-engine nested client (such as a DangEval
+	// snippet's), is a *core.SchemaBuilder of what it serves. Without a
+	// module, it serves it instead of the core API alone: the API of the
+	// conversation the snippet runs for, installed modules included. With
+	// one, its modules are served beside the module's own API (the
+	// conversation's bound tool objects'). It is opaque here, since this
+	// package can't name core's types. Engine-internal: never read from
 	// client headers.
 	ServedDeps any `json:"-"`
 

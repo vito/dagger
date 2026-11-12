@@ -1810,6 +1810,16 @@ func (srv *Server) initializeClientRuntime(
 		if len(client.mod.Self().ObjectDefs) > 0 {
 			servedMods = servedMods.Append(core.NewUserMod(client.mod))
 		}
+		if deps := nestedServedDeps(client.clientMetadata); deps != nil && opts.InertAttachables {
+			// A DangEval snippet in a module's scope also reaches the
+			// conversation's bound tool objects: their modules' types,
+			// beside the module's own API.
+			for _, mod := range deps.Mods() {
+				if mod.Name() != core.ModuleName {
+					servedMods = servedMods.With(mod, core.InstallOpts{SkipConstructor: true})
+				}
+			}
+		}
 		client.servedMods = servedMods.ClientOwned()
 	} else if deps := nestedServedDeps(client.clientMetadata); deps != nil && opts.InertAttachables {
 		// An in-engine client running for a conversation (DangEval) serves
