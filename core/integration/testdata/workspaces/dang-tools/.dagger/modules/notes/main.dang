@@ -2,12 +2,29 @@
 Notes about the workspace.
 """
 type Notes {
+  pub greeting: String! = "hello, "
+
   """
   Greets someone.
   """
   pub greet(name: String!): String! {
-    let greeting = "hello, "
-    greeting + shout(name)
+    let prefix = greeting
+    prefix + shout(name)
+  }
+
+  """
+  Greet with another greeting.
+  """
+  pub withGreeting(greeting: String!): Notes! {
+    self.greeting = greeting
+    self
+  }
+
+  """
+  A directory artifact.
+  """
+  pub scratch: Directory! {
+    directory.withNewFile("scratch.txt", greeting)
   }
 }
 
