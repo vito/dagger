@@ -86,7 +86,7 @@ func (fe *frontendPretty) renderMessageNode(ctx tuist.Context, out TermOutput, r
 	// and rolled-up execution output as logs with no Message, so render those
 	// explicitly here (the same log block a failed check's cause uses).
 	if node.Span.Message == "" && !superseded {
-		fe.renderMessageLogs(rowOut, node.Span)
+		fe.renderMessageLogs(rowOut, node.Span, fe.contentWidth-len(indent))
 	}
 
 	for _, line := range strings.Split(strings.TrimSuffix(buf.String(), "\n"), "\n") {
@@ -236,8 +236,14 @@ func (fe *frontendPretty) indentMessageNodeLogs(span *dagui.Span, width int) {
 // roll-up doesn't return nested execution output here (it crosses the tool call's
 // RollUpLogs boundary), so the report fetches the exec span's own logs directly
 // (recalculateViewLocked).
-func (fe *frontendPretty) renderMessageLogs(out TermOutput, span *dagui.Span) {
-	if fe.spanVerbosity(span) >= toolArgsVerbosity {
+func (fe *frontendPretty) renderMessageLogs(out TermOutput, span *dagui.Span, width int) {
+	// A Dang snippet is the call: show it as code, in full, in place of its
+	// JSON arguments.
+	if source := fe.dangSourceLines(span, width, 0); len(source) > 0 {
+		for _, line := range source {
+			fmt.Fprintln(out, line)
+		}
+	} else if fe.spanVerbosity(span) >= toolArgsVerbosity {
 		fe.renderSpanLogBlock(out, span, span, 0, true)
 	}
 	if span.CollapsesToolOutput() {
