@@ -434,6 +434,12 @@ func (sess *daggerSession) sealClientMetadataLocked(record *clientRecord) error 
 	if err != nil {
 		return err
 	}
+	// The record is what the server enforces; the metadata says so too, for
+	// operations that must know there is no host to ask (a client nested
+	// under an inert one inherits the record flag without declaring it).
+	if record.inertAttachables {
+		snapshot.InertAttachables = true
+	}
 	record.clientMetadata = snapshot
 	record.clientVersion = snapshot.ClientVersion
 	record.secretToken = snapshot.ClientSecretToken

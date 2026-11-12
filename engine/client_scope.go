@@ -157,7 +157,11 @@ type ClientScope struct {
 	metadata              []byte
 	useRecipeIDsByDefault bool
 	sdkEntrypoint         bool
-	lease                 *ClientLifecycleLease
+	// Like the two fields above, InertAttachables is not on the wire, so the
+	// JSON snapshot drops it: without this, every request of a host-inert
+	// client would see metadata claiming it has a host.
+	inertAttachables bool
+	lease            *ClientLifecycleLease
 }
 
 // NewClientScope snapshots metadata so later bootstrap mutations cannot change
@@ -182,6 +186,7 @@ func NewClientScope(metadata *ClientMetadata, lease *ClientLifecycleLease) (Clie
 		metadata:              snapshot,
 		useRecipeIDsByDefault: metadata.UseRecipeIDsByDefault,
 		sdkEntrypoint:         metadata.SDKEntrypoint,
+		inertAttachables:      metadata.InertAttachables,
 		lease:                 lease,
 	}, nil
 }
@@ -202,6 +207,7 @@ func (scope ClientScope) Metadata() (*ClientMetadata, error) {
 	}
 	metadata.UseRecipeIDsByDefault = scope.useRecipeIDsByDefault
 	metadata.SDKEntrypoint = scope.sdkEntrypoint
+	metadata.InertAttachables = scope.inertAttachables
 	return &metadata, nil
 }
 
@@ -223,6 +229,7 @@ func (scope ClientScope) Clone(kind ClientLeaseKind, ownerID string) (ClientScop
 		metadata:              scope.metadata,
 		useRecipeIDsByDefault: scope.useRecipeIDsByDefault,
 		sdkEntrypoint:         scope.sdkEntrypoint,
+		inertAttachables:      scope.inertAttachables,
 		lease:                 lease,
 	}, nil
 }
@@ -250,6 +257,7 @@ func (scope ClientScope) Delegate(kind ClientLeaseKind, ownerID string) (ClientS
 		metadata:              scope.metadata,
 		useRecipeIDsByDefault: scope.useRecipeIDsByDefault,
 		sdkEntrypoint:         scope.sdkEntrypoint,
+		inertAttachables:      scope.inertAttachables,
 		lease:                 lease,
 	}, nil
 }

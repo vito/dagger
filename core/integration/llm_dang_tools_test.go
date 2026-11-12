@@ -182,6 +182,28 @@ func (LLMSuite) TestDangTools(ctx context.Context, t *testctx.T) {
 		}
 	})
 
+	t.Run("a bound tool object from a git module", func(ctx context.Context, t *testctx.T) {
+		// Agent tools are usually remote modules. A snippet that loads one
+		// loads its git module source in a client that has no host to look
+		// for the caller's .env on: from its ID, when the conversation was
+		// resumed and it isn't cached, or by asking for it.
+		helper := base.Directory(".dagger/modules/helper")
+		svc, _ := gitSmartHTTPServiceDirAuth(ctx, t, c, "", makeGitDir(c, helper, "main"), "", nil)
+		repo := "http://" + startedServiceIP(ctx, t, c, svc) + "/repo.git"
+		remote := base.WithNewFile("dagger.toml", fmt.Sprintf(
+			"[modules.notes]\nsource = %q\n\n[modules.helper]\nsource = %q\n", ".dagger/modules/notes", repo+"@main"))
+		out := runDangToolCalls(ctx, t, c, remote, daggerShell, bind+` | with-tools $(helper)`,
+			[]dangToolCall{
+				{"DangEval", map[string]string{"source": `helper.ping`}},
+				// Not loaded before: this snippet's client loads it.
+				{"DangEval", map[string]string{"source": fmt.Sprintf(`moduleSource(refString: %q).asModule.name`, repo)}},
+			})
+		require.Contains(t, out, `String! = "pong"`)
+		require.Contains(t, out, `String! = "helper"`)
+		require.NotContains(t, out, "PermissionDenied")
+		require.NotContains(t, out, "failed to load")
+	})
+
 	t.Run("a changeset applies at the cwd", func(ctx context.Context, t *testctx.T) {
 		// Changesets are measured from the cwd; withChanges(path: ".")
 		// places one there.

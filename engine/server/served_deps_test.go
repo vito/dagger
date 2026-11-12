@@ -22,3 +22,34 @@ func TestClientMetadataKeepsEngineInternalFields(t *testing.T) {
 	require.Nil(t, nestedServedDeps(&engine.ClientMetadata{}))
 	require.Nil(t, nestedServedDeps(nil))
 }
+
+// Requests run with the metadata of their client scope, not the record's:
+// a host-inert client's requests must still say it is inert, or host lookups
+// (an outer .env for a git module source) ask a host the server denies.
+func TestClientScopeKeepsInertAttachables(t *testing.T) {
+	t.Parallel()
+	lease := engine.NewClientLifecycleLease(engine.ClientLeaseRequest, "test", func() {}, nil)
+	t.Cleanup(lease.Release)
+	scope, err := engine.NewClientScope(&engine.ClientMetadata{SessionID: "session", ClientID: "inert", InertAttachables: true}, lease)
+	require.NoError(t, err)
+	ctx, err := engine.ContextWithClientScope(t.Context(), scope)
+	require.NoError(t, err)
+	md, err := engine.ClientMetadataFromContext(ctx)
+	require.NoError(t, err)
+	require.True(t, md.InertAttachables)
+}
+
+// A client nested under an inert one inherits the server's denial without
+// declaring it; sealing its metadata records it.
+func TestSealedMetadataRecordsInheritedInertAttachables(t *testing.T) {
+	t.Parallel()
+	sess := &daggerSession{}
+	record := &clientRecord{
+		clientID:         "child",
+		clientMetadata:   &engine.ClientMetadata{SessionID: "session", ClientID: "child"},
+		inertAttachables: true,
+		accepting:        true,
+	}
+	require.NoError(t, sess.sealClientMetadataLocked(record))
+	require.True(t, record.clientMetadata.InertAttachables)
+}
