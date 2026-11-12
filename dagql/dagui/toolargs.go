@@ -165,8 +165,10 @@ func toolArgPriority(tool, arg string) int {
 // offset and limit are labeled ("offset=20"). It's empty when nothing is
 // recognized, in which case frontends fall back to ToolArgsFallback.
 func (snapshot *SpanSnapshot) ToolArgsSummary() []ToolArgPart {
-	tool := snapshot.LLMTool
-	names, values := snapshot.LLMToolArgNames, snapshot.LLMToolArgValues
+	return toolArgsSummary(snapshot.LLMTool, snapshot.LLMToolArgNames, snapshot.LLMToolArgValues)
+}
+
+func toolArgsSummary(tool string, names, values []string) []ToolArgPart {
 	n := min(len(names), len(values))
 	if n == 0 {
 		return nil
