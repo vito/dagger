@@ -1223,6 +1223,7 @@ func (db *DB) integrateSpan(span *Span) { //nolint: gocyclo
 	// track the span's own interval
 	span.Activity.Add(span)
 	db.update(span)
+	db.pruneToolArgs(span)
 
 	// keep track of the time boundary
 	if db.Epoch.IsZero() ||

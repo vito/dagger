@@ -86,6 +86,14 @@ const dangSourceCollapsedLines = 16
 // width the row's logs wrap to. A collapsed row shows the first
 // dangSourceCollapsedLines lines.
 func (fe *frontendPretty) dangSourceRows(r *renderer, row *dagui.TraceRow) []string {
+	if !isToolCallDisplay(row.Span) || !dagui.RendersToolArgs(row.Span.LLMTool) {
+		return nil
+	}
+	if parent := row.Span.ParentSpan; parent != nil && fe.db.WrappedCallSpan(parent) == row.Span {
+		// The nested call of a Timeout, shown when it's expanded: the
+		// Timeout's row already shows its snippet.
+		return nil
+	}
 	indent := fe.toolBlockIndent(r, row)
 	width := 0
 	if fe.contentWidth > 0 {
@@ -162,6 +170,11 @@ func (fe *frontendPretty) dangHighlighterReady(wait bool) bool {
 				for _, tree := range fe.spanTrees {
 					tree.Update()
 				}
+				for view := range fe.spanLists {
+					view.UpdateAll()
+				}
+				fe.testsDirty = true
+				fe.viewDirty = true
 				fe.Update()
 			})
 		}()

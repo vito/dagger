@@ -50,11 +50,11 @@ func (db *DB) ingestToolArgs(record sdklog.Record, spanID SpanID, body string) {
 	if span == nil {
 		return
 	}
-	if span.Received && (span.LLMRole == "" || !RendersToolArgs(span.LLMTool)) {
+	if span.Received && !keepsToolArgs(span) {
 		// Not a tool call that renders from its arguments. A span not
 		// received yet is a placeholder whose tool isn't known: keep its
-		// arguments in case it is one, until it turns out not to be.
-		delete(db.toolArgsJSON, spanID)
+		// arguments in case it is one, until it turns out not to be (see
+		// pruneToolArgs).
 		return
 	}
 	if db.toolArgsJSON == nil {
@@ -77,6 +77,20 @@ func (db *DB) ingestToolArgs(record sdklog.Record, spanID SpanID, body string) {
 	}
 	args.buf.WriteString(body)
 	db.update(span)
+}
+
+// keepsToolArgs reports whether the DB keeps the arguments a span streams:
+// it's a tool call that renders from them.
+func keepsToolArgs(span *Span) bool {
+	return span.LLMRole != "" && RendersToolArgs(span.LLMTool)
+}
+
+// pruneToolArgs drops the arguments kept for a span that arrived before it
+// did, once it turns out not to render from them.
+func (db *DB) pruneToolArgs(span *Span) {
+	if _, kept := db.toolArgsJSON[span.ID]; kept && !keepsToolArgs(span) {
+		delete(db.toolArgsJSON, span.ID)
+	}
 }
 
 // toolArgsJSON accumulates the JSON arguments a tool-call display span

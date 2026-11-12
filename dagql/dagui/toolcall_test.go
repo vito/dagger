@@ -171,6 +171,25 @@ func TestToolCallArgsFromStreamedJSON(t *testing.T) {
 	// Tools that don't render from their arguments keep nothing.
 	jsonLog(plainID, `{"path":"main.go"}`)
 	assert.Nil(t, db.ToolCallArgs(db.Spans.Map[plainID]))
+
+	// Arguments that arrive before their span are kept until the span
+	// turns out not to render from them...
+	earlyID := SpanID{SpanID: trace.SpanID{4}}
+	jsonLog(earlyID, `{"path":"a.txt","contents":"big"}`)
+	assert.Contains(t, db.toolArgsJSON, earlyID)
+	db.ImportSnapshots([]SpanSnapshot{{
+		ID: earlyID, TraceID: TraceID{traceID}, Name: "write",
+		LLMRole: "assistant", LLMTool: "write", StartTime: start,
+	}})
+	assert.NotContains(t, db.toolArgsJSON, earlyID)
+	// ...or does.
+	earlyEvalID := SpanID{SpanID: trace.SpanID{5}}
+	jsonLog(earlyEvalID, `{"source":"1"}`)
+	db.ImportSnapshots([]SpanSnapshot{{
+		ID: earlyEvalID, TraceID: TraceID{traceID}, Name: "DangEval",
+		LLMRole: "assistant", LLMTool: "DangEval", StartTime: start,
+	}})
+	assert.Equal(t, map[string]any{"source": "1"}, db.ToolCallArgs(db.Spans.Map[earlyEvalID]))
 }
 
 func TestToolCallArgsFallsBackToAttributes(t *testing.T) {

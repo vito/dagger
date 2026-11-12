@@ -322,6 +322,13 @@ func TestTimeoutPresentsAsItsNestedCall(t *testing.T) {
 	assert.Equal(t, 1, strings.Count(report, "1 │ 1 + 1"), report)
 	assert.Contains(t, strings.Split(report, "\n"), "  1 │ 1 + 1", "lined up under the call")
 	assert.Equal(t, 1, strings.Count(report, "RESULT OF DangEval"), report)
+
+	// Expanded, the Timeout shows its nested call, without the snippet again.
+	fe.setExpanded(prettyTestSpanID(12), true)
+	fe.recalculateViewLocked()
+	expanded := stripANSICodes(strings.Join(fe.tui.Frame(), "\n"))
+	assert.Equal(t, 2, strings.Count(expanded, "• DangEval"), expanded)
+	assert.Equal(t, 1, strings.Count(expanded, "1 │ 1 + 1"), expanded)
 }
 
 // TestTimeoutReportRollsUpItsCallsChecks covers what the call a Timeout runs
