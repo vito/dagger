@@ -216,10 +216,9 @@ func (LLMSuite) TestDangTools(ctx context.Context, t *testctx.T) {
 	t.Run("a host secret in a git tool module", func(ctx context.Context, t *testctx.T) {
 		// A git tool module holding a secret its settings read from the
 		// caller's host, as agent tools (a GitHub token) do. The agent's
-		// tool calls and a snippet reading the bound object both read it. A
-		// snippet's client has no host: a secret it asks for itself is
-		// refused rather than bound to it, where nobody could read it and
-		// later callers of the same recipe would get it.
+		// tool calls and a snippet reading the bound object both read it,
+		// and a snippet's own secret, made in a client with no host, doesn't
+		// keep the conversation's client from reading the same one after.
 		vault := core.NewQuery(c).Directory().
 			WithNewFile("dagger-module.toml", "name = \"vault\"\nengineVersion = \"latest\"\n\n[runtime]\n  source = \"dang\"\n").
 			WithNewFile("main.dang", `type Vault {
@@ -253,7 +252,7 @@ func (LLMSuite) TestDangTools(ctx context.Context, t *testctx.T) {
 			"vault | reveal")
 		require.Equal(t, 2, strings.Count(out, "[Tool result]: from-the-host"), out)
 		require.Contains(t, out, `String! = "from-the-host"`)
-		require.Contains(t, out, `secret "env://VAULT_TOKEN" is read from the caller's host, and this client has none`)
+		require.Contains(t, out, `String! = "env://VAULT_TOKEN"`)
 		require.True(t, strings.HasSuffix(strings.TrimSpace(out), "from-the-host"), out)
 	})
 

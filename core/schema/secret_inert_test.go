@@ -27,12 +27,12 @@ func (s *inertSecretServer) SpecificClientAttachableConn(_ context.Context, clie
 	return nil, false, status.Error(codes.PermissionDenied, "SDK client access to host session attachables is denied")
 }
 
-// A recipe holding a host secret, replayed first by a client with no host
-// (after a resume, a DangEval snippet loading an agent's tool object before
-// the agent did), must not leave a result behind that binds the secret to
-// that client: the agent loading the same recipe next would get a secret
-// nobody can read.
-func TestInertClientSecretReplayLeavesNothingCached(t *testing.T) {
+// A recipe holding a host secret can be replayed first by a client with no
+// host: a host-inert client rebuilding an agent's tool object from its ID
+// (a worker's tools, a DangEval snippet after a resume). The replay must
+// load, since most such objects never read the secret there, and must not
+// leave a result behind that keeps the host client from reading it next.
+func TestInertClientSecretReplay(t *testing.T) {
 	const session = "inert-secret"
 	host := &engine.ClientMetadata{SessionID: session, ClientID: "host"}
 	snippet := &engine.ClientMetadata{SessionID: session, ClientID: "snippet", InertAttachables: true}
@@ -94,13 +94,12 @@ func TestInertClientSecretReplayLeavesNothingCached(t *testing.T) {
 	recipe, err := holder.RecipeID(ctx)
 	require.NoError(t, err)
 
-	// After a resume, the snippet replays it first: it can't read the secret,
-	// and makes nothing a later caller could get.
+	// After a resume, the host-less client replays it first: it loads, though
+	// it couldn't read the secret.
 	resumed := newCache()
 	ctx, dag = as(resumed, snippet)
 	_, err = dagql.NewID[*core.Container](recipe).Load(ctx, dag)
-	require.ErrorContains(t, err, `"env://TOKEN" is read from the caller's host, and this client has none`)
-	require.ErrorContains(t, err, "SDK client access to host session attachables is denied")
+	require.NoError(t, err, "a tool object holding a host secret must load in a host-less client")
 
 	// The agent replays it next, and reads it from its host.
 	ctx, dag = as(resumed, host)
