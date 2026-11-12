@@ -42,6 +42,11 @@ type DangToolEnv struct {
 	// scope's API, as module code sees it: the core API and the modules the
 	// conversation's schema serves.
 	SchemaFile func(context.Context) (dagql.Result[*File], error)
+
+	// Deps returns the dependencies behind SchemaFile, for a nested client
+	// that runs code in the default scope to serve (see
+	// engine.ClientMetadata.ServedDeps).
+	Deps func(context.Context) (*SchemaBuilder, error)
 }
 
 // DangCheckArgs are DangCheck's arguments.
@@ -87,7 +92,7 @@ const (
 	dangCheckSearchDescription = "Words to find in names and docs, e.g. \"sort\" or \"escape html\"."
 
 	dangEvalDescription = "Run Dang: printed output, then the result as `TYPE = value`, then its type's member names. Scope as for DangCheck, without positions: `at` a module runs the snippet as one more file of it, after its top level. A type error runs nothing." + "\n" +
-		"Engine calls reach the core API, or with `at` the module's dependencies and own API; they are counted, and nothing is applied to the workspace. Objects stay lazy (shown as their query) until you select a scalar such as `.stdout` or `.sync`. Each call is standalone; wrap long runs in Timeout."
+		"Engine calls go through the scope's API (with `at`, the module's dependencies and own API), with no access to the host; they are counted, and nothing is applied to the workspace. Objects stay lazy (shown as their query) until you select a scalar such as `.stdout` or `.sync`. Each call is standalone; wrap long runs in Timeout."
 	dangEvalSourceDescription = "Dang statements to run; the last expression is the result."
 	dangEvalAtDescription     = "A Dang module of the workspace (name or directory), or a .dang file of one. Default: the workspace scope."
 )
@@ -109,6 +114,10 @@ func (m *MCP) loadDangTools(srv *dagql.Server, allTools *LLMToolSet) {
 					return dagql.Result[*File]{}, err
 				}
 				return deps.SchemaIntrospectionJSONFileForModule(ctx)
+			},
+			Deps: func(ctx context.Context) (*SchemaBuilder, error) {
+				_, deps, err := m.baseDeps(ctx)
+				return deps, err
 			},
 		}
 	}

@@ -42,8 +42,9 @@ func (LLMSuite) TestDangTools(ctx context.Context, t *testctx.T) {
 		{"DangEval", map[string]string{"source": `container.from("alpine")`}},
 		{"DangEval", map[string]string{"at": "notes", "source": `shout("dang")`}},
 		{"DangEval", map[string]string{"source": "print(\"never\")\nnope"}},
-		// The workspace scope runs against the core API: an installed
-		// module is a type error, not a runtime failure.
+		// The workspace scope runs against the conversation's API, the
+		// installed module included, as DangCheck checks against it.
+		{"DangCheck", map[string]string{"source": `notes.greet(name: "x")`}},
 		{"DangEval", map[string]string{"source": `notes.greet(name: "x")`}},
 	}
 	const prompt = "probe some dang"
@@ -90,11 +91,13 @@ func (LLMSuite) TestDangTools(ctx context.Context, t *testctx.T) {
 		`String! = "DANG"`,
 		// A type error runs nothing.
 		"nothing ran",
-		`<check>:1:1: error: "notes" not found`,
+		// An installed module is callable without `at`.
+		`String! = "hello, X"`,
 		"done",
 	} {
 		require.Contains(t, out, want)
 	}
+	require.NotContains(t, out, `"notes" not found`)
 	require.Regexp(t, `ok · \d+ms · 0 engine calls · workspace scope`, out)
 	require.Regexp(t, `ok · [\d.]+m?s · [1-9]\d* engine calls? · workspace scope`, out)
 	require.NotContains(t, out, "never\n")
