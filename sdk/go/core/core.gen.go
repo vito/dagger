@@ -22620,26 +22620,10 @@ func (r *Workspace) Snapshot() *Workspace {
 	}
 }
 
-// WorkspaceWithChangesOpts contains options for Workspace.WithChanges
-type WorkspaceWithChangesOpts struct {
-	// Directory the changeset was measured from, where it is applied. Relative paths resolve from the workspace cwd; absolute paths resolve from the workspace root.
-	//
-	// Tool changesets and Workspace.changes are measured from the cwd: pass ".".
-	//
-	// Default: "/"
-	Path string
-}
-
 // Return this workspace with a changeset applied, without mutating the source.
-func (r *Workspace) WithChanges(changes *Changeset, opts ...WorkspaceWithChangesOpts) *Workspace {
+func (r *Workspace) WithChanges(changes *Changeset) *Workspace {
 	assertNotNil("changes", changes)
 	q := r.query.Select("withChanges")
-	for i := len(opts) - 1; i >= 0; i-- {
-		// `path` optional argument
-		if !querybuilder.IsZeroValue(opts[i].Path) {
-			q = q.Arg("path", opts[i].Path)
-		}
-	}
 	q = q.Arg("changes", changes)
 
 	return &Workspace{

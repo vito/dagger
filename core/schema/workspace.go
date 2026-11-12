@@ -311,9 +311,6 @@ func (s *workspaceSchema) Install(srv *dagql.Server) {
 			Doc("Return this workspace with a changeset applied, without mutating the source.").
 			Args(
 				dagql.Arg("changes").Doc("Changes to apply."),
-				dagql.Arg("path").View(AfterVersion("v1.0.0-beta.28")).Doc(
-					`Directory the changeset was measured from, where it is applied. Relative paths resolve from the workspace cwd; absolute paths resolve from the workspace root.`,
-					`Tool changesets and Workspace.changes are measured from the cwd: pass ".".`),
 			),
 		dagql.NodeFunc("withPatchFile", s.withPatchFile).
 			View(AfterVersion("v1.0.0-0")).
@@ -2339,44 +2336,12 @@ func (s *workspaceSchema) withoutDirectory(
 	})
 }
 
-// workspaceWithChangesArgs are Workspace.withChanges' arguments.
-type workspaceWithChangesArgs struct {
-	Changes dagql.ID[*core.Changeset]
-	// Path is the directory the changeset was measured from: the root by
-	// default, as before the argument existed.
-	Path string `default:"/"`
-}
-
 func (s *workspaceSchema) withChanges(
 	ctx context.Context,
 	parent dagql.ObjectResult[*core.Workspace],
-	args workspaceWithChangesArgs,
+	args withChangesArgs,
 ) (dagql.ObjectResult[*core.Workspace], error) {
-	resolved, err := resolveWorkspacePath(args.Path, parent.Self().Cwd)
-	if err != nil {
-		return dagql.ObjectResult[*core.Workspace]{}, err
-	}
-	prefix := filepath.ToSlash(resolved)
-	if prefix == "." || prefix == "" {
-		return s.applyChangeset(ctx, parent, args.Changes, nil)
-	}
-	srv, err := core.CurrentDagqlServer(ctx)
-	if err != nil {
-		return dagql.ObjectResult[*core.Workspace]{}, err
-	}
-	changes, err := args.Changes.Load(ctx, srv)
-	if err != nil {
-		return dagql.ObjectResult[*core.Workspace]{}, err
-	}
-	placed, err := core.PlaceChangeset(ctx, srv, changes, prefix)
-	if err != nil {
-		return dagql.ObjectResult[*core.Workspace]{}, err
-	}
-	placedID, err := placed.ID()
-	if err != nil {
-		return dagql.ObjectResult[*core.Workspace]{}, err
-	}
-	return s.applyChangeset(ctx, parent, dagql.NewID[*core.Changeset](placedID), nil)
+	return s.applyChangeset(ctx, parent, args.Changes, nil)
 }
 
 // applyChangeset overlays a changeset onto the workspace, optionally mutating
