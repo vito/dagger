@@ -144,6 +144,30 @@ func valueDeclarations(values []dangValue) string {
 	return b.String()
 }
 
+// attributeBindingFailures reports a failure located in the declarations of
+// the scope's values (see valueDeclarations), a file no reader has, against
+// the value that failed to load instead, without a position: line N
+// declares bound[N-1].
+func (sc *dangScope) attributeBindingFailures(diags []analysis.Diagnostic) {
+	for i, d := range diags {
+		if path.Base(d.Path) != dangWorkspaceFile {
+			continue
+		}
+		line := d.Range.Start.Line
+		if line < 1 || line > len(sc.bound) {
+			continue
+		}
+		v := sc.bound[line-1]
+		what := "bound tool object"
+		if v.name == "ws" {
+			what = "the conversation's workspace"
+		}
+		diags[i].Path = ""
+		diags[i].Range = analysis.Range{}
+		diags[i].Message = fmt.Sprintf("`%s` (%s) failed to load: %s", v.name, what, d.Message)
+	}
+}
+
 // dangReport accumulates a tool's text output.
 type dangReport struct {
 	strings.Builder

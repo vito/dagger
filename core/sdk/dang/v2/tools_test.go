@@ -3,6 +3,7 @@ package dangv2
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -281,12 +282,19 @@ type fakeAPI struct {
 	mu      sync.Mutex
 	queries []string
 	answer  func(query string) string
+	// fail, if set, fails the queries it returns an error for.
+	fail func(query string) error
 }
 
 func (f *fakeAPI) MakeRequest(_ context.Context, req *graphql.Request, resp *graphql.Response) error {
 	f.mu.Lock()
 	f.queries = append(f.queries, req.Query)
 	f.mu.Unlock()
+	if f.fail != nil {
+		if err := f.fail(req.Query); err != nil {
+			return err
+		}
+	}
 	return json.Unmarshal([]byte(f.answer(req.Query)), resp.Data)
 }
 
@@ -396,6 +404,31 @@ func TestDangBoundValues(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, out, `[String!]! = ["a.txt"]`)
 	require.Regexp(t, ` · \d engine calls · `, out)
+
+	t.Run("a value that fails to load is named, not its hidden declaration", func(t *testing.T) {
+		sc := workspaceTestScope(t)
+		bound := []dangValue{
+			{name: "ws", typeName: "Workspace", id: "ws-id"},
+			{name: "scratch", typeName: "Directory", id: "dir-id"},
+		}
+		sc.values = valueDeclarations(bound)
+		sc.bound = bound
+		api := &fakeAPI{
+			answer: func(string) string { return "{}" },
+			fail: func(q string) error {
+				if strings.Contains(q, "dir-id") {
+					return errors.New("module: load: no host")
+				}
+				return nil
+			},
+		}
+		out, err := evalTest(t, sc, "scratch.entries", api)
+		require.NoError(t, err, "a failure is reported, not a tool error")
+		require.Contains(t, out, "error: `scratch` (bound tool object) failed to load: ")
+		require.Contains(t, out, "module: load: no host")
+		require.NotContains(t, out, "<workspace>")
+		require.Contains(t, out, "failed · ")
+	})
 }
 
 // writeAPI answers the queries of snippets over a bound workspace ("ws-id")

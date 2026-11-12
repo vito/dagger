@@ -107,6 +107,7 @@ func evalDang(ctx context.Context, sc *dangScope, source string, client graphql.
 		if len(diags) == 0 {
 			diags = []analysis.Diagnostic{{Severity: analysis.SeverityError, Message: err.Error()}}
 		}
+		sc.attributeBindingFailures(diags)
 		r.diagnostics(sc, diags)
 		r.linef("%s", footer("failed"))
 		return calls.secrets.scrub(r.String()), nil
