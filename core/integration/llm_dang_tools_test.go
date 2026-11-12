@@ -23,6 +23,13 @@ type dangToolCall struct {
 // conversation the shell pipeline setup prepares, and returns its transcript.
 func runDangToolCalls(ctx context.Context, t *testctx.T, c *dagger.Client, base *core.Container, shell func(string) core.WithContainerFunc, setup string, calls []dangToolCall) string {
 	t.Helper()
+	return runDangToolCallsThen(ctx, t, c, base, shell, setup, calls, "")
+}
+
+// runDangToolCallsThen is runDangToolCalls, then runs the shell statement
+// then in the same session, its output following the transcript's.
+func runDangToolCallsThen(ctx context.Context, t *testctx.T, c *dagger.Client, base *core.Container, shell func(string) core.WithContainerFunc, setup string, calls []dangToolCall, then string) string {
+	t.Helper()
 	const prompt = "probe some dang"
 	script := core.NewQuery(c).LLM().WithPrompt(prompt)
 	for i, call := range calls {
@@ -38,9 +45,11 @@ func runDangToolCalls(ctx context.Context, t *testctx.T, c *dagger.Client, base 
 	model := cannedRecordingModel(ctx, t, c, script.WithResponse([]core.LLMContentBlockInput{
 		{Kind: core.LLMContentBlockKindText, Text: "done"},
 	}))
-	out, err := base.With(shell(fmt.Sprintf(
-		`llm --model="%s" | %s | with-prompt "%s" | loop | transcript`, model, setup, prompt,
-	))).Stdout(ctx)
+	statements := fmt.Sprintf(`llm --model="%s" | %s | with-prompt "%s" | loop | transcript`, model, setup, prompt)
+	if then != "" {
+		statements += "\n" + then
+	}
+	out, err := base.With(shell(statements)).Stdout(ctx)
 	require.NoError(t, err)
 	require.Contains(t, out, "done")
 	return out
@@ -202,6 +211,50 @@ func (LLMSuite) TestDangTools(ctx context.Context, t *testctx.T) {
 		require.Contains(t, out, `String! = "helper"`)
 		require.NotContains(t, out, "PermissionDenied")
 		require.NotContains(t, out, "failed to load")
+	})
+
+	t.Run("a host secret in a git tool module", func(ctx context.Context, t *testctx.T) {
+		// A git tool module holding a secret its settings read from the
+		// caller's host, as agent tools (a GitHub token) do. The agent's
+		// tool calls and a snippet reading the bound object both read it. A
+		// snippet's client has no host: a secret it asks for itself is
+		// refused rather than bound to it, where nobody could read it and
+		// later callers of the same recipe would get it.
+		vault := core.NewQuery(c).Directory().
+			WithNewFile("dagger-module.toml", "name = \"vault\"\nengineVersion = \"latest\"\n\n[runtime]\n  source = \"dang\"\n").
+			WithNewFile("main.dang", `type Vault {
+  pub token: Secret!
+
+  new(token: Secret!) {
+    self.token = token
+    self
+  }
+
+  pub reveal: String! {
+    token.plaintext
+  }
+}
+`)
+		svc, _ := gitSmartHTTPServiceDirAuth(ctx, t, c, "", makeGitDir(c, vault, "main"), "", nil)
+		repo := "http://" + startedServiceIP(ctx, t, c, svc) + "/repo.git"
+		withVault := base.
+			WithEnvVariable("VAULT_TOKEN", "from-the-host").
+			WithNewFile("dagger.toml", fmt.Sprintf(
+				"[modules.notes]\nsource = %q\n\n[modules.vault]\nsource = %q\n\n[modules.vault.settings]\ntoken = \"env://VAULT_TOKEN\"\n",
+				".dagger/modules/notes", repo+"@main"))
+		out := runDangToolCallsThen(ctx, t, c, withVault, daggerShell, bind+` | with-tools $(vault)`,
+			[]dangToolCall{
+				{"reveal", map[string]string{}},
+				{"DangEval", map[string]string{"source": `vault.reveal`}},
+				{"DangEval", map[string]string{"source": `secret(uri: "env://VAULT_TOKEN").uri`}},
+				{"reveal", map[string]string{}},
+			},
+			// The conversation's own client, after the snippets.
+			"vault | reveal")
+		require.Equal(t, 2, strings.Count(out, "[Tool result]: from-the-host"), out)
+		require.Contains(t, out, `String! = "from-the-host"`)
+		require.Contains(t, out, `secret "env://VAULT_TOKEN" is read from the caller's host, and this client has none`)
+		require.True(t, strings.HasSuffix(strings.TrimSpace(out), "from-the-host"), out)
 	})
 
 	t.Run("a commit through ws is written", func(ctx context.Context, t *testctx.T) {

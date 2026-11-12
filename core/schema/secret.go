@@ -11,6 +11,8 @@ import (
 	"github.com/dagger/dagger/engine/client/secretprovider"
 	"github.com/dagger/dagger/engine/slog"
 	"github.com/opencontainers/go-digest"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type secretSchema struct{}
@@ -85,6 +87,18 @@ func (s *secretSchema) secret(
 	}
 	if _, _, err := secretprovider.ResolverForID(args.URI); err != nil {
 		return dagql.ObjectResult[*core.Secret]{}, err
+	}
+	if clientMetadata.InertAttachables {
+		// Every provider reads the secret from the caller's host, and this
+		// client has none (an in-engine SDK client: a Dang module's runtime,
+		// a DangEval snippet's). Bound to it, the secret could never be read,
+		// and the result, cached under the call's recipe, would hand that
+		// dead binding to every later caller loading the same recipe: an
+		// agent's tool object, say, that a snippet replayed first after a
+		// resume. Failing leaves nothing cached for the next caller, which
+		// has a host, to resolve.
+		return dagql.ObjectResult[*core.Secret]{}, fmt.Errorf("%q is read from the caller's host, and this client has none: %w",
+			args.URI, status.Error(codes.PermissionDenied, "SDK client access to host session attachables is denied"))
 	}
 
 	concreteVal := &core.Secret{
