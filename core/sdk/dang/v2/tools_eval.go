@@ -135,15 +135,19 @@ func evalDang(ctx context.Context, sc *dangScope, source string, client graphql.
 
 	writeOutput()
 	wroteWS := slices.ContainsFunc(writes, func(w dangWrite) bool { return w.name == "ws" })
-	reportEvalResult(ctx, &r, calls, val, ran.Type, wroteWS)
+	unwritten := reportEvalResult(ctx, &r, calls, val, ran.Type, wroteWS)
 	r.linef("%s", footer("ok"))
-	if write != nil && len(sc.bound) > 0 {
+	switch {
+	case len(writes) > 0 && write != nil:
 		summary, err := write(ctx, writes)
 		if err != nil {
 			r.linef("write failed: %s", err)
 		} else if summary != "" {
 			r.linef("%s", summary)
 		}
+	case unwritten:
+		// Only where it matters: a result that looks like a write.
+		r.linef("0 writes")
 	}
 	return calls.secrets.scrub(r.String()), nil
 }
@@ -208,23 +212,25 @@ func reassignedNames(source string, version dang.Version) map[string]bool {
 // reportEvalResult reports a snippet's result: its value and its type's
 // members. A result is described, never applied: writing is assigning (see
 // finalWrites), so a Workspace or Changeset the snippet only returns says
-// how to write it.
-func reportEvalResult(ctx context.Context, r *dangReport, calls *countingClient, val dang.Value, typ hm.Type, wroteWS bool) {
+// how to write it; reportEvalResult reports whether it was one.
+func reportEvalResult(ctx context.Context, r *dangReport, calls *countingClient, val dang.Value, typ hm.Type, wroteWS bool) (unwritten bool) {
 	r.linef("%s", calls.secrets.scrub(dang.Describe(ctx, val, typ, dang.DescribeOptions{})))
 	if typ == nil {
-		return
+		return false
 	}
 	switch strings.TrimPrefix(strings.TrimSuffix(dang.FormatType(typ), "!"), "Dagger.") {
 	case "Changeset":
 		r.linef("(not applied; to write it, assign it: ws = ws.withChanges(…))")
+		unwritten = true
 	case "Workspace":
 		if !wroteWS {
 			r.linef("(not applied; to write it, assign it: ws = …)")
+			unwritten = true
 		}
 	}
 	members := analysis.TypeMembers(typ)
 	if len(members) == 0 {
-		return
+		return unwritten
 	}
 	names := make([]string, 0, len(members))
 	for i, m := range members {
@@ -235,6 +241,7 @@ func reportEvalResult(ctx context.Context, r *dangReport, calls *countingClient,
 		names = append(names, m.Name)
 	}
 	r.linef("members: %s", strings.Join(names, " "))
+	return unwritten
 }
 
 func hasErrors(diags []analysis.Diagnostic) bool {

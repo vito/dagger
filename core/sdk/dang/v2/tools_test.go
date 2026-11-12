@@ -458,9 +458,15 @@ func TestDangEvalWrites(t *testing.T) {
 	t.Run("calling methods writes nothing", func(t *testing.T) {
 		out, got, calls := eval(t, scope(workspaceTestScope(t)), `ws.withNewFile(path: "a", contents: "b")`)
 		require.Empty(t, got)
-		require.Equal(t, 1, calls)
+		require.Zero(t, calls)
 		require.Contains(t, out, "(not applied; to write it, assign it: ws = …)")
 		require.True(t, strings.HasSuffix(out, "\n0 writes\n"), out)
+	})
+
+	t.Run("a read-only probe reports no writes", func(t *testing.T) {
+		out, _, calls := eval(t, scope(workspaceTestScope(t)), `[1, 2].length`)
+		require.Zero(t, calls)
+		require.NotContains(t, out, "writes")
 	})
 
 	t.Run("an unassigned changeset is not applied", func(t *testing.T) {

@@ -291,16 +291,21 @@ func (m *MCP) dangScope(ctx context.Context) (*DangScope, error) {
 }
 
 // applyDangWrites applies what a DangEval snippet wrote: assignment is the
-// write. The final `ws` is diffed against start, the workspace the snippet
-// began with, and the changes applied as a tool's Changeset is (relative to
-// the cwd, as Workspace.changes measures them); a reassigned tool object is
-// rebound as a tool call returning its own type rebinds it. It summarizes
-// what was written, then any patch.
+// write. The final `ws` becomes the conversation's workspace, as a tool
+// returning a Workspace makes it (commits and resets included); a reassigned
+// tool object is rebound as a tool call returning its own type rebinds it.
+// start is the workspace the snippet began with. It summarizes what was
+// written.
+//
+// Writes are all or nothing: every final value is loaded and validated, and
+// each tool object's new state computed, before anything changes; then they
+// are committed together (see commitDangWrites), and a commit that fails
+// undoes the ones before it.
 func (m *MCP) applyDangWrites(ctx context.Context, srv *dagql.Server, start dagql.ObjectResult[*Workspace], writes []DangWrite) (string, error) {
 	if len(writes) == 0 {
 		return "0 writes", nil
 	}
-	var summary, patches []string
+	var commits []dangCommit
 	for _, w := range writes {
 		var id call.ID
 		if err := id.Decode(w.ID); err != nil {
@@ -311,14 +316,16 @@ func (m *MCP) applyDangWrites(ctx context.Context, srv *dagql.Server, start dagq
 			return "", fmt.Errorf("load the final %s: %w", w.Name, err)
 		}
 		if w.Name == "ws" {
-			line, patch, err := m.writeDangWorkspace(ctx, srv, start, final)
-			if err != nil {
-				return "", err
+			ws, ok := dagql.UnwrapAs[dagql.ObjectResult[*Workspace]](final)
+			if !ok {
+				return "", fmt.Errorf("write ws: got a %s, not a Workspace", final.Type().Name())
 			}
-			summary = append(summary, line)
-			if patch != "" {
-				patches = append(patches, patch)
+			if start.Self() == nil {
+				return "", fmt.Errorf("write ws: no workspace bound")
 			}
+			commits = append(commits, dangCommit{name: "ws", apply: func() (string, error) {
+				return m.writeDangWorkspace(ctx, srv, ws)
+			}})
 			continue
 		}
 		recv, ok, err := m.boundToolObject(ctx, srv, w.TypeName)
@@ -330,60 +337,83 @@ func (m *MCP) applyDangWrites(ctx context.Context, srv *dagql.Server, start dagq
 		}
 		state, changed, err := m.fieldwiseState(ctx, srv, recv, final)
 		if err != nil {
-			return "", err
+			return "", fmt.Errorf("write %s: %w", w.Name, err)
 		}
-		if !changed {
-			summary = append(summary, w.Name+" state unchanged")
-			continue
-		}
-		if err := m.rebindBoundTool(w.TypeName, state); err != nil {
-			return "", err
-		}
-		summary = append(summary, w.Name+" state updated")
+		name, typeName := w.Name, w.TypeName
+		commits = append(commits, dangCommit{name: name, apply: func() (string, error) {
+			if !changed {
+				return name + " state unchanged", nil
+			}
+			if err := m.rebindBoundTool(typeName, state); err != nil {
+				return "", err
+			}
+			return name + " state updated", nil
+		}})
 	}
-	return strings.Join(append([]string{strings.Join(summary, " · ")}, patches...), "\n"), nil
+	if err := m.guardStateChange(); err != nil {
+		return "", err
+	}
+	return m.commitDangWrites(commits)
 }
 
-// writeDangWorkspace applies the difference between start and final, a
-// Workspace a snippet assigned to `ws`, to the bound workspace.
-func (m *MCP) writeDangWorkspace(ctx context.Context, srv *dagql.Server, start dagql.ObjectResult[*Workspace], final dagql.AnyObjectResult) (line, patch string, _ error) {
-	ws, ok := dagql.UnwrapAs[dagql.ObjectResult[*Workspace]](final)
-	if !ok {
-		return "", "", fmt.Errorf("write ws: got a %s, not a Workspace", final.Type().Name())
+// dangCommit is one resolved write of a DangEval snippet, ready to apply.
+type dangCommit struct {
+	name string
+	// apply makes the write and summarizes it: a first line, then any
+	// detail (a workspace's patch).
+	apply func() (string, error)
+}
+
+// commitDangWrites applies resolved writes in order. If one fails, the
+// workspace, the bindings and the state-changed mark are restored to what
+// they were before the first, so a failed call has written nothing.
+func (m *MCP) commitDangWrites(commits []dangCommit) (string, error) {
+	m.mu.Lock()
+	prevBound := slices.Clone(m.boundTools)
+	prevChanged := m.stateChanged
+	m.mu.Unlock()
+	prevWorkspace := m.workspace
+
+	var lines, details []string
+	for _, c := range commits {
+		out, err := c.apply()
+		if err != nil {
+			m.workspace = prevWorkspace
+			m.mu.Lock()
+			m.boundTools = prevBound
+			m.stateChanged = prevChanged
+			m.mu.Unlock()
+			return "", fmt.Errorf("write %s: %w (nothing was written)", c.name, err)
+		}
+		line, detail, _ := strings.Cut(out, "\n")
+		lines = append(lines, line)
+		if detail != "" {
+			details = append(details, detail)
+		}
 	}
-	if start.Self() == nil {
-		return "", "", fmt.Errorf("write ws: no workspace bound")
-	}
-	startID, err := start.ID()
+	return strings.Join(append([]string{strings.Join(lines, " · ")}, details...), "\n"), nil
+}
+
+// writeDangWorkspace makes final, a Workspace a snippet assigned to `ws`,
+// the conversation's workspace, as a tool returning it does
+// (rebindWorkspace): its commits, resets and file edits all carry over, and
+// the summary says what changed.
+func (m *MCP) writeDangWorkspace(ctx context.Context, srv *dagql.Server, final dagql.ObjectResult[*Workspace]) (string, error) {
+	summary, err := m.rebindWorkspace(ctx, srv, final)
 	if err != nil {
-		return "", "", err
+		return "", err
 	}
-	var changes dagql.ObjectResult[*Changeset]
-	if err := srv.Select(ctx, ws, &changes, dagql.Selector{
-		View:  srv.View,
-		Field: "changes",
-		Args:  []dagql.NamedInput{{Name: "from", Value: dagql.Opt(dagql.NewID[*Workspace](startID))}},
-	}); err != nil {
-		return "", "", fmt.Errorf("write ws: %w", err)
+	summary = strings.TrimSpace(summary)
+	if summary == "" {
+		return "ws unchanged", nil
 	}
-	if err := changes.Self().Evaluate(ctx); err != nil {
-		return "", "", fmt.Errorf("write ws: %w", err)
+	line := "ws written"
+	if n := strings.Count(summary, "diff --git "); n > 0 {
+		files := "files"
+		if n == 1 {
+			files = "file"
+		}
+		line = fmt.Sprintf("ws written (%d %s)", n, files)
 	}
-	paths, err := changes.Self().ComputePaths(ctx)
-	if err != nil {
-		return "", "", fmt.Errorf("write ws: %w", err)
-	}
-	n := len(paths.Added) + len(paths.Modified) + len(paths.AllRemoved)
-	if n == 0 {
-		return "ws unchanged", "", nil
-	}
-	patch, err = m.applyChangeset(ctx, srv, changes)
-	if err != nil {
-		return "", "", fmt.Errorf("write ws: %w", err)
-	}
-	files := "files"
-	if n == 1 {
-		files = "file"
-	}
-	return fmt.Sprintf("ws written (%d %s)", n, files), patch, nil
+	return line + "\n" + summary, nil
 }

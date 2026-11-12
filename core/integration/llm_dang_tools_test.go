@@ -174,4 +174,25 @@ func (LLMSuite) TestDangTools(ctx context.Context, t *testctx.T) {
 			require.Contains(t, out, want)
 		}
 	})
+
+	t.Run("a commit through ws is written", func(ctx context.Context, t *testctx.T) {
+		// A commit moves HEAD without leaving a file delta: writing ws makes
+		// the committed workspace the conversation's, as a tool returning it
+		// would, rather than diffing files. The snippet's client has no host,
+		// so the workspace is a snapshot and the author is explicit.
+		committed := base.
+			WithExec([]string{"git", "add", "."}).
+			WithExec([]string{"git", "commit", "-m", "initial"})
+		out := runDangToolCalls(ctx, t, c, committed, daggerShellNoMod,
+			`with-workspace --workspace $(current-workspace | snapshot)`,
+			[]dangToolCall{
+				{"DangEval", map[string]string{"source": `ws = ws.withCommit(changes: ws.withNewFile(path: "committed.txt", contents: "c").changes, message: "commit from dang", date: "2026-01-01T00:00:00Z", authorName: "Dang", authorEmail: "dang@example.com")`}},
+				{"DangEval", map[string]string{"source": `ws.git.head.log(limit: 1).{{message}}`}},
+				{"DangEval", map[string]string{"source": `ws.file("committed.txt").contents`}},
+			})
+		require.Contains(t, out, "ws written")
+		require.NotContains(t, out, "ws unchanged")
+		require.Contains(t, out, `message: "commit from dang`)
+		require.Contains(t, out, `String! = "c"`)
+	})
 }
