@@ -2561,6 +2561,7 @@ func (srv *Server) ServeHTTPToNestedClient(
 		return
 	}
 	clientMetadata := nestedClientMetadataForRequest(r.Header, nestedClientMetadata)
+	clientMetadata.InertAttachables = inertAttachables
 
 	var moduleContext dagql.ObjectResult[*core.Module]
 	if moduleCtx != nil {

@@ -288,6 +288,13 @@ type ClientMetadata struct {
 	// client headers.
 	ServedDeps any `json:"-"`
 
+	// InertAttachables marks an in-engine nested client the server denies
+	// every host session attachable (see ServeHTTPToNestedClient), so
+	// operations that read the caller's host, such as finding its outer
+	// .env, know there is none. Set by the server, never read from client
+	// headers.
+	InertAttachables bool `json:"-"`
+
 	// Profile enables engine wall-clock profiling (wcprof) for the duration
 	// of this client's work. Experimental; the recorded events are retrieved
 	// via the engine debug endpoints.
