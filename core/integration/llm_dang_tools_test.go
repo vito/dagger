@@ -82,6 +82,17 @@ func (LLMSuite) TestDangTools(ctx context.Context, t *testctx.T) {
 			// host to find an outer .env on.
 			{"DangEval", map[string]string{"source": `ws.artifacts.items.{{moduleName}}`}},
 			{"DangEval", map[string]string{"source": `ws.moduleSource(path: "/.dagger/modules/helper").asModule.name`}},
+			// Assignment is the write.
+			{"DangEval", map[string]string{"source": `ws = ws.withNewFile(path: "written.txt", contents: "w")`}},
+			{"DangEval", map[string]string{"source": `ws.file("written.txt").contents`}},
+			// A failure writes nothing.
+			{"DangEval", map[string]string{"source": "ws = ws.withNewFile(path: \"nope.txt\", contents: \"x\")\nraise \"boom\""}},
+			{"DangEval", map[string]string{"source": `ws.directory("/").entries.contains("nope.txt")`}},
+			// A workspace only returned is not written.
+			{"DangEval", map[string]string{"source": `ws.withNewFile(path: "draft.txt", contents: "d")`}},
+			// ws is bound, and written, in a module's scope too.
+			{"DangEval", map[string]string{"at": "notes", "source": `ws = ws.withNewFile(path: "from-module.txt", contents: shout("m"))`}},
+			{"DangEval", map[string]string{"source": `ws.file("from-module.txt").contents`}},
 		})
 		for _, want := range []string{
 			// A member reference describes the member.
@@ -113,9 +124,16 @@ func (LLMSuite) TestDangTools(ctx context.Context, t *testctx.T) {
 			// The workspace's modules load from a snippet.
 			`moduleName: "notes"`,
 			`String! = "helper"`,
+			// Writes.
+			"ws written (1 file)",
+			`String! = "w"`,
+			"(not applied; to write it, assign it: ws = …)",
+			"0 writes",
+			`String! = "M"`,
 		} {
 			require.Contains(t, out, want)
 		}
+		require.Regexp(t, `contains\(\\"nope.txt\\"\)"\}\)\s+\[Tool result\]: Boolean! = false`, out)
 		require.NotContains(t, out, `"notes" not found`)
 		require.NotContains(t, out, "PermissionDenied")
 		require.Regexp(t, `ok · \d+ms · 0 engine calls · workspace scope`, out)
@@ -137,12 +155,21 @@ func (LLMSuite) TestDangTools(ctx context.Context, t *testctx.T) {
 				// keeps its own.
 				{"DangEval", map[string]string{"source": `notes.withGreeting(greeting: "hi, ").greeting`}},
 				{"DangEval", map[string]string{"source": `notes.greeting`}},
+				// Assigning it is what rebinds it, for later calls.
+				{"DangEval", map[string]string{"source": `notes = notes.withGreeting(greeting: "hey, ")`}},
+				{"DangEval", map[string]string{"source": `notes.greet(name: "x")`}},
+				// In a module's scope too.
+				{"DangEval", map[string]string{"at": "notes", "source": `notes = notes.withGreeting(greeting: shout("o, "))`}},
+				{"DangEval", map[string]string{"source": `notes.greeting`}},
 			})
 		for _, want := range []string{
 			"notes: Dagger.Notes!",
 			`String! = "yo, X"`,
 			`String! = "hi, "`,
 			`String! = "yo, "`,
+			"notes state updated",
+			`String! = "hey, X"`,
+			`String! = "O, "`,
 		} {
 			require.Contains(t, out, want)
 		}

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -31,13 +32,26 @@ const (
 	dangMemberNamesMax = 80
 )
 
+// dangWrite is a bound value a snippet reassigned, with the ID of its final
+// value (see core.DangWrite).
+type dangWrite struct {
+	name, typeName, id string
+}
+
+// dangWriter applies a successful snippet's writes and summarizes them.
+type dangWriter func(context.Context, []dangWrite) (string, error)
+
 // evalDang is DangEval: it checks source as one more file of the scope, and
 // only if that succeeds loads the scope (a module's top level runs) and runs
 // source in it, with the Dagger import's queries sent to client. Printed
 // output goes to output as well as into the report. A type error or a
 // failure is reported like a result, as DangCheck reports diagnostics: the
 // error return is for what keeps it from running at all.
-func evalDang(ctx context.Context, sc *dangScope, source string, client graphql.Client, output io.Writer) (string, error) {
+//
+// Assignment is the write: when source succeeds, the scope's bound values
+// (`ws`, the bound tool objects) it reassigned are handed to write with
+// their final values. A snippet that fails writes nothing.
+func evalDang(ctx context.Context, sc *dangScope, source string, client graphql.Client, output io.Writer, write dangWriter) (string, error) {
 	start := time.Now()
 	var r dangReport
 
@@ -102,27 +116,111 @@ func evalDang(ctx context.Context, sc *dangScope, source string, client graphql.
 		return fail(err)
 	}
 	defer mod.Close()
-	val, typ, err := mod.Eval(ctx, dangEvalName, source)
+	session, err := mod.NewSession(ctx)
+	if err != nil {
+		return fail(err)
+	}
+	ran, err := session.Check(ctx, dangEvalName, source)
+	if err != nil {
+		return fail(err)
+	}
+	val, err := ran.Eval(ctx)
+	if err != nil {
+		return fail(err)
+	}
+	writes, err := finalWrites(ctx, session, mod.Version, sc.bound, source)
 	if err != nil {
 		return fail(err)
 	}
 
 	writeOutput()
-	reportEvalResult(ctx, &r, calls, val, typ)
+	wroteWS := slices.ContainsFunc(writes, func(w dangWrite) bool { return w.name == "ws" })
+	reportEvalResult(ctx, &r, calls, val, ran.Type, wroteWS)
 	r.linef("%s", footer("ok"))
-	return r.String(), nil
+	if write != nil && len(sc.bound) > 0 {
+		summary, err := write(ctx, writes)
+		if err != nil {
+			r.linef("write failed: %s", err)
+		} else if summary != "" {
+			r.linef("%s", summary)
+		}
+	}
+	return calls.secrets.scrub(r.String()), nil
+}
+
+// finalWrites returns the bound values source reassigns, with their values
+// as the session holds them after it ran. A value is written by assigning
+// it (`ws = ws.withChanges(…)`, `editor = editor.todoWrite(…)`); calling a
+// method on it, or returning a new one, writes nothing.
+func finalWrites(ctx context.Context, session *dang.Session, version dang.Version, bound []dangValue, source string) ([]dangWrite, error) {
+	assigned := reassignedNames(source, version)
+	var writes []dangWrite
+	for _, v := range bound {
+		if !assigned[v.name] {
+			continue
+		}
+		read, err := session.Check(ctx, "<"+v.name+">", v.name)
+		if err != nil {
+			return nil, err
+		}
+		final, err := read.Eval(ctx)
+		if err != nil {
+			return nil, err
+		}
+		g, ok := final.(dang.GraphQLValue)
+		if !ok {
+			return nil, fmt.Errorf("%s is a %T, not an API object", v.name, final)
+		}
+		id, err := g.ID(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("write %s: %w", v.name, err)
+		}
+		writes = append(writes, dangWrite{name: v.name, typeName: v.typeName, id: id})
+	}
+	return writes, nil
+}
+
+// reassignedNames are the names source assigns with `=`, anywhere in it.
+func reassignedNames(source string, version dang.Version) map[string]bool {
+	names := map[string]bool{}
+	parsed, err := dang.Parse(dangEvalName, []byte(source), dang.WithVersion(version))
+	if err != nil {
+		return names
+	}
+	block, ok := parsed.(*dang.FileBlock)
+	if !ok {
+		return names
+	}
+	block.Walk(func(n dang.Node) bool {
+		if n == nil {
+			return false
+		}
+		if re, ok := n.(*dang.Reassignment); ok {
+			if sym, ok := re.Target.(*dang.Symbol); ok {
+				names[sym.Name] = true
+			}
+		}
+		return true
+	})
+	return names
 }
 
 // reportEvalResult reports a snippet's result: its value and its type's
-// members. This is where the result of an eval is produced, and all that
-// is done with it: it is described, never applied. In particular a
-// Changeset or a bound tool object's new state the snippet returns changes
-// neither the workspace nor the bindings; acting on a result (as a tool
-// call's is, MCP.routeObjectMethodResult) would start here.
-func reportEvalResult(ctx context.Context, r *dangReport, calls *countingClient, val dang.Value, typ hm.Type) {
+// members. A result is described, never applied: writing is assigning (see
+// finalWrites), so a Workspace or Changeset the snippet only returns says
+// how to write it.
+func reportEvalResult(ctx context.Context, r *dangReport, calls *countingClient, val dang.Value, typ hm.Type, wroteWS bool) {
 	r.linef("%s", calls.secrets.scrub(dang.Describe(ctx, val, typ, dang.DescribeOptions{})))
 	if typ == nil {
 		return
+	}
+	switch strings.TrimPrefix(strings.TrimSuffix(dang.FormatType(typ), "!"), "Dagger.") {
+	case "Changeset":
+		r.linef("(not applied; to write it, assign it: ws = ws.withChanges(…))")
+	case "Workspace":
+		if !wroteWS {
+			r.linef("(not applied; to write it, assign it: ws = …)")
+		}
 	}
 	members := analysis.TypeMembers(typ)
 	if len(members) == 0 {

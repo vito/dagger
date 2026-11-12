@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 
 	"github.com/dagger/dagger/dagql"
+	"github.com/dagger/dagger/dagql/call"
 )
 
 // The Dang builtins: a workbench for agents writing Dang, the language
@@ -43,6 +45,22 @@ type DangToolEnv struct {
 
 	// Scope returns the default scope, as of the call.
 	Scope func(context.Context) (*DangScope, error)
+
+	// Write applies what a successful DangEval snippet wrote, by reassigning
+	// `ws` or a bound tool object, and summarizes it. It is called while
+	// the snippet's client still holds the written values.
+	Write func(context.Context, []DangWrite) (string, error)
+}
+
+// DangWrite is a value of the default scope a DangEval snippet reassigned:
+// its final value, to apply.
+type DangWrite struct {
+	// Name is the binding: "ws", or a bound tool object's name.
+	Name string
+	// TypeName is its GraphQL type.
+	TypeName string
+	// ID is the encoded ID of its final value.
+	ID string
 }
 
 // DangScope is the default scope of a Dang tool call: the conversation's API
@@ -59,6 +77,11 @@ type DangScope struct {
 
 	// Bindings are the conversation's bound tool objects, as of the call.
 	Bindings []DangBinding
+
+	// BoundMods are the modules Bindings need beside an API: their own and
+	// their dependencies. A module scope's nested client serves them beside
+	// its module (see engine.ClientMetadata.ServedDeps).
+	BoundMods []Mod
 
 	// Skipped names the bound tool objects left out of Bindings, and why.
 	Skipped []string
@@ -109,7 +132,7 @@ func registeredDangTools() DangTools {
 // Descriptions of the Dang builtins. Every conversation pays for them, so
 // they stay terse; they are the only guidance pointing at the tools.
 const (
-	dangCheckDescription = "Type-check Dang without running anything. Scope: the core API and installed modules (as `Dagger`) with `ws: Workspace!` and your tool objects bound (by type name: `editor`), or with `at` a Dang module of the workspace, one of its files, or a path:line:col in one (seeing the locals there)." + "\n" +
+	dangCheckDescription = "Type-check Dang without running anything. Scope: the core API and installed modules (as `Dagger`), or with `at` a Dang module of the workspace, one of its files, or a path:line:col in one (seeing the locals there). Either way `ws: Workspace!` and your tool objects (by type name: `editor`) are bound." + "\n" +
 		"Without `source`: the module's or file's errors, warnings and deprecations, as path:line:col." + "\n" +
 		"With `source`: its errors, else what it is. A member reference (`xs.reduce`, `JSON.encode`, `Container.withExec`) gives the member's signature, docs and example; a type name, the type and its members; any other expression, its type and members. Probe before writing a helper (`[\"a\"]` lists every list method), and check after each edit, before running a @check." + "\n" +
 		"`search` ranks builtins, API fields and the module's declarations by name and docs."
@@ -118,7 +141,7 @@ const (
 	dangCheckSearchDescription = "Words to find in names and docs, e.g. \"sort\" or \"escape html\"."
 
 	dangEvalDescription = "Run Dang: printed output, then the result as `TYPE = value`, then its type's member names. Scope as for DangCheck, without positions: `at` a module runs the snippet as one more file of it, after its top level. A type error runs nothing." + "\n" +
-		"Engine calls go through the scope's API (with `at`, the module's dependencies and own API), with no access to the host; they are counted, and nothing is applied to the workspace or your tools' state. Objects stay lazy (shown as their query) until you select a scalar such as `.stdout` or `.sync`. Each call is standalone; wrap long runs in Timeout."
+		"Engine calls go through the scope's API (with `at`, the module's dependencies and own API), with no access to the host, and are counted. Assignment is the write: if the snippet succeeds, a reassigned `ws` (`ws = ws.withChanges(…)`) is applied to the workspace and a reassigned tool object (`editor = editor.todoWrite(…)`) becomes its state; nothing else is. Objects stay lazy (shown as their query) until you select a scalar such as `.stdout` or `.sync`. Each call is standalone; wrap long runs in Timeout."
 	dangEvalSourceDescription = "Dang statements to run; the last expression is the result."
 	dangEvalAtDescription     = "A Dang module of the workspace (name or directory), or a .dang file of one. Default: the workspace scope."
 )
@@ -131,10 +154,14 @@ func (m *MCP) loadDangTools(srv *dagql.Server, allTools *LLMToolSet) {
 		return
 	}
 	env := func() DangToolEnv {
+		start := m.workspace
 		return DangToolEnv{
 			Server:    srv,
-			Workspace: m.workspace,
+			Workspace: start,
 			Scope:     m.dangScope,
+			Write: func(ctx context.Context, writes []DangWrite) (string, error) {
+				return m.applyDangWrites(ctx, srv, start, writes)
+			},
 		}
 	}
 	allTools.Add(LLMTool{
@@ -183,9 +210,9 @@ func (m *MCP) loadDangTools(srv *dagql.Server, allTools *LLMToolSet) {
 // dangScope is the default scope of a Dang tool call: the conversation's
 // API, plus each bound tool object, under its type's lowerCamel name, with
 // its module (and that module's dependencies) served beside the API so its
-// methods type-check and run. Bindings are values only: a call on one from a
-// snippet returns its result, and never rebinds the object or applies a
-// changeset (see MCP.routeObjectMethodResult for what a tool call does).
+// methods type-check and run. A call on a binding from a snippet only returns
+// its result; reassigning the binding is what rebinds the object (see
+// applyDangWrites).
 //
 // Only module objects are bound: a core type's name would shadow a core
 // field (`container`), and `ws` is the workspace already. An object whose
@@ -234,14 +261,18 @@ func (m *MCP) dangScope(ctx context.Context) (*DangScope, error) {
 		seen[name] = true
 		scope.Bindings = append(scope.Bindings, DangBinding{Name: name, TypeName: typeName, ID: encoded})
 		// Its types, not its constructor: the name is the bound value's.
-		scope.Deps = scope.Deps.With(NewUserMod(mod), InstallOpts{SkipConstructor: true})
+		boundMods := []Mod{NewUserMod(mod)}
 		if deps := mod.Self().Deps; deps != nil {
 			for _, dep := range deps.Mods() {
 				if dep.Name() != ModuleName {
-					scope.Deps = scope.Deps.With(dep, InstallOpts{SkipConstructor: true})
+					boundMods = append(boundMods, dep)
 				}
 			}
 		}
+		for _, bm := range boundMods {
+			scope.Deps = scope.Deps.With(bm, InstallOpts{SkipConstructor: true})
+		}
+		scope.BoundMods = append(scope.BoundMods, boundMods...)
 	}
 
 	scope.SchemaFile, err = scope.Deps.SchemaIntrospectionJSONFileForModule(ctx)
@@ -250,11 +281,109 @@ func (m *MCP) dangScope(ctx context.Context) (*DangScope, error) {
 		for _, b := range scope.Bindings {
 			scope.Skipped = append(scope.Skipped, fmt.Sprintf("%s: %v", b.TypeName, err))
 		}
-		scope.Bindings, scope.Deps = nil, base
+		scope.Bindings, scope.BoundMods, scope.Deps = nil, nil, base
 		scope.SchemaFile, err = base.SchemaIntrospectionJSONFileForModule(ctx)
 	}
 	if err != nil {
 		return nil, err
 	}
 	return scope, nil
+}
+
+// applyDangWrites applies what a DangEval snippet wrote: assignment is the
+// write. The final `ws` is diffed against start, the workspace the snippet
+// began with, and the changes applied as a tool's Changeset is (relative to
+// the cwd, as Workspace.changes measures them); a reassigned tool object is
+// rebound as a tool call returning its own type rebinds it. It summarizes
+// what was written, then any patch.
+func (m *MCP) applyDangWrites(ctx context.Context, srv *dagql.Server, start dagql.ObjectResult[*Workspace], writes []DangWrite) (string, error) {
+	if len(writes) == 0 {
+		return "0 writes", nil
+	}
+	var summary, patches []string
+	for _, w := range writes {
+		var id call.ID
+		if err := id.Decode(w.ID); err != nil {
+			return "", fmt.Errorf("decode the final %s: %w", w.Name, err)
+		}
+		final, err := srv.Load(ctx, &id)
+		if err != nil {
+			return "", fmt.Errorf("load the final %s: %w", w.Name, err)
+		}
+		if w.Name == "ws" {
+			line, patch, err := m.writeDangWorkspace(ctx, srv, start, final)
+			if err != nil {
+				return "", err
+			}
+			summary = append(summary, line)
+			if patch != "" {
+				patches = append(patches, patch)
+			}
+			continue
+		}
+		recv, ok, err := m.boundToolObject(ctx, srv, w.TypeName)
+		if err != nil {
+			return "", err
+		}
+		if !ok {
+			return "", fmt.Errorf("write %s: no bound %s", w.Name, w.TypeName)
+		}
+		state, changed, err := m.fieldwiseState(ctx, srv, recv, final)
+		if err != nil {
+			return "", err
+		}
+		if !changed {
+			summary = append(summary, w.Name+" state unchanged")
+			continue
+		}
+		if err := m.rebindBoundTool(w.TypeName, state); err != nil {
+			return "", err
+		}
+		summary = append(summary, w.Name+" state updated")
+	}
+	return strings.Join(append([]string{strings.Join(summary, " · ")}, patches...), "\n"), nil
+}
+
+// writeDangWorkspace applies the difference between start and final, a
+// Workspace a snippet assigned to `ws`, to the bound workspace.
+func (m *MCP) writeDangWorkspace(ctx context.Context, srv *dagql.Server, start dagql.ObjectResult[*Workspace], final dagql.AnyObjectResult) (line, patch string, _ error) {
+	ws, ok := dagql.UnwrapAs[dagql.ObjectResult[*Workspace]](final)
+	if !ok {
+		return "", "", fmt.Errorf("write ws: got a %s, not a Workspace", final.Type().Name())
+	}
+	if start.Self() == nil {
+		return "", "", fmt.Errorf("write ws: no workspace bound")
+	}
+	startID, err := start.ID()
+	if err != nil {
+		return "", "", err
+	}
+	var changes dagql.ObjectResult[*Changeset]
+	if err := srv.Select(ctx, ws, &changes, dagql.Selector{
+		View:  srv.View,
+		Field: "changes",
+		Args:  []dagql.NamedInput{{Name: "from", Value: dagql.Opt(dagql.NewID[*Workspace](startID))}},
+	}); err != nil {
+		return "", "", fmt.Errorf("write ws: %w", err)
+	}
+	if err := changes.Self().Evaluate(ctx); err != nil {
+		return "", "", fmt.Errorf("write ws: %w", err)
+	}
+	paths, err := changes.Self().ComputePaths(ctx)
+	if err != nil {
+		return "", "", fmt.Errorf("write ws: %w", err)
+	}
+	n := len(paths.Added) + len(paths.Modified) + len(paths.AllRemoved)
+	if n == 0 {
+		return "ws unchanged", "", nil
+	}
+	patch, err = m.applyChangeset(ctx, srv, changes)
+	if err != nil {
+		return "", "", fmt.Errorf("write ws: %w", err)
+	}
+	files := "files"
+	if n == 1 {
+		files = "file"
+	}
+	return fmt.Sprintf("ws written (%d %s)", n, files), patch, nil
 }

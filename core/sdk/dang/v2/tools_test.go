@@ -62,6 +62,12 @@ type Workspace implements Node {
   Returns a Directory from the workspace.
   """
   directory(path: String!): Directory!
+  withNewFile(path: String!, contents: String!): Workspace!
+  changes: Changeset!
+}
+
+type Changeset implements Node {
+  id: ID!
 }
 
 type Secret implements Node {
@@ -151,7 +157,7 @@ func TestDangCheckWorkspaceScope(t *testing.T) {
 	t.Run("ws is bound", func(t *testing.T) {
 		out := checkTest(t, sc, `ws`, "")
 		require.True(t, strings.HasPrefix(out, "ws: Dagger.Workspace!\n"), out)
-		require.Contains(t, out, "Dagger.Workspace! has 2 members:")
+		require.Contains(t, out, "Dagger.Workspace! has 4 members:")
 		require.Contains(t, out, "directory(path: String!): Dagger.Directory! — Returns a Directory from the workspace.")
 		require.NotContains(t, out, "declared at")
 	})
@@ -282,7 +288,7 @@ func evalTest(t *testing.T, sc *dangScope, source string, api *fakeAPI) (string,
 		api = &fakeAPI{answer: func(q string) string { t.Errorf("unexpected query %s", q); return "{}" }}
 	}
 	var spanLogs strings.Builder
-	out, err := evalDang(context.Background(), sc, source, api, &spanLogs)
+	out, err := evalDang(context.Background(), sc, source, api, &spanLogs, nil)
 	if err == nil {
 		// Printed output reaches the span's logs too.
 		for _, line := range strings.Split(spanLogs.String(), "\n") {
@@ -382,6 +388,117 @@ func TestDangBoundValues(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, out, `[String!]! = ["a.txt"]`)
 	require.Regexp(t, ` · \d engine calls · `, out)
+}
+
+// writeAPI answers the queries of snippets over a bound workspace ("ws-id")
+// and container ("box-id"): each new value's ID is its call's name.
+func writeAPI() *fakeAPI {
+	return &fakeAPI{answer: func(q string) string {
+		switch {
+		case strings.Contains(q, "__typename") && strings.Contains(q, "ws-id"):
+			return `{"node":{"__typename":"Workspace"}}`
+		case strings.Contains(q, "__typename"):
+			return `{"node":{"__typename":"Container"}}`
+		case strings.Contains(q, "withNewFile"):
+			return `{"node":{"withNewFile":{"id":"ws-2"}}}`
+		case strings.Contains(q, "withExec"):
+			return `{"node":{"withExec":{"id":"box-2"}}}`
+		}
+		return `{}`
+	}}
+}
+
+// recordWrites is a writer that records what it is given.
+func recordWrites(got *[]dangWrite, calls *int) dangWriter {
+	return func(_ context.Context, writes []dangWrite) (string, error) {
+		*calls++
+		*got = writes
+		if len(writes) == 0 {
+			return "0 writes", nil
+		}
+		names := make([]string, len(writes))
+		for i, w := range writes {
+			names[i] = w.name + " written"
+		}
+		return strings.Join(names, " · "), nil
+	}
+}
+
+func TestDangEvalWrites(t *testing.T) {
+	t.Parallel()
+	bound := []dangValue{
+		{name: "ws", typeName: "Workspace", id: "ws-id"},
+		{name: "box", typeName: "Container", id: "box-id"},
+	}
+	scope := func(sc *dangScope) *dangScope {
+		sc.values = valueDeclarations(bound)
+		sc.bound = bound
+		return sc
+	}
+	eval := func(t *testing.T, sc *dangScope, source string) (string, []dangWrite, int) {
+		t.Helper()
+		var got []dangWrite
+		var calls int
+		out, err := evalDang(context.Background(), sc, source, writeAPI(), nil, recordWrites(&got, &calls))
+		require.NoError(t, err)
+		return out, got, calls
+	}
+
+	t.Run("assigning ws writes it", func(t *testing.T) {
+		out, got, _ := eval(t, scope(workspaceTestScope(t)), "ws = ws.withNewFile(path: \"a\", contents: \"b\")\n\"done\"")
+		require.Equal(t, []dangWrite{{name: "ws", typeName: "Workspace", id: "ws-2"}}, got)
+		require.True(t, strings.HasSuffix(out, "\nws written\n"), out)
+	})
+
+	t.Run("assigning a tool object rebinds it", func(t *testing.T) {
+		_, got, _ := eval(t, scope(workspaceTestScope(t)), `box = box.withExec(args: ["x"])`)
+		require.Equal(t, []dangWrite{{name: "box", typeName: "Container", id: "box-2"}}, got)
+	})
+
+	t.Run("calling methods writes nothing", func(t *testing.T) {
+		out, got, calls := eval(t, scope(workspaceTestScope(t)), `ws.withNewFile(path: "a", contents: "b")`)
+		require.Empty(t, got)
+		require.Equal(t, 1, calls)
+		require.Contains(t, out, "(not applied; to write it, assign it: ws = …)")
+		require.True(t, strings.HasSuffix(out, "\n0 writes\n"), out)
+	})
+
+	t.Run("an unassigned changeset is not applied", func(t *testing.T) {
+		out, got, _ := eval(t, scope(workspaceTestScope(t)), `ws.changes`)
+		require.Empty(t, got)
+		require.Contains(t, out, "(not applied; to write it, assign it: ws = ws.withChanges(…))")
+	})
+
+	t.Run("a failure writes nothing", func(t *testing.T) {
+		out, got, calls := eval(t, scope(workspaceTestScope(t)), "ws = ws.withNewFile(path: \"a\", contents: \"b\")\nraise \"boom\"")
+		require.Empty(t, got)
+		require.Zero(t, calls)
+		require.Contains(t, out, "failed · ")
+	})
+
+	t.Run("a type error writes nothing", func(t *testing.T) {
+		_, _, calls := eval(t, scope(workspaceTestScope(t)), "ws = ws.withNewFile(path: \"a\")")
+		require.Zero(t, calls)
+	})
+
+	t.Run("in a module's scope", func(t *testing.T) {
+		sc := scope(moduleTestScope(t, map[string]string{"main.dang": testModuleMain}))
+		out, got, _ := eval(t, sc, "ws = ws.withNewFile(path: \"a\", contents: greet(\"x\"))")
+		require.Equal(t, []dangWrite{{name: "ws", typeName: "Workspace", id: "ws-2"}}, got)
+		require.Contains(t, out, " · module mod (mod)\n")
+	})
+}
+
+func TestDeclaredNames(t *testing.T) {
+	t.Parallel()
+	sc := moduleTestScope(t, map[string]string{
+		"main.dang": testModuleMain,
+		"ws.dang":   "let ws = \"mine\"\n",
+	})
+	names := declaredNames(context.Background(), sc.fsys, sc.dir)
+	require.True(t, names["ws"])
+	require.True(t, names["stableOrder"])
+	require.False(t, names["box"])
 }
 
 func TestParseDangAt(t *testing.T) {

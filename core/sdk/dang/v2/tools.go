@@ -8,12 +8,14 @@ import (
 	"os"
 	"path"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing/fstest"
 
 	"github.com/Khan/genqlient/graphql"
 	telemetry "github.com/dagger/otel-go"
+	"github.com/vito/dang/v2/pkg/dang"
 	"github.com/vito/dang/v2/pkg/dang/analysis"
 	"github.com/vito/dang/v2/pkg/introspection"
 
@@ -67,16 +69,28 @@ func (dangTools) Eval(ctx context.Context, env core.DangToolEnv, args core.DangE
 		// conversation's, installed modules and bound tool objects'
 		// modules included.
 		modCtx := dangModuleContext(ctx, env.Server, rt.src)
-		if rt.src.Self() == nil {
+		switch {
+		case rt.src.Self() == nil:
 			nestedClientMetadata.ServedDeps = rt.deps
+		case len(rt.bound) > 0:
+			nestedClientMetadata.ServedDeps = core.NewSchemaBuilder(nil, rt.bound)
 		}
 		// Printed output goes to the tool call's span, as a module
 		// function's goes to its call's.
 		stdio := telemetry.SpanStdio(ctx, core.InstrumentationLibrary)
 		defer stdio.Close()
 		_, err = dangshared.WithNestedClientServer(ctx, query, nestedClientMetadata, true /* inert attachables */, nil, modCtx, func(ctx context.Context, client graphql.Client) ([]byte, error) {
+			// Writes are applied while this client still serves the values
+			// they name.
+			write := func(ctx context.Context, writes []dangWrite) (string, error) {
+				ws := make([]core.DangWrite, len(writes))
+				for i, w := range writes {
+					ws[i] = core.DangWrite{Name: w.name, TypeName: w.typeName, ID: w.id}
+				}
+				return env.Write(ctx, ws)
+			}
 			var err error
-			out, err = evalDang(ctx, sc, args.Source, client, stdio.Stdout)
+			out, err = evalDang(ctx, sc, args.Source, client, stdio.Stdout, write)
 			return nil, err
 		})
 		return err
@@ -85,10 +99,12 @@ func (dangTools) Eval(ctx context.Context, env core.DangToolEnv, args core.DangE
 }
 
 // dangRuntime is what running code in a scope needs beyond its source: the
-// module source of a module scope, or else the API to serve.
+// module source of a module scope and the bound tool objects' modules to
+// serve beside it, or else the API to serve.
 type dangRuntime struct {
-	src  dagql.ObjectResult[*core.ModuleSource]
-	deps *core.SchemaBuilder
+	src   dagql.ObjectResult[*core.ModuleSource]
+	bound []core.Mod
+	deps  *core.SchemaBuilder
 }
 
 // dangModuleContext loads a module scope's module, best effort, so the nested
@@ -139,31 +155,18 @@ func withDangScope(
 	allowPosition bool,
 	fn func(context.Context, *dangScope, dangRuntime) error,
 ) error {
+	// Every scope binds `ws` and the bound tool objects: the default scope's
+	// API has their types, and a module's scope gets them added.
+	scope, defaultSchema, err := workspaceDangScope(ctx, env)
+	if err != nil {
+		return err
+	}
+
 	if strings.TrimSpace(at) == "" {
-		scope, schema, err := workspaceDangScope(ctx, env)
-		if err != nil {
+		sc := &dangScope{fsys: fstest.MapFS{}, dir: ".", label: "workspace scope", schema: defaultSchema}
+		if err := bindDangValues(env, scope, sc, nil); err != nil {
 			return err
 		}
-		sc := &dangScope{fsys: fstest.MapFS{}, dir: ".", label: "workspace scope", schema: schema}
-		var ids []dangValue
-		if ws := env.Workspace; ws.Self() != nil {
-			id, err := ws.ID()
-			if err != nil {
-				return err
-			}
-			encoded, err := id.Encode()
-			if err != nil {
-				return err
-			}
-			ids = append(ids, dangValue{name: "ws", typeName: "Workspace", id: encoded})
-		}
-		for _, b := range scope.Bindings {
-			if schema.Types.Get(b.TypeName) == nil {
-				continue
-			}
-			ids = append(ids, dangValue{name: b.Name, typeName: b.TypeName, id: b.ID})
-		}
-		sc.values = valueDeclarations(ids)
 		return fn(ctx, sc, dangRuntime{deps: scope.Deps})
 	}
 
@@ -204,24 +207,19 @@ func withDangScope(
 		}
 	}
 
-	var schema *introspection.Schema
-	var rt dangRuntime
+	schema := defaultSchema
+	rt := dangRuntime{deps: scope.Deps}
 	if loc.src.Self() != nil {
-		rt.src = loc.src
+		rt = dangRuntime{src: loc.src, bound: scope.BoundMods}
 		var file dagql.ObjectResult[*core.File]
 		if err := env.Server.Select(ctx, loc.src, &file, dagql.Selector{View: env.Server.View, Field: "introspectionSchemaJson"}); err != nil {
 			return fmt.Errorf("load the schema of %s: %w", label, err)
 		}
-		schema, err = loadDangSchema(ctx, file.Result)
-	} else {
-		var scope *core.DangScope
-		scope, schema, err = workspaceDangScope(ctx, env)
-		if scope != nil {
-			rt.deps = scope.Deps
+		moduleSchema, err := loadDangSchema(ctx, file.Result)
+		if err != nil {
+			return err
 		}
-	}
-	if err != nil {
-		return err
+		schema = withMissingTypes(moduleSchema, defaultSchema)
 	}
 
 	var dir dagql.ObjectResult[*core.Directory]
@@ -251,8 +249,88 @@ func withDangScope(
 				return fmt.Errorf("at %q: no file %s in the workspace", at, sc.display(loc.file))
 			}
 		}
+		if err := bindDangValues(env, scope, sc, declaredNames(ctx, sc.fsys, sc.dir)); err != nil {
+			return err
+		}
 		return fn(ctx, sc, rt)
 	})
+}
+
+// bindDangValues binds `ws` and the bound tool objects in sc, but not a name
+// its own files declare at their top level: a module's own `ws` (or `editor`)
+// is the module's, as any other of its declarations would shadow an import,
+// so it is not bound, and assigning it writes nothing.
+func bindDangValues(env core.DangToolEnv, scope *core.DangScope, sc *dangScope, declared map[string]bool) error {
+	var values []dangValue
+	if ws := env.Workspace; ws.Self() != nil && !declared["ws"] {
+		id, err := ws.ID()
+		if err != nil {
+			return err
+		}
+		encoded, err := id.Encode()
+		if err != nil {
+			return err
+		}
+		values = append(values, dangValue{name: "ws", typeName: "Workspace", id: encoded})
+	}
+	for _, b := range scope.Bindings {
+		if declared[b.Name] || sc.schema.Types.Get(b.TypeName) == nil {
+			continue
+		}
+		values = append(values, dangValue{name: b.Name, typeName: b.TypeName, id: b.ID})
+	}
+	sc.values = valueDeclarations(values)
+	sc.bound = values
+	return nil
+}
+
+// declaredNames are the names dir's .dang files declare at their top level.
+// Files that don't parse are skipped: their diagnostics say why.
+func declaredNames(ctx context.Context, fsys fs.FS, dir string) map[string]bool {
+	names := map[string]bool{}
+	entries, err := fs.ReadDir(fsys, dir)
+	if err != nil {
+		return names
+	}
+	version := dang.VersionFromContext(ctx)
+	for _, entry := range entries {
+		if entry.IsDir() || path.Ext(entry.Name()) != ".dang" {
+			continue
+		}
+		p := path.Join(dir, entry.Name())
+		text, err := fs.ReadFile(fsys, p)
+		if err != nil {
+			continue
+		}
+		parsed, err := dang.Parse(p, text, dang.WithVersion(version))
+		if err != nil {
+			continue
+		}
+		block, ok := parsed.(*dang.FileBlock)
+		if !ok {
+			continue
+		}
+		for _, form := range block.Forms {
+			for _, name := range form.DeclaredSymbols() {
+				names[name] = true
+			}
+		}
+	}
+	return names
+}
+
+// withMissingTypes is schema with the types of extra it lacks: a module's
+// schema, with the types of the bound tool objects the default scope's API
+// has. Neither schema is modified.
+func withMissingTypes(schema, extra *introspection.Schema) *introspection.Schema {
+	merged := *schema
+	merged.Types = slices.Clone(schema.Types)
+	for _, t := range extra.Types {
+		if schema.Types.Get(t.Name) == nil {
+			merged.Types = append(merged.Types, t)
+		}
+	}
+	return &merged
 }
 
 // workspaceDangScope loads the default scope: the conversation's API, with

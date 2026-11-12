@@ -75,6 +75,10 @@ type dangScope struct {
 	// objects (see valueDeclarations).
 	values string
 
+	// bound are the values values declares, which a DangEval snippet
+	// writes by reassigning them.
+	bound []dangValue
+
 	// schema is the API the Dagger import (auto-imported) exposes.
 	schema *introspection.Schema
 }
@@ -129,11 +133,13 @@ type dangValue struct {
 
 // valueDeclarations is the source binding each value by name, as a module
 // function's `ws: Workspace!` argument is bound. Each is lazy: a value a
-// snippet never reads is never loaded.
+// snippet never reads is never loaded. Types are qualified, since a module's
+// own type of the same name (the bound object of its own main type, in its
+// scope) is not the API's.
 func valueDeclarations(values []dangValue) string {
 	var b strings.Builder
 	for _, v := range values {
-		fmt.Fprintf(&b, "let %s: %s! = node(id: %q).{{... on %s!}}\n", v.name, v.typeName, v.id, v.typeName)
+		fmt.Fprintf(&b, "let %s: Dagger.%s! = Dagger.node(id: %q).{{... on Dagger.%s!}}\n", v.name, v.typeName, v.id, v.typeName)
 	}
 	return b.String()
 }
