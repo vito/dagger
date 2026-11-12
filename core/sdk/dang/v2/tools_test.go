@@ -513,7 +513,7 @@ func TestDangEvalWrites(t *testing.T) {
 	t.Run("an unassigned changeset is not applied", func(t *testing.T) {
 		out, got, _ := eval(t, scope(workspaceTestScope(t)), `ws.changes`)
 		require.Empty(t, got)
-		require.Contains(t, out, "(not applied; to write it, assign it: ws = ws.withChanges(…, path: \".\"))")
+		require.Contains(t, out, "(not applied; to write it, assign it: ws = ws.withChanges(…))")
 	})
 
 	t.Run("an earlier value stays readable", func(t *testing.T) {

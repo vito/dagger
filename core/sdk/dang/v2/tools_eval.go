@@ -222,7 +222,7 @@ func reportEvalResult(ctx context.Context, r *dangReport, calls *countingClient,
 	}
 	switch strings.TrimPrefix(strings.TrimSuffix(dang.FormatType(typ), "!"), "Dagger.") {
 	case "Changeset":
-		r.linef("(not applied; to write it, assign it: ws = ws.withChanges(…, path: \".\"))")
+		r.linef("(not applied; to write it, assign it: ws = ws.withChanges(…))")
 		unwritten = true
 	case "Workspace":
 		if !wroteWS {

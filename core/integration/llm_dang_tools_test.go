@@ -204,20 +204,6 @@ func (LLMSuite) TestDangTools(ctx context.Context, t *testctx.T) {
 		require.NotContains(t, out, "failed to load")
 	})
 
-	t.Run("a changeset applies at the cwd", func(ctx context.Context, t *testctx.T) {
-		// Changesets are measured from the cwd; withChanges(path: ".")
-		// places one there.
-		out := runDangToolCalls(ctx, t, c, base, daggerShellNoMod,
-			`with-workspace --workspace $(current-workspace | with-workdir sub)`,
-			[]dangToolCall{
-				{"DangEval", map[string]string{"source": `ws = ws.withChanges(ws.withNewFile(path: "placed.txt", contents: "p").changes(from: ws), path: ".")`}},
-				{"DangEval", map[string]string{"source": `ws.file("/sub/placed.txt").contents`}},
-			})
-		require.Contains(t, out, "ws written (1 file)")
-		require.Contains(t, out, "+++ b/sub/placed.txt")
-		require.Contains(t, out, `String! = "p"`)
-	})
-
 	t.Run("a commit through ws is written", func(ctx context.Context, t *testctx.T) {
 		// A commit moves HEAD without leaving a file delta: writing ws makes
 		// the committed workspace the conversation's, as a tool returning it
