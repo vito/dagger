@@ -280,6 +280,14 @@ type ClientMetadata struct {
 	// client headers.
 	EngineWork bool `json:"-"`
 
+	// ServedDeps, set on an in-engine nested client that runs outside any
+	// module (such as a DangEval snippet), is the *core.SchemaBuilder it
+	// serves instead of the core API alone: the API of the conversation the
+	// snippet runs for, installed modules included. It is opaque here, since
+	// this package can't name core's types. Engine-internal: never read from
+	// client headers.
+	ServedDeps any `json:"-"`
+
 	// Profile enables engine wall-clock profiling (wcprof) for the duration
 	// of this client's work. Experimental; the recorded events are retrieved
 	// via the engine debug endpoints.
