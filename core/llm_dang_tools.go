@@ -141,7 +141,7 @@ const (
 	dangCheckSearchDescription = "Words to find in names and docs, e.g. \"sort\" or \"escape html\"."
 
 	dangEvalDescription = "Run Dang: printed output, then the result as `TYPE = value`, then its type's member names. Scope as for DangCheck, without positions: `at` a module runs the snippet as one more file of it, after its top level. A type error runs nothing." + "\n" +
-		"Engine calls go through the scope's API (with `at`, the module's dependencies and own API), with no access to the host, and are counted. Assignment is the write: if the snippet succeeds, a reassigned `ws` (`ws = ws.withChanges(…)`) is applied to the workspace and a reassigned tool object (`editor = editor.todoWrite(…)`) becomes its state; nothing else is. Objects stay lazy (shown as their query) until you select a scalar such as `.stdout` or `.sync`. Each call is standalone; wrap long runs in Timeout."
+		"Engine calls go through the scope's API (with `at`, the module's dependencies and own API), with no access to the host, and are counted. Assignment is the write: if the snippet succeeds, a reassigned `ws` (`ws = ws.withChanges(editor.edit(source: ws, …), path: \".\")`) is applied to the workspace and a reassigned tool object (`editor = editor.todoWrite(…)`) becomes its state; nothing else is. Objects stay lazy (shown as their query) until you select a scalar such as `.stdout` or `.sync`. Each call is standalone; wrap long runs in Timeout."
 	dangEvalSourceDescription = "Dang statements to run; the last expression is the result."
 	dangEvalAtDescription     = "A Dang module of the workspace (name or directory), or a .dang file of one. Default: the workspace scope."
 )
