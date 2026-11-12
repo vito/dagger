@@ -456,10 +456,13 @@ class Workspace extends Client\AbstractObject implements Client\IdAble, Node
     /**
      * Return this workspace with a changeset applied, without mutating the source.
      */
-    public function withChanges(Changeset $changes): Workspace
+    public function withChanges(Changeset $changes, ?string $path = '/'): Workspace
     {
         $innerQueryBuilder = new \Dagger\Client\QueryBuilder('withChanges');
         $innerQueryBuilder->setArgument('changes', $changes);
+        if (null !== $path) {
+        $innerQueryBuilder->setArgument('path', $path);
+        }
         return new \Dagger\Workspace($this->client, $this->queryBuilderChain->chain($innerQueryBuilder));
     }
 

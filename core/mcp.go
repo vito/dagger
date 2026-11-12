@@ -1491,6 +1491,15 @@ func workspaceCwdPrefix(ws *Workspace) string {
 	return strings.TrimPrefix(cwd, "/")
 }
 
+// PlaceChangeset places a changeset measured from a directory of the
+// workspace (prefix, relative to its root) at that directory, for
+// Workspace.withChanges, which applies at the root: both sides are copied
+// there in otherwise empty trees. Workspace.withChanges(path:) and the MCP
+// tool-changeset path both place changesets with it.
+func PlaceChangeset(ctx context.Context, srv *dagql.Server, changes dagql.ObjectResult[*Changeset], prefix string) (dagql.ObjectResult[*Changeset], error) {
+	return changesetAt(ctx, srv, changes, prefix)
+}
+
 // changesetAt places a changeset measured from a directory of the workspace
 // at that directory, for Workspace.withChanges, which applies at the root:
 // both sides are copied there in otherwise empty trees.

@@ -577,12 +577,14 @@ defmodule Dagger.Workspace do
   @doc """
   Return this workspace with a changeset applied, without mutating the source.
   """
-  @spec with_changes(t(), Dagger.Changeset.t()) :: Dagger.Workspace.t()
-  def with_changes(%__MODULE__{} = workspace, changes) do
+  @spec with_changes(t(), Dagger.Changeset.t(), [{:path, String.t() | nil}]) ::
+          Dagger.Workspace.t()
+  def with_changes(%__MODULE__{} = workspace, changes, optional_args \\ []) do
     query_builder =
       workspace.query_builder
       |> QB.select("withChanges")
       |> QB.put_arg("changes", Dagger.ID.id!(changes))
+      |> QB.maybe_put_arg("path", optional_args[:path])
 
     %Dagger.Workspace{
       query_builder: query_builder,

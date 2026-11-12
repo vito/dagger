@@ -497,6 +497,50 @@ func (WorkspaceSuite) TestOverlayWorkspaceWithoutFiles(ctx context.Context, t *t
 	})
 }
 
+// TestWorkspaceWithChangesPath covers withChanges' path: where a changeset is
+// placed, the directory it was measured from. The default is the root, as
+// before the argument; "." is the cwd, where Workspace.changes and tool
+// changesets measure from.
+func (WorkspaceSuite) TestWorkspaceWithChangesPath(ctx context.Context, t *testctx.T) {
+	c := connect(ctx, t)
+
+	ws := core.NewQuery(c).Directory().
+		WithNewFile("sub/keep.txt", "keep").
+		AsWorkspace().
+		WithWorkdir("sub")
+	empty := core.NewQuery(c).Directory()
+	changes := empty.WithNewFile("new.txt", "new").Changes(empty)
+
+	for _, tc := range []struct {
+		name string
+		opts []core.WorkspaceWithChangesOpts
+		want string
+	}{
+		{name: "at the root by default", want: "new.txt"},
+		{name: "at the cwd", opts: []core.WorkspaceWithChangesOpts{{Path: "."}}, want: "sub/new.txt"},
+		{name: "relative to the cwd", opts: []core.WorkspaceWithChangesOpts{{Path: "nested"}}, want: "sub/nested/new.txt"},
+		{name: "absolute", opts: []core.WorkspaceWithChangesOpts{{Path: "/other"}}, want: "other/new.txt"},
+	} {
+		t.Run(tc.name, func(ctx context.Context, t *testctx.T) {
+			got, err := ws.WithChanges(changes, tc.opts...).
+				File("/" + tc.want).
+				Contents(ctx)
+			require.NoError(t, err)
+			require.Equal(t, "new", got)
+		})
+	}
+
+	t.Run("changes round-trip at the cwd", func(ctx context.Context, t *testctx.T) {
+		edited := ws.WithNewFile("edited.txt", "edited")
+		measured := edited.Changes(core.WorkspaceChangesOpts{From: ws})
+		got, err := ws.WithChanges(measured, core.WorkspaceWithChangesOpts{Path: "."}).
+			File("/sub/edited.txt").
+			Contents(ctx)
+		require.NoError(t, err)
+		require.Equal(t, "edited", got)
+	})
+}
+
 // TestOverlayWorkspaceFunctionalWritesRoundTripFromID asserts that each
 // functional write returns a real Workspace ID. Loading the ID should show the
 // file introduced by that one write.

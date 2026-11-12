@@ -19008,6 +19008,13 @@ pub struct WorkspaceWithFileOpts {
     pub permissions: Option<isize>,
 }
 #[derive(Builder, Debug, PartialEq)]
+pub struct WorkspaceWithChangesOpts<'a> {
+    /// Directory the changeset was measured from, where it is applied. Relative paths resolve from the workspace cwd; absolute paths resolve from the workspace root.
+    /// Tool changesets and Workspace.changes are measured from the cwd: pass ".".
+    #[builder(setter(into, strip_option), default)]
+    pub path: Option<&'a str>,
+}
+#[derive(Builder, Debug, PartialEq)]
 pub struct WorkspaceWithPatchFileOpts {
     /// How to handle hunks that no longer apply to the target content: fail (default), or apply what fits and leave git-style conflict markers where it doesn't.
     #[builder(setter(into, strip_option), default)]
@@ -20029,6 +20036,7 @@ impl Workspace {
     /// # Arguments
     ///
     /// * `changes` - Changes to apply.
+    /// * `opt` - optional argument, see inner type for documentation, use <func>_opts to use
     pub fn with_changes(&self, changes: impl IntoID<Id>) -> Workspace {
         let mut query = self.selection.select("withChanges");
         query = query.arg_lazy(
@@ -20038,6 +20046,34 @@ impl Workspace {
                 Box::pin(async move { changes.into_id().await.unwrap().quote() })
             }),
         );
+        Workspace {
+            proc: self.proc.clone(),
+            selection: query,
+            graphql_client: self.graphql_client.clone(),
+        }
+    }
+    /// Return this workspace with a changeset applied, without mutating the source.
+    ///
+    /// # Arguments
+    ///
+    /// * `changes` - Changes to apply.
+    /// * `opt` - optional argument, see inner type for documentation, use <func>_opts to use
+    pub fn with_changes_opts<'a>(
+        &self,
+        changes: impl IntoID<Id>,
+        opts: WorkspaceWithChangesOpts<'a>,
+    ) -> Workspace {
+        let mut query = self.selection.select("withChanges");
+        query = query.arg_lazy(
+            "changes",
+            Box::new(move || {
+                let changes = changes.clone();
+                Box::pin(async move { changes.into_id().await.unwrap().quote() })
+            }),
+        );
+        if let Some(path) = opts.path {
+            query = query.arg("path", path);
+        }
         Workspace {
             proc: self.proc.clone(),
             selection: query,

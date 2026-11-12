@@ -7971,6 +7971,13 @@ type Workspace implements Node {
   withChanges(
     """Changes to apply."""
     changes: ID! @expectedType(name: "Changeset")
+
+    """
+    Directory the changeset was measured from, where it is applied. Relative paths resolve from the workspace cwd; absolute paths resolve from the workspace root.
+
+    Tool changesets and Workspace.changes are measured from the cwd: pass ".".
+    """
+    path: String = "/"
   ): Workspace!
 
   """

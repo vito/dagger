@@ -1,0 +1,12 @@
+kind: Added
+body: |
+  `Workspace.withChanges` takes an optional `path`: the directory the changeset
+  was measured from, where it is applied. Relative paths resolve from the
+  workspace cwd and absolute ones from the root, like the workspace's other
+  paths. `Workspace.changes` and tool changesets are measured from the cwd, so
+  `ws.withChanges(ws2.changes(from: ws), path: ".")` round-trips at any cwd.
+  The default, `"/"`, applies at the root as before.
+time: 2026-11-12T05:00:00Z
+custom:
+  Author: vito
+  PR: "15156"

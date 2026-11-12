@@ -4397,6 +4397,15 @@ export type WorkspaceSearchOpts = {
   limit?: number
 }
 
+export type WorkspaceWithChangesOpts = {
+  /**
+   * Directory the changeset was measured from, where it is applied. Relative paths resolve from the workspace cwd; absolute paths resolve from the workspace root.
+   *
+   * Tool changesets and Workspace.changes are measured from the cwd: pass ".".
+   */
+  path?: string
+}
+
 export type WorkspaceWithClientOpts = {
   /**
    * Optional SDK name. Inspect all installed SDKs when omitted.
@@ -19497,9 +19506,15 @@ export class Workspace extends BaseClient {
   /**
    * Return this workspace with a changeset applied, without mutating the source.
    * @param changes Changes to apply.
+   * @param opts.path Directory the changeset was measured from, where it is applied. Relative paths resolve from the workspace cwd; absolute paths resolve from the workspace root.
+   *
+   * Tool changesets and Workspace.changes are measured from the cwd: pass ".".
    */
-  withChanges = (changes: Changeset): Workspace => {
-    const ctx = this._ctx.select("withChanges", { changes })
+  withChanges = (
+    changes: Changeset,
+    opts?: WorkspaceWithChangesOpts,
+  ): Workspace => {
+    const ctx = this._ctx.select("withChanges", { changes, ...opts })
     return new Workspace(ctx)
   }
 

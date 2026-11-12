@@ -19660,7 +19660,12 @@ class Workspace(Type):
         _ctx = self._select("snapshot", _args)
         return Workspace(_ctx)
 
-    def with_changes(self, changes: Changeset) -> Self:
+    def with_changes(
+        self,
+        changes: Changeset,
+        *,
+        path: str | None = "/",
+    ) -> Self:
         """Return this workspace with a changeset applied, without mutating the
         source.
 
@@ -19668,9 +19673,16 @@ class Workspace(Type):
         ----------
         changes:
             Changes to apply.
+        path:
+            Directory the changeset was measured from, where it is applied.
+            Relative paths resolve from the workspace cwd; absolute paths
+            resolve from the workspace root.
+            Tool changesets and Workspace.changes are measured from the cwd:
+            pass ".".
         """
         _args = [
             Arg("changes", changes),
+            Arg("path", path, "/"),
         ]
         _ctx = self._select("withChanges", _args)
         return Workspace(_ctx)
