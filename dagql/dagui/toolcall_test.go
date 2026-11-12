@@ -95,6 +95,13 @@ func TestToolCallViewWrapsAndCollapses(t *testing.T) {
 	assert.True(t, NewToolCallView("Timeout", map[string]any{"tool": "read_file"}).
 		Wraps(&Span{SpanSnapshot: SpanSnapshot{LLMRole: "assistant", LLMTool: "read_file"}}))
 	assert.False(t, NewToolCallView("Timeout", map[string]any{"tool": "write"}).Wraps(nested))
+	// A snake_case tool of a server: its span is named as the model calls it.
+	snake := &Span{SpanSnapshot: SpanSnapshot{
+		Name: "github_create_issue", LLMRole: "assistant", LLMTool: "create_issue", LLMToolServer: "github",
+	}}
+	assert.True(t, NewToolCallView("Timeout", map[string]any{"tool": "github_create_issue"}).Wraps(snake))
+	snake.Name = ""
+	assert.True(t, NewToolCallView("Timeout", map[string]any{"tool": "github_create_issue"}).Wraps(snake))
 
 	// A Timeout running Read collapses as Read does.
 	assert.False(t, timeout.CollapsesToolOutput())

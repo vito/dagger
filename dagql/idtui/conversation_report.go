@@ -100,18 +100,27 @@ func (fe *frontendPretty) renderMessageNode(ctx tuist.Context, out TermOutput, r
 		return
 	}
 
+	// A Timeout's row presents as the call it runs (its nested call is left
+	// out below), so what that call ran -- checks, tests, generators,
+	// services, beneath its own boundary -- rolls up here.
+	wrapped := fe.db.WrappedCallSpan(node.Span)
+	rollupSpan := node.Span
+	if wrapped != nil {
+		rollupSpan = wrapped
+	}
+
 	// The checks rollup nests each check's tests, so render it first under
 	// forked claims; the TESTS rollup then covers only the cases it left out.
 	var checks []string
 	checkClaims := fe.withForkedClaims(func() {
-		checks = indentLines("  ", fe.renderMessageChecks(ctx, r, node.Span))
+		checks = indentLines("  ", fe.renderMessageChecks(ctx, r, rollupSpan))
 	})
 	checkClaims.commit()
 	for _, rollup := range [][]string{
-		fe.renderMessageTests(ctx, node.Span, len(indent), checkClaims),
+		fe.renderMessageTests(ctx, rollupSpan, len(indent), checkClaims),
 		checks,
-		indentLines("  ", fe.renderMessageGenerators(ctx, r, node.Span)),
-		indentLines("  ", fe.renderMessageServices(ctx, r, node.Span)),
+		indentLines("  ", fe.renderMessageGenerators(ctx, r, rollupSpan)),
+		indentLines("  ", fe.renderMessageServices(ctx, r, rollupSpan)),
 	} {
 		if len(rollup) == 0 {
 			continue
@@ -123,9 +132,9 @@ func (fe *frontendPretty) renderMessageNode(ctx tuist.Context, out TermOutput, r
 	}
 
 	for _, child := range node.Children {
-		if wrapped := fe.db.WrappedCallSpan(node.Span); wrapped != nil && child.Span == wrapped {
-			// A Timeout's row already presents as the call it runs: its
-			// nested call would say it all again. Keep what's beneath it.
+		if wrapped != nil && child.Span == wrapped {
+			// The Timeout's row already said it all. Keep what's beneath
+			// its nested call.
 			for _, grandchild := range child.Children {
 				fe.renderMessageNode(ctx, out, r, grandchild, depth+1)
 			}
@@ -251,7 +260,7 @@ func (fe *frontendPretty) renderMessageLogs(out TermOutput, span *dagui.Span, wi
 	if fe.shellTranscript() && span.LLMTool != "" {
 		indent = "  "
 	}
-	if source := fe.dangSourceLines(span, width-len(indent), 0); len(source) > 0 {
+	if source := fe.dangSourceLines(span, width-len(indent), 0, true); len(source) > 0 {
 		for _, line := range source {
 			fmt.Fprintln(out, indent+line)
 		}

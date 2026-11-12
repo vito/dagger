@@ -95,7 +95,8 @@ func (fe *frontendPretty) dangSourceRows(r *renderer, row *dagui.TraceRow) []str
 	if row.Expanded {
 		maxLines = 0
 	}
-	lines := fe.dangSourceLines(row.Span, width, maxLines)
+	// The final render is never redrawn: it waits for the highlighter.
+	lines := fe.dangSourceLines(row.Span, width, maxLines, fe.finalRender)
 	for i, line := range lines {
 		lines[i] = indent + line
 	}
@@ -123,7 +124,11 @@ func (fe *frontendPretty) toolBlockIndent(r *renderer, row *dagui.TraceRow) stri
 // the code highlighted, its lines wrapped to width (0: unwrapped). It shows
 // at most maxLines source lines (0: all), then how many are left. The lines
 // carry no row indent.
-func (fe *frontendPretty) dangSourceLines(span *dagui.Span, width, maxLines int) []string {
+//
+// Until Dang's highlighter is ready (see dangHighlighter), the code renders
+// plain, and the view re-renders once it is -- unless wait is set, for a
+// one-shot render that would never be redrawn.
+func (fe *frontendPretty) dangSourceLines(span *dagui.Span, width, maxLines int, wait bool) []string {
 	if !isToolCallDisplay(span) || !dagui.RendersToolArgs(span.LLMTool) {
 		return nil
 	}
@@ -131,14 +136,49 @@ func (fe *frontendPretty) dangSourceLines(span *dagui.Span, width, maxLines int)
 	if !ok || strings.TrimSpace(snippet.Source) == "" {
 		return nil
 	}
-	return renderDangSource(fe.profile, snippet.Source, width, maxLines)
+	highlight := fe.profile != termenv.Ascii && fe.dangHighlighterReady(wait)
+	return renderDangSourceWith(fe.profile, highlight, snippet.Source, width, maxLines)
 }
 
-// renderDangSource renders Dang source as dangSourceLines describes.
+// dangHighlighterReady reports whether Dang's highlighter is ready, warming
+// it if it hasn't been; with wait, it waits for it. A frontend that rendered
+// without it re-renders its rows once it is ready.
+func (fe *frontendPretty) dangHighlighterReady(wait bool) bool {
+	ready := dangHighlighterWarmup()
+	if wait {
+		<-ready
+		return true
+	}
+	select {
+	case <-ready:
+		return true
+	default:
+	}
+	if !fe.dangHighlightPending {
+		fe.dangHighlightPending = true
+		go func() {
+			<-ready
+			fe.dispatch(func() {
+				for _, tree := range fe.spanTrees {
+					tree.Update()
+				}
+				fe.Update()
+			})
+		}()
+	}
+	return false
+}
+
+// renderDangSource renders Dang source as dangSourceLines describes,
+// highlighted unless the profile has no color.
 func renderDangSource(profile termenv.Profile, source string, width, maxLines int) []string {
+	return renderDangSourceWith(profile, profile != termenv.Ascii, source, width, maxLines)
+}
+
+func renderDangSourceWith(profile termenv.Profile, highlight bool, source string, width, maxLines int) []string {
 	out := NewOutput(new(strings.Builder), termenv.WithProfile(profile))
 	source = strings.TrimRight(strings.ReplaceAll(source, "\r\n", "\n"), "\n")
-	lines := styledDangLines(profile, source)
+	lines := styledDangLines(highlight, source)
 
 	shown := lines
 	if maxLines > 0 && len(lines) > maxLines {
@@ -210,10 +250,10 @@ func (runes styledRunes) render(out TermOutput) string {
 // styledDangLines splits source into lines of classified runes: tabs become
 // two spaces and other control characters are dropped, so a line's width is
 // what the terminal shows. Classification is best-effort: source that
-// doesn't highlight is all unclassified.
-func styledDangLines(profile termenv.Profile, source string) []styledRunes {
+// doesn't highlight (or isn't asked to) is all unclassified.
+func styledDangLines(highlight bool, source string) []styledRunes {
 	var spans []dang.HighlightSpan
-	if profile != termenv.Ascii {
+	if highlight {
 		spans = highlightDang(source)
 	}
 	runes := []rune(source)
@@ -317,4 +357,31 @@ func highlightDang(source string) (spans []dang.HighlightSpan) {
 		dangHighlights.spans[source] = spans
 	}()
 	return dang.Highlight(source)
+}
+
+// dangHighlighter is Dang's highlighter warming up: its first use compiles
+// the tree-sitter grammar's WebAssembly module, which takes a moment (around
+// half a second with a cold cache), and a frontend must not stall a render
+// on it. ready is closed once it's done, whether or not it worked.
+var dangHighlighter struct {
+	once  sync.Once
+	ready chan struct{}
+}
+
+// dangHighlighterWarmup is how frontends warm Dang's highlighter; tests
+// stand in for it to hold it cold.
+var dangHighlighterWarmup = warmDangHighlighter
+
+// warmDangHighlighter starts warming Dang's highlighter, if nothing has yet,
+// and returns a channel closed once it's ready.
+func warmDangHighlighter() <-chan struct{} {
+	dangHighlighter.once.Do(func() {
+		dangHighlighter.ready = make(chan struct{})
+		go func() {
+			defer close(dangHighlighter.ready)
+			defer func() { _ = recover() }()
+			dang.Highlight("let warm = 1")
+		}()
+	})
+	return dangHighlighter.ready
 }

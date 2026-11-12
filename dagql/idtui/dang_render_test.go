@@ -1,6 +1,7 @@
 package idtui
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"strings"
@@ -221,7 +222,9 @@ func TestDangToolCallTranscriptNarrowAndColor(t *testing.T) {
 		`  2 │ greeting`,
 	}, lines)
 
-	// In color, the snippet is highlighted, and lays out the same.
+	// In color, the snippet is highlighted, and lays out the same. (A live
+	// frontend renders plain until the highlighter is warm, then redraws.)
+	<-warmDangHighlighter()
 	colorLines, frame := dangTranscript(t, 24, termenv.ANSI, calls...)
 	assert.Equal(t, lines, colorLines)
 	assert.True(t, containsStyledLine(frame, "let greeting", "\x1b[35mlet"), visibleEscapes(frame))
@@ -319,6 +322,94 @@ func TestTimeoutPresentsAsItsNestedCall(t *testing.T) {
 	assert.Equal(t, 1, strings.Count(report, "1 │ 1 + 1"), report)
 	assert.Contains(t, strings.Split(report, "\n"), "  1 │ 1 + 1", "lined up under the call")
 	assert.Equal(t, 1, strings.Count(report, "RESULT OF DangEval"), report)
+}
+
+// TestTimeoutReportRollsUpItsCallsChecks covers what the call a Timeout runs
+// ran: its checks sit beneath the nested call's boundary, and the report
+// leaves the nested call out, so they roll up under the Timeout's row.
+func TestTimeoutReportRollsUpItsCallsChecks(t *testing.T) {
+	db := dagui.NewDB()
+	rootID, timeoutID, nestedID, checkID := prettyTestSpanID(1), prettyTestSpanID(2), prettyTestSpanID(3), prettyTestSpanID(4)
+	start := time.Unix(100, 0)
+	end := start.Add(3 * time.Second)
+	call := func(id, parent dagui.SpanID, tool string) dagui.SpanSnapshot {
+		return dagui.SpanSnapshot{
+			ID: id, TraceID: prettyTestTraceID(), Name: tool, ParentID: parent,
+			Boundary: true, RollUpLogs: true, RollUpSpans: true,
+			LLMTool: tool, LLMRole: "assistant", StartTime: start, EndTime: end, Final: true,
+		}
+	}
+	timeout := call(timeoutID, rootID, "Timeout")
+	timeout.LLMToolArgNames = []string{"arguments", "duration", "tool"}
+	timeout.LLMToolArgValues = []string{`{"include":["shellcheck"]}`, "2m", "check"}
+	db.ImportSnapshots([]dagui.SpanSnapshot{
+		{ID: rootID, TraceID: prettyTestTraceID(), Name: "shell", StartTime: start, EndTime: end, Final: true},
+		timeout,
+		call(nestedID, timeoutID, "check"),
+		{
+			ID: checkID, TraceID: prettyTestTraceID(), Name: "shellcheck:check", ParentID: nestedID,
+			CheckName: "shellcheck:check", StartTime: start, EndTime: end, Final: true,
+		},
+	})
+	db.SetPrimarySpan(rootID)
+	fe := NewASCIIReporterWithDB(io.Discard, db)
+	fe.SetReportRenderOpts(ReportRenderOpts{Verbosity: dagui.ShowCompletedVerbosity, ExpandCompleted: true})
+	var buf bytes.Buffer
+	require.NoError(t, fe.FinalRender(&buf))
+	got := buf.String()
+	assert.Equal(t, 1, strings.Count(got, "• Check"), got)
+	assert.Contains(t, got, "timeout=2m", got)
+	assert.Contains(t, got, "CHECKS", got)
+	assert.Contains(t, got, "shellcheck:check", got)
+}
+
+// TestDangSourceRendersPlainUntilHighlighterWarm covers the first Dang
+// snippet a session shows: Dang's highlighter compiles a WebAssembly module
+// on first use, and the render loop doesn't wait for it -- the snippet shows
+// plain, then highlighted once it's warm.
+func TestDangSourceRendersPlainUntilHighlighterWarm(t *testing.T) {
+	cold := make(chan struct{})
+	dangHighlighterWarmup = func() <-chan struct{} { return cold }
+	t.Cleanup(func() { dangHighlighterWarmup = warmDangHighlighter })
+
+	db := dagui.NewDB()
+	rootID, toolID := prettyTestSpanID(1), prettyTestSpanID(2)
+	start := time.Unix(100, 0)
+	db.ImportSnapshots([]dagui.SpanSnapshot{
+		{ID: rootID, TraceID: prettyTestTraceID(), Name: "shell", StartTime: start, EndTime: start.Add(time.Minute), Final: true},
+		{
+			ID: toolID, TraceID: prettyTestTraceID(), Name: "DangEval", ParentID: rootID,
+			LLMRole: "assistant", LLMTool: "DangEval",
+			LLMToolArgNames: []string{"source"}, LLMToolArgValues: []string{`let x = "hi"`},
+			StartTime: start.Add(time.Second), EndTime: start.Add(2 * time.Second), Final: true,
+		},
+	})
+	db.SetPrimarySpan(rootID)
+	fe := newWithTerminal(io.Discard, db, tuist.NewHeadlessTerminal(80, 40))
+	fe.profile = termenv.ANSI
+	fe.logs.Profile = termenv.ANSI
+	fe.shell = stubShellHandler{}
+	fe.FrontendOpts.Verbosity = dagui.ShowCompletedVerbosity
+	fe.autoFocus = false
+	// Run the redraw it dispatches synchronously, under reportMu.
+	fe.reportOnly = true
+
+	frame := func() string {
+		fe.reportMu.Lock()
+		defer fe.reportMu.Unlock()
+		fe.recalculateViewLocked()
+		return strings.Join(fe.tui.Frame(), "\n")
+	}
+	got := frame()
+	assert.Contains(t, stripANSICodes(got), `1 │ let x = "hi"`)
+	assert.False(t, containsStyledLine(got, "let x", "\x1b[35mlet"), "highlighted while cold:\n%s", visibleEscapes(got))
+	assert.True(t, fe.dangHighlightPending)
+
+	<-warmDangHighlighter()
+	close(cold)
+	require.Eventually(t, func() bool {
+		return containsStyledLine(frame(), "let x", "\x1b[35mlet")
+	}, 5*time.Second, 10*time.Millisecond)
 }
 
 // TestConversationReportRendersDangSource covers the final report: a Dang

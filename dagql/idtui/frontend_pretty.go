@@ -380,6 +380,10 @@ type frontendPretty struct {
 	logsViews     map[logsViewKey]*LogsView
 	renderVersion uint64 // bumped on global render config changes (verbosity, zoom)
 
+	// dangHighlightPending is set once a Dang snippet rendered plain while
+	// Dang's highlighter warmed up; the rows re-render when it's ready.
+	dangHighlightPending bool
+
 	// rewindsKey fingerprints the set of messages rewinds have abandoned as
 	// of the last recalculation, so a change to it can bump renderVersion
 	// (see syncRewindsLocked).

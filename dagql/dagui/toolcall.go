@@ -53,7 +53,8 @@ func (db *DB) ingestToolArgs(record sdklog.Record, spanID SpanID, body string) {
 	if span.Received && (span.LLMRole == "" || !RendersToolArgs(span.LLMTool)) {
 		// Not a tool call that renders from its arguments. A span not
 		// received yet is a placeholder whose tool isn't known: keep its
-		// arguments in case it is one.
+		// arguments in case it is one, until it turns out not to be.
+		delete(db.toolArgsJSON, spanID)
 		return
 	}
 	if db.toolArgsJSON == nil {
@@ -205,9 +206,14 @@ func (view ToolCallView) Wrapped() bool {
 // wrapper presenting as view runs: the nested tool call it opens beneath
 // itself, which says nothing the wrapper's row doesn't.
 func (view ToolCallView) Wraps(span *Span) bool {
-	return view.Wrapped() && span != nil && span.LLMRole != "" && span.LLMTool != "" &&
-		// the span names the tool bare, the model maybe with its server
-		(strings.EqualFold(view.Tool, span.LLMTool) || ToolNameIs(view.Tool, span.LLMTool))
+	if !view.Wrapped() || span == nil || span.LLMRole == "" || span.LLMTool == "" {
+		return false
+	}
+	// The span records the tool's bare name and server, and is named for
+	// the tool as the model calls it -- which is what the wrapper names.
+	return strings.EqualFold(view.Tool, span.Name) ||
+		strings.EqualFold(view.Tool, span.LLMTool) ||
+		(span.LLMToolServer != "" && strings.EqualFold(view.Tool, span.LLMToolServer+"_"+span.LLMTool))
 }
 
 // CollapsesOutput is SpanSnapshot.CollapsesToolOutput for the call the view
