@@ -429,6 +429,21 @@ func TestDangEval(t *testing.T) {
 		out, err = evalTest(t, sc, `container.withExec(["cat"]).stdout.split("")`, stdout(line))
 		require.NoError(t, err)
 		require.Contains(t, out, fmt.Sprintf("… (%d more)", len(line)-dangItemsMax))
+		// Nested collections keep Describe's default, so a result's work
+		// doesn't grow as dangItemsMax^depth.
+		out, err = evalTest(t, sc, "let xs = container.withExec([\"cat\"]).stdout.split(\"\")\nxs.map { x => xs }", stdout(line))
+		require.NoError(t, err)
+		require.Contains(t, out, "… (1368 more)")
+		require.Less(t, len(out), 64<<10)
+
+		// A block's line too long for the line clamp keeps its end.
+		out, err = evalTest(t, sc, `container.withExec(["cat"]).stdout`, stdout(file.String()+strings.Repeat("y", 5000)+"THE END\n"))
+		require.NoError(t, err)
+		require.Contains(t, out, "bytes omitted)…yyy")
+		require.Contains(t, out, "THE END\n\"\"\" (long lines cut in the middle)\n")
+		for l := range strings.SplitSeq(out, "\n") {
+			require.LessOrEqual(t, len(l), dangLineMax, "every line fits the line clamp")
+		}
 
 		// A one-line string a line can't hold keeps its head and its tail,
 		// where a line clamp would keep only its head, whether its

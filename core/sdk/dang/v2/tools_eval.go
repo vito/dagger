@@ -49,10 +49,10 @@ const (
 	// bytes; a result with a line still too long (wide characters, many
 	// escapes) is described again keeping a quarter as many.
 	dangLineStringMax = 1500
-	// dangItemsMax caps the elements, entries and fields described of a
-	// list, map or object, the rest counted: Describe lays out every one
-	// it shows before its byte cap applies, so this, not dangOutputMax,
-	// bounds the work.
+	// dangItemsMax caps the elements described of a flat list, the rest
+	// counted. Describe lays out every item it shows before its byte cap
+	// applies, at every level, so its work grows as items^depth: anything
+	// else nested keeps Describe's default (32).
 	dangItemsMax = 512
 )
 
@@ -301,9 +301,14 @@ func reportEvalResult(ctx context.Context, r *dangReport, calls *countingClient,
 func describeResult(ctx context.Context, val dang.Value, typ hm.Type) string {
 	s, ok := val.(dang.StringValue)
 	if !ok || !isBlockString(s.Val) {
-		desc := dang.Describe(ctx, val, typ, dangDescribeOptions)
+		opts := dangDescribeOptions
+		if !isFlatList(val) {
+			// Describe's work grows as items^depth: only a flat list
+			// shows more than Describe's default.
+			opts.MaxItems = 0
+		}
+		desc := dang.Describe(ctx, val, typ, opts)
 		if longestLine(desc) > dangLineMax {
-			opts := dangDescribeOptions
 			opts.MaxString /= 4
 			desc = dang.Describe(ctx, val, typ, opts)
 		}
@@ -326,7 +331,48 @@ func describeResult(ctx context.Context, val dang.Value, typ hm.Type) string {
 	if !strings.HasSuffix(text, "\n") {
 		text += "\n"
 	}
+	if longestLine(text) > dangLineMax {
+		text, closing = cutLongLines(text), closing+" (long lines cut in the middle)"
+	}
 	return fmt.Sprintf("%s = \"\"\"\n%s%s", typ, text, closing)
+}
+
+// isFlatList reports whether v is a list of values that hold no others.
+func isFlatList(v dang.Value) bool {
+	list, ok := v.(dang.ListValue)
+	if !ok {
+		return false
+	}
+	for _, e := range list.Elements {
+		switch e.(type) {
+		case dang.ListValue, dang.MapValue, *dang.Object:
+			return false
+		}
+	}
+	return true
+}
+
+// cutLongLines cuts each line of text longer than dangLineMax to its head
+// and its tail around a count of what was left out, as Describe cuts a long
+// string, so the line clamp of a reader doesn't drop its end.
+func cutLongLines(text string) string {
+	var b strings.Builder
+	for line := range strings.Lines(text) {
+		body := strings.TrimSuffix(line, "\n")
+		if len(body) <= dangLineMax {
+			b.WriteString(line)
+			continue
+		}
+		head, tail := dangLineMax*3/4, len(body)-dangLineMax/5
+		for head > 0 && !utf8.RuneStart(body[head]) {
+			head--
+		}
+		for tail < len(body) && !utf8.RuneStart(body[tail]) {
+			tail++
+		}
+		fmt.Fprintf(&b, "%s…(%d bytes omitted)…%s%s", body[:head], tail-head, body[tail:], line[len(body):])
+	}
+	return b.String()
 }
 
 // isBlockString reports whether a string result is shown as a block: it
