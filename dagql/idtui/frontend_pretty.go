@@ -3051,6 +3051,7 @@ func (fe *frontendPretty) spawnRun() {
 
 func (fe *frontendPretty) handleDone(err error) {
 	slog.Debug("run finished", "err", err)
+	fe.notifyRunDone(err)
 	fe.done = true
 	fe.err = err
 	if isOutputDrainError(err) {
@@ -5567,6 +5568,7 @@ func (fe *frontendPretty) notifyAgentSteps() {
 		return
 	}
 	fe.agentStepsSeen = agents
+	fe.notifyAgentTurns(agents)
 	for _, agent := range agents {
 		if agent.ID == "" || agent.SnapshotDigest == "" {
 			continue
