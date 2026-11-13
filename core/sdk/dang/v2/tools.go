@@ -88,6 +88,12 @@ func (dangTools) Eval(ctx context.Context, env core.DangToolEnv, args core.DangE
 		case len(rt.bound) > 0:
 			nestedClientMetadata.ServedDeps = core.NewSchemaBuilder(nil, rt.bound)
 		}
+		// The snippet acts for the agent whose turn called the tool, as a
+		// module function does: its sends are attributed to that agent, and
+		// a wait on it is refused rather than left to hang.
+		if caller, ok := core.CallerAgent(ctx); ok {
+			nestedClientMetadata.CallerAgent = caller
+		}
 		// The report goes to the tool call's span, as a module function's
 		// prints go to its call's: printed output as it is printed, the
 		// rest once it is known.

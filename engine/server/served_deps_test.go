@@ -6,19 +6,22 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/dagger/dagger/core"
+	"github.com/dagger/dagger/dagql"
 	"github.com/dagger/dagger/engine"
 )
 
-// A nested client's served schema and host inertness are engine-internal
-// metadata: they never cross the wire, so they must survive the JSON round
-// trip that snapshots a client's metadata.
+// A nested client's served schema, host inertness and caller agent are
+// engine-internal metadata: they never cross the wire, so they must survive
+// the JSON round trip that snapshots a client's metadata.
 func TestClientMetadataKeepsEngineInternalFields(t *testing.T) {
 	t.Parallel()
 	deps := &core.SchemaBuilder{}
-	cloned, err := cloneClientMetadata(&engine.ClientMetadata{ClientID: "nested", ServedDeps: deps, InertAttachables: true})
+	agent := dagql.ObjectResult[*core.Agent]{}
+	cloned, err := cloneClientMetadata(&engine.ClientMetadata{ClientID: "nested", ServedDeps: deps, InertAttachables: true, CallerAgent: agent})
 	require.NoError(t, err)
 	require.Same(t, deps, nestedServedDeps(cloned))
 	require.True(t, cloned.InertAttachables)
+	require.Equal(t, any(agent), cloned.CallerAgent)
 	require.Nil(t, nestedServedDeps(&engine.ClientMetadata{}))
 	require.Nil(t, nestedServedDeps(nil))
 }

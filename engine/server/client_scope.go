@@ -353,6 +353,7 @@ func cloneClientMetadata(metadata *engine.ClientMetadata) (*engine.ClientMetadat
 	cloned.ClientVersionDeclared = metadata.ClientVersionDeclared
 	// Shared, not copied: the schema is immutable once built.
 	cloned.ServedDeps = metadata.ServedDeps
+	cloned.CallerAgent = metadata.CallerAgent
 	cloned.InertAttachables = metadata.InertAttachables
 	return &cloned, nil
 }

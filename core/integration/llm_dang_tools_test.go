@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"dagger.io/dagger"
 	"dagger.io/dagger/core"
@@ -588,5 +589,51 @@ type Gadget {
 		require.Contains(t, transcript, `String! = "`+handle+`"`)
 		require.Contains(t, transcript, "cannot assign to `me`")
 		require.Contains(t, transcript, "done")
+	})
+
+	t.Run("a snippet acts for its agent", func(ctx context.Context, t *testctx.T) {
+		// A snippet in an agent's own turn acts for that agent, as a module
+		// function its turn calls does: a wait on itself is refused rather
+		// than left to hang, and what it sends is attributed to it.
+		ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+		defer cancel()
+		const peerHandle = "dang-tools-peer"
+		// The peer's model sees the message with the owner's attribution.
+		peerModel := cannedRecordingModel(ctx, t, c, core.NewQuery(c).LLM().
+			WithPrompt("[message #1 from agent \"owner\"]\n\nhello peer").
+			WithResponse([]core.LLMContentBlockInput{{Kind: core.LLMContentBlockKindText, Text: "ack"}}))
+		peer := spawnAgent(ctx, t, c, spawnOpts{model: peerModel, name: "peer", handle: peerHandle})
+
+		const prompt = "reach out"
+		script := core.NewQuery(c).LLM().WithPrompt(prompt)
+		for i, call := range []dangToolCall{
+			{"DangEval", map[string]string{"source": `me.wait.state`}},
+			{"DangEval", map[string]string{"source": fmt.Sprintf(`chat.agent(handle: %q, name: "peer").send(message: "hello peer").ref`, peerHandle)}},
+		} {
+			args, err := json.Marshal(call.args)
+			require.NoError(t, err)
+			id := fmt.Sprintf("act_%d", i)
+			script = script.
+				WithResponse([]core.LLMContentBlockInput{{Kind: core.LLMContentBlockKindToolCall, CallID: id, ToolName: call.tool, Arguments: core.JSON(args)}}).
+				WithToolResult(id, "", false)
+		}
+		ownerModel := cannedRecordingModel(ctx, t, c, script.WithResponse([]core.LLMContentBlockInput{
+			{Kind: core.LLMContentBlockKindText, Text: "done"},
+		}))
+		owner := spawnAgent(ctx, t, c, spawnOpts{model: ownerModel, name: "owner"})
+		_, reply, err := owner.sendAndWait(ctx, t, prompt)
+		require.NoError(t, err)
+		require.Equal(t, "done", reply)
+		transcript, _ := owner.snapshot(ctx, t)
+		require.Contains(t, transcript, `agent "owner" cannot block on itself from within its own turn`)
+		require.Contains(t, transcript, `String! = "#1"`)
+
+		require.Eventually(t, func() bool {
+			_, lastReply := peer.snapshot(ctx, t)
+			return lastReply == "ack"
+		}, 90*time.Second, 500*time.Millisecond, "the peer never answered the snippet's message")
+		out := peer.mustRun(ctx, t, `snapshot { messages { origin { kind agentName } } }`)
+		require.Equal(t, "AGENT", out.Get("snapshot.messages.0.origin.kind").String())
+		require.Equal(t, "owner", out.Get("snapshot.messages.0.origin.agentName").String())
 	})
 }

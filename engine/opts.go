@@ -290,6 +290,14 @@ type ClientMetadata struct {
 	// client headers.
 	ServedDeps any `json:"-"`
 
+	// CallerAgent, set on an in-engine nested client (such as a DangEval
+	// snippet's), is the *core.Agent result whose turn the client acts for:
+	// what core.CallerAgent resolves for its calls, as a module function's
+	// calls resolve their FunctionCall's, for message provenance and the
+	// waits-for guard. It is opaque here, like ServedDeps. Engine-internal:
+	// never read from client headers.
+	CallerAgent any `json:"-"`
+
 	// InertAttachables marks an in-engine nested client the server denies
 	// every host session attachable (see ServeHTTPToNestedClient), so
 	// operations that read the caller's host, such as finding its outer
