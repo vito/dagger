@@ -158,7 +158,14 @@ type ClientScope struct {
 	useRecipeIDsByDefault bool
 	sdkEntrypoint         bool
 	lineageAgent          string
-	lease                 *ClientLifecycleLease
+	// Like the other metadata flags, InertAttachables is not on the wire, so the
+	// JSON snapshot drops it: without this, every request of a host-inert
+	// client would see metadata claiming it has a host.
+	inertAttachables bool
+	// callerAgent is ClientMetadata.CallerAgent, also off the wire: shared,
+	// not copied, as the agent result is immutable.
+	callerAgent any
+	lease       *ClientLifecycleLease
 }
 
 // NewClientScope snapshots metadata so later bootstrap mutations cannot change
@@ -184,12 +191,20 @@ func NewClientScope(metadata *ClientMetadata, lease *ClientLifecycleLease) (Clie
 		useRecipeIDsByDefault: metadata.UseRecipeIDsByDefault,
 		sdkEntrypoint:         metadata.SDKEntrypoint,
 		lineageAgent:          metadata.LineageAgent,
+		inertAttachables:      metadata.InertAttachables,
+		callerAgent:           metadata.CallerAgent,
 		lease:                 lease,
 	}, nil
 }
 
 func (scope ClientScope) SessionID() string { return scope.sessionID }
 func (scope ClientScope) ClientID() string  { return scope.clientID }
+
+// CallerAgent is the agent the scope's client acts for
+// (ClientMetadata.CallerAgent), or nil. It is the scope's, not its
+// metadata's: operations that route their metadata to another client, such
+// as a Workspace owner, keep the scope of the client that runs them.
+func (scope ClientScope) CallerAgent() any { return scope.callerAgent }
 
 func (scope ClientScope) Lease() *ClientLifecycleLease { return scope.lease }
 
@@ -205,6 +220,8 @@ func (scope ClientScope) Metadata() (*ClientMetadata, error) {
 	metadata.UseRecipeIDsByDefault = scope.useRecipeIDsByDefault
 	metadata.SDKEntrypoint = scope.sdkEntrypoint
 	metadata.LineageAgent = scope.lineageAgent
+	metadata.InertAttachables = scope.inertAttachables
+	metadata.CallerAgent = scope.callerAgent
 	return &metadata, nil
 }
 
@@ -227,6 +244,8 @@ func (scope ClientScope) Clone(kind ClientLeaseKind, ownerID string) (ClientScop
 		useRecipeIDsByDefault: scope.useRecipeIDsByDefault,
 		sdkEntrypoint:         scope.sdkEntrypoint,
 		lineageAgent:          scope.lineageAgent,
+		inertAttachables:      scope.inertAttachables,
+		callerAgent:           scope.callerAgent,
 		lease:                 lease,
 	}, nil
 }
@@ -255,6 +274,8 @@ func (scope ClientScope) Delegate(kind ClientLeaseKind, ownerID string) (ClientS
 		useRecipeIDsByDefault: scope.useRecipeIDsByDefault,
 		sdkEntrypoint:         scope.sdkEntrypoint,
 		lineageAgent:          scope.lineageAgent,
+		inertAttachables:      scope.inertAttachables,
+		callerAgent:           scope.callerAgent,
 		lease:                 lease,
 	}, nil
 }
