@@ -256,6 +256,85 @@ func (LLMSuite) TestDangTools(ctx context.Context, t *testctx.T) {
 		require.True(t, strings.HasSuffix(strings.TrimSpace(out), "from-the-host"), out)
 	})
 
+	t.Run("installed modules of a snapshot workspace", func(ctx context.Context, t *testctx.T) {
+		// `dagger agent` binds a snapshot of the workspace: a value, whose
+		// conversation schema is core only. The Dang tools still see the
+		// modules it installs, loaded from its own tree, a git module
+		// included, and `at` names one whose source isn't in the tree.
+		helper := base.Directory(".dagger/modules/helper")
+		svc, _ := gitSmartHTTPServiceDirAuth(ctx, t, c, "", makeGitDir(c, helper, "main"), "", nil)
+		repo := "http://" + startedServiceIP(ctx, t, c, svc) + "/repo.git"
+		remote := base.
+			WithNewFile("dagger.toml", fmt.Sprintf(
+				"[modules.notes]\nsource = %q\n\n[modules.helper]\nsource = %q\n", ".dagger/modules/notes", repo+"@main")).
+			WithExec([]string{"git", "add", "."}).
+			WithExec([]string{"git", "commit", "-m", "install helper"})
+		out := runDangToolCalls(ctx, t, c, remote, daggerShellNoMod,
+			`with-workspace --workspace $(current-workspace | snapshot)`,
+			[]dangToolCall{
+				{"DangCheck", map[string]string{"source": `notes.greet(name: "x")`}},
+				{"DangEval", map[string]string{"source": `notes.greet(name: "x")`}},
+				{"DangCheck", map[string]string{"source": `helper.ping`}},
+				{"DangCheck", map[string]string{"search": "only snippets load"}},
+				{"DangEval", map[string]string{"source": `helper.ping`}},
+				{"DangCheck", map[string]string{"at": "helper"}},
+				{"DangCheck", map[string]string{"at": "helper", "source": "Helper"}},
+				{"DangEval", map[string]string{"at": "helper", "source": `Helper.ping + "!"`}},
+				{"DangCheck", map[string]string{"at": "nope", "source": "1"}},
+			})
+		for _, want := range []string{
+			`String! = "hello, X"`,
+			"String! has ",
+			"Dagger.Helper.ping: String!",
+			"  type Helper — A module the workspace doesn't install",
+			`String! = "pong"`,
+			fmt.Sprintf("ok · module helper (%s@main) · 1 file · nothing ran", repo),
+			"type Helper\n",
+			`String! = "pong!"`,
+			fmt.Sprintf("module helper (%s@main)", repo),
+			`error: at "nope": nope is neither a module installed in the workspace nor one of its directories (installed: helper, notes)`,
+		} {
+			require.Contains(t, out, want)
+		}
+		require.NotContains(t, out, `"notes" not found`)
+		require.NotContains(t, out, `"helper" not found`)
+		require.NotContains(t, out, "no such file or directory")
+	})
+
+	t.Run("a module installed by a snippet", func(ctx context.Context, t *testctx.T) {
+		// A module a snippet installs (`ws = ws.withModule(…)`) is in the
+		// next call's scope, in a live workspace and in a snapshot.
+		helper := base.Directory(".dagger/modules/helper")
+		svc, _ := gitSmartHTTPServiceDirAuth(ctx, t, c, "", makeGitDir(c, helper, "main"), "", nil)
+		repo := "http://" + startedServiceIP(ctx, t, c, svc) + "/repo.git"
+		committed := base.
+			WithExec([]string{"git", "add", "."}).
+			WithExec([]string{"git", "commit", "-m", "initial"})
+		calls := []dangToolCall{
+			{"DangCheck", map[string]string{"source": `helper.ping`}},
+			{"DangEval", map[string]string{"source": fmt.Sprintf(`ws = ws.withModule(ref: %q)`, repo+"@main")}},
+			{"DangCheck", map[string]string{"source": `helper.ping`}},
+			{"DangEval", map[string]string{"source": `helper.ping`}},
+			{"DangEval", map[string]string{"at": "helper", "source": `Helper.ping + "?"`}},
+		}
+		for name, bind := range map[string]string{
+			"live":     bind,
+			"snapshot": `with-workspace --workspace $(current-workspace | snapshot)`,
+		} {
+			out := runDangToolCalls(ctx, t, c, committed, daggerShellNoMod, bind, calls)
+			for _, want := range []string{
+				// Not installed yet.
+				`<check>:1:1: error: "helper" not found`,
+				"ws written",
+				"Dagger.Helper.ping: String!",
+				`String! = "pong"`,
+				`String! = "pong?"`,
+			} {
+				require.Contains(t, out, want, name)
+			}
+		}
+	})
+
 	t.Run("a commit through ws is written", func(ctx context.Context, t *testctx.T) {
 		// A commit moves HEAD without leaving a file delta: writing ws makes
 		// the committed workspace the conversation's, as a tool returning it

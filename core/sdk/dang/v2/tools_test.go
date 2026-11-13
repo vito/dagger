@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -14,6 +15,8 @@ import (
 	"github.com/vito/dang/v2/pkg/dang"
 	"github.com/vito/dang/v2/pkg/dang/analysis"
 	"github.com/vito/dang/v2/pkg/introspection"
+
+	"github.com/dagger/dagger/core"
 )
 
 const dangToolsTestSDL = `
@@ -600,5 +603,85 @@ func TestRelPath(t *testing.T) {
 		require.Equal(t, tc.want, got, tc)
 	}
 	_, ok := relPath("mod", "other")
+	require.False(t, ok)
+}
+
+// An installed module's constructor is a Query field like any other, so the
+// default scope names it as a global, by its field name, and search finds
+// its API: the module named go is `go`, its main object `Go`.
+func TestDangInstalledModuleGlobals(t *testing.T) {
+	t.Parallel()
+	sdl := strings.Replace(dangToolsTestSDL, "type Query {", `type Query {
+  """
+  Go toolchain helpers.
+  """
+  go: Go!`, 1) + `
+"""
+Builds and tests Go packages.
+"""
+type Go implements Node {
+  id: ID!
+  """
+  Run the tests of the selected packages.
+  """
+  test(packages: [String!]): String!
+}
+`
+	schema, err := dang.SchemaFromSDL(sdl, "test.graphqls")
+	require.NoError(t, err)
+	sc := workspaceTestScope(t)
+	sc.schema = schema
+
+	out := checkTest(t, sc, `go.test(packages: ["./..."])`, "")
+	require.True(t, strings.HasPrefix(out, "String! has "), out)
+	out = checkTest(t, sc, `Go`, "")
+	require.True(t, strings.HasPrefix(out, "type Go\n  Builds and tests Go packages.\n"), out)
+	out = checkTest(t, sc, "", "go")
+	require.Contains(t, out, "  type Go — Builds and tests Go packages.\n")
+	out = checkTest(t, sc, "", "selected packages")
+	require.Contains(t, out, "Go.test(packages: [String!]): String! — Run the tests of the selected packages.")
+}
+
+// A module scope with no .dang files, such as a module written with another
+// SDK, says so as a diagnostic instead of failing the call.
+func TestDangCheckModuleWithoutDangFiles(t *testing.T) {
+	t.Parallel()
+	sc := moduleTestScope(t, map[string]string{"main.go": "package main\n"})
+	sc.label = "module go (dagger.io/go)"
+	sc.sdk = "go"
+	out := checkTest(t, sc, "", "")
+	require.Equal(t, "error: module go (dagger.io/go) is written with the go SDK, not Dang: it has no .dang files to diagnose; pass source to check Dang against its API\n"+
+		"1 error · module go (dagger.io/go) · 0 files · nothing ran\n", out)
+
+	// Snippets still check against its API.
+	out = checkTest(t, sc, `container.withExec(args: ["true"]).stdout`, "")
+	require.Contains(t, out, "ok · module go (dagger.io/go) · 0 files · nothing ran")
+
+	sc.sdk = "dang"
+	out = checkTest(t, sc, "", "")
+	require.True(t, strings.HasPrefix(out, "error: no .dang files in mod\n"), out)
+}
+
+// An `at` naming nothing to scope to is reported as the call's result, with
+// what is installed, not as a tool error.
+func TestDangAtReport(t *testing.T) {
+	t.Parallel()
+	scope := &core.DangScope{LoadFailures: []core.ModuleLoadFailure{{Name: "broken", Message: "exit code 1"}}}
+	loc := dangLocation{installed: "broken", source: "github.com/acme/broken"}
+	require.Equal(t, "module broken (github.com/acme/broken) failed to load: exit code 1", unloadedModuleMessage(scope, loc))
+	loc = dangLocation{installed: "other", source: "github.com/acme/other"}
+	require.Equal(t, "module other (github.com/acme/other) is installed, but didn't load", unloadedModuleMessage(scope, loc))
+	scope.InstalledErr = errors.New("bad dagger.toml")
+	require.Contains(t, unloadedModuleMessage(scope, loc), "the workspace's modules didn't load: bad dagger.toml")
+
+	require.Equal(t, " (installed: broken (failed to load))", installedNames(scope))
+	require.Empty(t, installedNames(&core.DangScope{}))
+
+	report, ok := dangAtReport(fmt.Errorf("wrapped: %w", &dangAtError{at: "nope", msg: "nope is neither a module installed in the workspace nor one of its directories"}))
+	require.True(t, ok)
+	require.Equal(t, "error: at \"nope\": nope is neither a module installed in the workspace nor one of its directories\n1 error · nothing ran\n", report)
+	_, ok = dangAtReport(errors.New("boom"))
+	require.False(t, ok)
+	_, ok = dangAtReport(nil)
 	require.False(t, ok)
 }

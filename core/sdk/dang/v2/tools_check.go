@@ -71,6 +71,10 @@ type dangScope struct {
 	// label names the scope in footers.
 	label string
 
+	// sdk names the SDK a module scope's module is written with, if known:
+	// a module that isn't written in Dang has no .dang files to diagnose.
+	sdk string
+
 	// values, for the workspace scope, declares `ws` and the bound tool
 	// objects (see valueDeclarations).
 	values string
@@ -270,10 +274,12 @@ func checkDang(ctx context.Context, sc *dangScope, source, search string) (strin
 		}
 		files = countFiles(a)
 		if sc.module {
+			diags := a.Diagnostics()
 			if files == 0 {
-				return "", fmt.Errorf("no .dang files in %s", sc.dir)
+				// Nothing to diagnose: say why, as a diagnostic.
+				diags = []analysis.Diagnostic{{Severity: analysis.SeverityError, Message: noDangFilesMessage(sc)}}
 			}
-			r.diagnostics(sc, a.Diagnostics())
+			r.diagnostics(sc, diags)
 		}
 		scope = searchScope(a, sc)
 	case sc.pos != nil:
@@ -333,6 +339,15 @@ func checkDang(ctx context.Context, sc *dangScope, source, search string) (strin
 	footer = append(footer, "nothing ran")
 	r.linef("%s", strings.Join(footer, " · "))
 	return r.String(), nil
+}
+
+// noDangFilesMessage says why a module scope has no .dang files to
+// diagnose: most likely, its module isn't written in Dang.
+func noDangFilesMessage(sc *dangScope) string {
+	if !isDangSDK(sc.sdk) {
+		return fmt.Sprintf("%s is written with the %s SDK, not Dang: it has no .dang files to diagnose; pass source to check Dang against its API", sc.label, sc.sdk)
+	}
+	return fmt.Sprintf("no .dang files in %s", sc.display(sc.dir))
 }
 
 // countFiles counts the scope's own analyzed files.
