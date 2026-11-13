@@ -66,14 +66,26 @@ type DangWrite struct {
 // DangScope is the default scope of a Dang tool call: the conversation's API
 // and the values bound in it besides `ws`.
 type DangScope struct {
-	// Deps is the API: the core API, the modules the conversation's schema
-	// serves, and the modules of its bound tool objects. A nested client
+	// Deps is the API: the core API, the modules installed in the
+	// conversation's workspace as of the call (else the modules its schema
+	// serves), and the modules of its bound tool objects. A nested client
 	// running code in the scope serves it (see
 	// engine.ClientMetadata.ServedDeps).
 	Deps *SchemaBuilder
 
 	// SchemaFile is Deps' introspection JSON, as module code sees it.
 	SchemaFile dagql.Result[*File]
+
+	// Installed are the modules installed in the conversation's workspace,
+	// as of the call, that loaded: the ones Deps serves. `at` an installed
+	// module that isn't in the workspace's tree (a git module) resolves to
+	// one of these.
+	Installed []dagql.ObjectResult[*Module]
+
+	// LoadFailures are the installed modules that failed to load, and
+	// InstalledErr why none could be, if so: what `at` such a module says.
+	LoadFailures []ModuleLoadFailure
+	InstalledErr error
 
 	// Bindings are the conversation's bound tool objects, as of the call.
 	Bindings []DangBinding
@@ -132,18 +144,18 @@ func registeredDangTools() DangTools {
 // Descriptions of the Dang builtins. Every conversation pays for them, so
 // they stay terse; they are the only guidance pointing at the tools.
 const (
-	dangCheckDescription = "Type-check Dang without running anything. Scope: the core API and installed modules (as `Dagger`), or with `at` a Dang module of the workspace, one of its files, or a path:line:col in one (seeing the locals there). Either way `ws: Workspace!` and your tool objects (by type name: `editor`) are bound." + "\n" +
+	dangCheckDescription = "Type-check Dang without running anything. Scope: the core API and installed modules (as `Dagger`), or with `at` a module of the workspace, one of its .dang files, or a path:line:col in one (seeing the locals there). Either way `ws: Workspace!` and your tool objects (by type name: `editor`) are bound." + "\n" +
 		"Without `source`: the module's or file's errors, warnings and deprecations, as path:line:col." + "\n" +
 		"With `source`: its errors, else what it is. A member reference (`xs.reduce`, `JSON.encode`, `Container.withExec`) gives the member's signature, docs and example; a type name, the type and its members; any other expression, its type and members. Probe before writing a helper (`[\"a\"]` lists every list method), and check after each edit, before running a @check." + "\n" +
 		"`search` ranks builtins, API fields and the module's declarations by name and docs."
 	dangCheckSourceDescription = "Dang to check as one more file of the scope; its last expression is described."
-	dangCheckAtDescription     = "Scope: a Dang module of the workspace (name or directory), a .dang file of one, or path:line:col in one. Default: the workspace scope."
+	dangCheckAtDescription     = "Scope: a module installed in the workspace (by name), a Dang module's directory, a .dang file of one, or path:line:col in one. Default: the workspace scope."
 	dangCheckSearchDescription = "Words to find in names and docs, e.g. \"sort\" or \"escape html\"."
 
 	dangEvalDescription = "Run Dang: printed output, then the result as `TYPE = value`, then its type's member names. Scope as for DangCheck, without positions: `at` a module runs the snippet as one more file of it, after its top level. A type error runs nothing." + "\n" +
 		"Engine calls go through the scope's API (with `at`, the module's dependencies and own API), with no access to the host, and are counted. Assignment is the write: if the snippet succeeds, a reassigned `ws` (`ws = ws.withChanges(editor.edit(source: ws, …))`) is applied to the workspace and a reassigned tool object (`editor = editor.todoWrite(…)`) becomes its state; nothing else is. Objects stay lazy (shown as their query) until you select a scalar such as `.stdout` or `.sync`. Each call is standalone; wrap long runs in Timeout."
 	dangEvalSourceDescription = "Dang statements to run; the last expression is the result."
-	dangEvalAtDescription     = "A Dang module of the workspace (name or directory), or a .dang file of one. Default: the workspace scope."
+	dangEvalAtDescription     = "A module installed in the workspace (by name), a Dang module's directory, or a .dang file of one. Default: the workspace scope."
 )
 
 // loadDangTools registers DangCheck and DangEval, whenever the engine has a
@@ -158,7 +170,9 @@ func (m *MCP) loadDangTools(srv *dagql.Server, allTools *LLMToolSet) {
 		return DangToolEnv{
 			Server:    srv,
 			Workspace: start,
-			Scope:     m.dangScope,
+			Scope: func(ctx context.Context) (*DangScope, error) {
+				return m.dangScope(ctx, srv, start)
+			},
 			Write: func(ctx context.Context, writes []DangWrite) (string, error) {
 				return m.applyDangWrites(ctx, srv, start, writes)
 			},
@@ -214,19 +228,37 @@ func (m *MCP) loadDangTools(srv *dagql.Server, allTools *LLMToolSet) {
 // its result; reassigning the binding is what rebinds the object (see
 // applyDangWrites).
 //
+// The API has the modules installed in ws, the conversation's workspace as
+// the call begins, loaded from ws itself (see LoadWorkspaceModules): a value
+// workspace's from its own tree, which baseServer leaves out, and a module
+// an earlier snippet installed (`ws = ws.withModule(…)`) as soon as it is.
+// Loads are cached, so an unchanged workspace costs little after the first.
+//
 // Only module objects are bound: a core type's name would shadow a core
 // field (`container`), and `ws` is the workspace already. An object whose
 // module can't join the API is skipped rather than failing the call.
-func (m *MCP) dangScope(ctx context.Context) (*DangScope, error) {
-	ctx, base, err := m.baseDeps(ctx)
+func (m *MCP) dangScope(ctx context.Context, srv *dagql.Server, ws dagql.ObjectResult[*Workspace]) (*DangScope, error) {
+	ctx, served, err := m.baseDeps(ctx)
 	if err != nil {
 		return nil, err
+	}
+	base := served
+	scope := &DangScope{}
+	if ws.Self() != nil {
+		scope.Installed, scope.LoadFailures, scope.InstalledErr = LoadWorkspaceModules(dagql.ContextWithServer(ctx, srv.Canonical()), ws)
+		if scope.InstalledErr == nil {
+			mods := make([]Mod, len(scope.Installed))
+			for i, mod := range scope.Installed {
+				mods[i] = NewUserMod(mod)
+			}
+			base = base.WithPrimaryMods(mods)
+		}
 	}
 	m.mu.Lock()
 	bound := slices.Clone(m.boundTools)
 	m.mu.Unlock()
 
-	scope := &DangScope{Deps: base}
+	scope.Deps = base
 	seen := map[string]bool{"ws": true}
 	for _, b := range bound {
 		typeName := b.typeName()
@@ -283,6 +315,12 @@ func (m *MCP) dangScope(ctx context.Context) (*DangScope, error) {
 		}
 		scope.Bindings, scope.BoundMods, scope.Deps = nil, nil, base
 		scope.SchemaFile, err = base.SchemaIntrospectionJSONFileForModule(ctx)
+	}
+	if err != nil && base != served {
+		// The installed modules don't fit beside the API: go without them.
+		scope.Installed, scope.InstalledErr = nil, fmt.Errorf("serve the installed modules: %w", err)
+		scope.Bindings, scope.BoundMods, scope.Deps = nil, nil, served
+		scope.SchemaFile, err = served.SchemaIntrospectionJSONFileForModule(ctx)
 	}
 	if err != nil {
 		return nil, err

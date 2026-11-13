@@ -265,6 +265,37 @@ func (b *SchemaBuilder) With(mod Mod, opts InstallOpts) *SchemaBuilder {
 	return cp
 }
 
+// WithPrimaryMods returns b serving mods with their constructors. An entry
+// named as a module of mods serves that module instead, with its install
+// options and its constructor; the rest of mods are appended. An entry whose
+// module is the same as its replacement is kept as it is, so the result
+// builds the same schema.
+func (b *SchemaBuilder) WithPrimaryMods(mods []Mod) *SchemaBuilder {
+	cp := b.Clone()
+	byName := make(map[string]Mod, len(mods))
+	for _, mod := range mods {
+		byName[mod.Name()] = mod
+	}
+	for i, e := range cp.entries {
+		mod, named := byName[e.mod.Name()]
+		if !named || e.mod.Name() == ModuleName {
+			continue
+		}
+		if same, err := e.mod.Same(mod); err != nil || !same {
+			cp.entries[i].mod = mod
+		}
+		cp.entries[i].opts.SkipConstructor = false
+		delete(byName, mod.Name())
+	}
+	for _, mod := range mods {
+		if _, ok := byName[mod.Name()]; ok {
+			cp.entries = append(cp.entries, modDepEntry{mod: mod})
+			delete(byName, mod.Name())
+		}
+	}
+	return cp
+}
+
 func (b *SchemaBuilder) Lookup(name string) (Mod, bool) {
 	if b == nil {
 		return nil, false

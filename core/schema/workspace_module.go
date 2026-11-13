@@ -10,6 +10,21 @@ import (
 	"github.com/dagger/dagger/dagql"
 )
 
+func init() {
+	core.SetWorkspaceModulesLoader(loadInstalledWorkspaceModules)
+}
+
+// loadInstalledWorkspaceModules loads every module installed in ws as
+// Workspace.artifacts does (workspaceTargetModules), best effort; see
+// core.LoadWorkspaceModules.
+func loadInstalledWorkspaceModules(ctx context.Context, ws dagql.ObjectResult[*core.Workspace]) ([]dagql.ObjectResult[*core.Module], []core.ModuleLoadFailure, error) {
+	ctx, err := withWorkspaceClientContext(ctx, ws.Self())
+	if err != nil {
+		return nil, nil, err
+	}
+	return (&workspaceSchema{}).workspaceTargetModules(ctx, ws, nil, core.ModuleLoadBestEffort)
+}
+
 func (s *workspaceSchema) workspaceModules(
 	ctx context.Context,
 	parent dagql.ObjectResult[*core.Workspace],

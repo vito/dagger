@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 
@@ -156,6 +157,30 @@ func workspaceHostRoutingContext(ctx context.Context, ws *Workspace) (context.Co
 		return nil, fmt.Errorf("workspace client metadata: %w", err)
 	}
 	return engine.ContextWithClientMetadata(ctx, clientMetadata), nil
+}
+
+// workspaceModulesLoader loads the modules installed in a workspace; see
+// LoadWorkspaceModules. The schema package, which owns workspace module
+// loading, sets it.
+var workspaceModulesLoader func(context.Context, dagql.ObjectResult[*Workspace]) ([]dagql.ObjectResult[*Module], []ModuleLoadFailure, error)
+
+// SetWorkspaceModulesLoader installs the implementation of
+// LoadWorkspaceModules.
+func SetWorkspaceModulesLoader(loader func(context.Context, dagql.ObjectResult[*Workspace]) ([]dagql.ObjectResult[*Module], []ModuleLoadFailure, error)) {
+	workspaceModulesLoader = loader
+}
+
+// LoadWorkspaceModules loads the modules installed in ws, best effort, as
+// Workspace.artifacts discovers them: a live workspace's served modules with
+// its pending edits to dagger.toml and module sources resolved over them, a
+// value workspace's from its own tree, pinned by its own lock, never the
+// caller's. A module that fails to load is left out and returned as a
+// failure. ctx must have the dagql server to load them with.
+func LoadWorkspaceModules(ctx context.Context, ws dagql.ObjectResult[*Workspace]) ([]dagql.ObjectResult[*Module], []ModuleLoadFailure, error) {
+	if workspaceModulesLoader == nil {
+		return nil, nil, errors.New("no workspace module loader")
+	}
+	return workspaceModulesLoader(ctx, ws)
 }
 
 // loadWorkspaceOwnerContext switches to a live Workspace's owning client and
