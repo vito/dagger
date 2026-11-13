@@ -520,10 +520,30 @@ func describeSnippet(ctx context.Context, r *dangReport, sc *dangScope, a *analy
 	if t == nil {
 		return
 	}
+	if !hasMemberListing(t) {
+		// A scalar, list or record: its type says what it is; its members
+		// are a lookup of its type away (`String`, `List`).
+		if member == nil {
+			r.linef("%s", dang.FormatType(t))
+		}
+		return
+	}
 	if member != nil {
 		r.WriteByte('\n')
 	}
 	describeMembers(r, dang.FormatType(t), analysis.TypeMembers(t))
+}
+
+// hasMemberListing reports whether a value of type t is described with its
+// type's members: an object or interface, whose members are what to do with
+// it next. A scalar's, enum's, list's or record's members are noise beside
+// its value, and a lookup of its type away.
+func hasMemberListing(t hm.Type) bool {
+	if nn, ok := t.(hm.NonNullType); ok {
+		t = nn.Type
+	}
+	named, ok := t.(*dang.Type)
+	return ok && named.Named != "" && (named.Kind == dang.ObjectKind || named.Kind == dang.InterfaceKind)
 }
 
 // dropWithin leaves out the diagnostics located inside node.

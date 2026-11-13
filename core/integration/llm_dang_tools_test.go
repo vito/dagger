@@ -121,7 +121,7 @@ func (LLMSuite) TestDangTools(ctx context.Context, t *testctx.T) {
 			"shout(name: String!): String!",
 			"declared at .dagger/modules/notes/main.dang:34:5",
 			// A snippet checked inside a function body sees its locals.
-			"String! has ",
+			"[Tool result]: String!\n",
 			// ws is the conversation's workspace; the read is an engine call.
 			"reading\n",
 			`String! = "hi from the workspace\n"`,
@@ -202,8 +202,9 @@ func (LLMSuite) TestDangTools(ctx context.Context, t *testctx.T) {
 			{"DangEval", map[string]string{"source": `ws.artifacts.filterUri(uri: "probe/ok").asChecks.{{pass}}`}},
 			{"DangEval", map[string]string{"source": `ws.artifacts.filterUri(uri: "probe/broken").asChecks.{{pass}}`}},
 		})
-		// The API chain: the report alone, as before.
-		require.Regexp(t, `\[Tool result\]: String! = "hi\\n"\nmembers: [^\n]*\nok · [^\n]*engine calls? · workspace scope\n\n\[Assistant`, out)
+		// The API chain: the report alone, as before; a String lists no
+		// members.
+		require.Regexp(t, `\[Tool result\]: String! = "hi\\n"\nok · [^\n]*engine calls? · workspace scope\n\n\[Assistant`, out)
 		// Checks: the report as OUTPUT, beside what they surfaced.
 		require.Contains(t, out, "== CHECKS ==")
 		require.Contains(t, out, "== OUTPUT ==\n")
@@ -338,7 +339,7 @@ func (LLMSuite) TestDangTools(ctx context.Context, t *testctx.T) {
 			})
 		for _, want := range []string{
 			`String! = "hello, X"`,
-			"String! has ",
+			"[Tool result]: String!\n",
 			"Dagger.Helper.ping: String!",
 			"  type Helper — A module the workspace doesn't install",
 			`String! = "pong"`,
@@ -388,7 +389,7 @@ func (LLMSuite) TestDangTools(ctx context.Context, t *testctx.T) {
 				"Dagger.Helper.ping: String!",
 				`String! = "pong"`,
 				`String! = "pong?"`,
-				"String! has ",
+				"[Tool result]: String!\n",
 				`<check>:1:1: error: "notes" not found`,
 			} {
 				require.Contains(t, out, want, name)

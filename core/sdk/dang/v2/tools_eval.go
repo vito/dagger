@@ -256,8 +256,8 @@ func reassignedNames(source string, version dang.Version) map[string]bool {
 	return names
 }
 
-// reportEvalResult reports a snippet's result: its value and its type's
-// members. A result is described, never applied: writing is assigning (see
+// reportEvalResult reports a snippet's result: its value and, for an object,
+// its members. A result is described, never applied: writing is assigning (see
 // finalWrites), so a Workspace or Changeset the snippet only returns says
 // how to write it; reportEvalResult reports whether it was one.
 func reportEvalResult(ctx context.Context, r *dangReport, calls *countingClient, val dang.Value, typ hm.Type, wroteWS bool) (unwritten bool) {
@@ -274,6 +274,10 @@ func reportEvalResult(ctx context.Context, r *dangReport, calls *countingClient,
 			r.linef("(not applied; to write it, assign it: ws = …)")
 			unwritten = true
 		}
+	}
+	// Only an object's members are worth listing: what to do with it next.
+	if _, isNull := val.(dang.NullValue); isNull || val == nil || !hasMemberListing(typ) {
+		return unwritten
 	}
 	members := analysis.TypeMembers(typ)
 	if len(members) == 0 {

@@ -123,9 +123,14 @@ func TestDangCheckWorkspaceScope(t *testing.T) {
 	t.Parallel()
 	sc := workspaceTestScope(t)
 
-	t.Run("a value's type and members", func(t *testing.T) {
+	t.Run("a value's type, and an object's members", func(t *testing.T) {
 		out := checkTest(t, sc, `["a"]`, "")
-		require.Contains(t, out, "[String!]! has ")
+		require.Equal(t, "[String!]!\nok · workspace scope · nothing ran\n", out, "a list's members are a lookup of List away")
+		out = checkTest(t, sc, `container.withExec(args: ["x"])`, "")
+		require.Contains(t, out, "Dagger.Container! has ")
+		require.Contains(t, out, "\n  withExec(args: [String!]!): Dagger.Container! — Execute a command in the container.\n")
+		// The type name is the discovery path for a list's members.
+		out = checkTest(t, sc, `List`, "")
 		require.Contains(t, out, "\n  reduce(initial: b) { acc: b, item: a => b }: b — ")
 		require.True(t, strings.HasSuffix(out, "ok · workspace scope · nothing ran\n"), out)
 	})
@@ -269,7 +274,7 @@ func TestDangCheckModuleScope(t *testing.T) {
 		sc.file = "mod/main.dang"
 		sc.pos = &analysis.Pos{Line: 10, Column: 3}
 		out := checkTest(t, sc, "greeting + name", "")
-		require.True(t, strings.HasPrefix(out, "String! has "), out)
+		require.True(t, strings.HasPrefix(out, "String!\n"), out)
 		out = checkTest(t, sc, "name.size", "")
 		require.Contains(t, out, "<check>:1:1: error: ")
 		require.Contains(t, out, "1 error · module mod (mod) · 1 file · nothing ran\n")
@@ -329,8 +334,19 @@ func TestDangEval(t *testing.T) {
 	t.Run("output and result", func(t *testing.T) {
 		out, err := evalTest(t, sc, "print(\"hello\")\n[1, 2].map { x => x * 2 }", nil)
 		require.NoError(t, err)
-		require.True(t, strings.HasPrefix(out, "output:\nhello\n[Int!]! = [2, 4]\nmembers: "), out)
+		require.True(t, strings.HasPrefix(out, "output:\nhello\n[Int!]! = [2, 4]\nok · "), out)
 		require.Regexp(t, `\nok · \d+ms · 0 engine calls · workspace scope\n$`, out)
+	})
+
+	t.Run("only an object's members are listed", func(t *testing.T) {
+		for _, source := range []string{`"s"`, `1`, `true`, `[container]`, `{{a: 1}}`, "let c: Container = null\nc"} {
+			out, err := evalTest(t, sc, source, nil)
+			require.NoError(t, err)
+			require.NotContains(t, out, "members:", source)
+		}
+		out, err := evalTest(t, sc, `container`, nil)
+		require.NoError(t, err)
+		require.Contains(t, out, "members: id stdout sync withExec\n")
 	})
 
 	t.Run("objects stay lazy", func(t *testing.T) {
@@ -406,13 +422,13 @@ func TestDangEval(t *testing.T) {
 		rep, err := evalReport(t, sc, "print(\"reading\")\ncontainer.withExec([\"cat\"]).stdout", stdout(file.String()))
 		require.NoError(t, err)
 		// A file's contents read as its lines, between triple quotes.
-		require.Contains(t, rep.Text, "output:\nreading\nString! = \"\"\"\n"+file.String()+"\"\"\"\nmembers: ")
+		require.Contains(t, rep.Text, "output:\nreading\nString! = \"\"\"\n"+file.String()+"\"\"\"\nok · ")
 		require.False(t, rep.Rejected)
 
 		// Verbatim: a missing final newline is said, not added.
 		out, err := evalTest(t, sc, `container.withExec(["cat"]).stdout`, stdout(strings.TrimSuffix(file.String(), "\n")))
 		require.NoError(t, err)
-		require.Contains(t, out, "line 299 of a README\n\"\"\" (no final newline)\nmembers: ")
+		require.Contains(t, out, "line 299 of a README\n\"\"\" (no final newline)\nok · ")
 
 		// A one-line string that fits a line isn't cut, nor a list of a few
 		// hundred elements.
@@ -776,7 +792,7 @@ type Go implements Node {
 	sc.schema = schema
 
 	out := checkTest(t, sc, `go.test(packages: ["./..."])`, "")
-	require.True(t, strings.HasPrefix(out, "String! has "), out)
+	require.True(t, strings.HasPrefix(out, "String!\n"), out)
 	out = checkTest(t, sc, `Go`, "")
 	require.True(t, strings.HasPrefix(out, "type Go\n  Builds and tests Go packages.\n"), out)
 	out = checkTest(t, sc, "", "go")
