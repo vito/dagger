@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
@@ -9,11 +10,86 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	telemetry "github.com/dagger/otel-go"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
+	otlpcommonv1 "go.opentelemetry.io/proto/otlp/common/v1"
 
 	"github.com/dagger/dagger/dagql"
+	"github.com/dagger/dagger/engine/clientdb"
 )
+
+// A Dang tool call's result is shaped as a module tool call's: the report
+// alone when nothing nested renders, as for a chain of API calls, and the
+// report as OUTPUT beside the CHECKS and FAILURES sections when the snippet
+// ran checks.
+func TestDangSpanResult(t *testing.T) {
+	t.Parallel()
+	const (
+		traceID = "000102030405060708090a0b0c0d0e0f"
+		toolID  = "00000000000000e1"
+		callID  = "00000000000000e2"
+		execID  = "00000000000000e3"
+	)
+	report := "String! = \"hi\\n\"\nok · 5ms · 1 engine call · workspace scope\n"
+	attr := func(key, value string) *otlpcommonv1.KeyValue {
+		return &otlpcommonv1.KeyValue{Key: key, Value: stringLogBody(value)}
+	}
+	// result runs the tool call's span with spans beneath it, the report
+	// logged to its own.
+	result := func(t *testing.T, nested ...clientdb.Span) string {
+		t.Helper()
+		dbs := clientdb.NewDBs(t.TempDir())
+		store, err := dbs.Open(t.Context(), "capture-test")
+		require.NoError(t, err)
+		defer store.Close()
+		spans := append([]clientdb.Span{{TraceID: traceID, SpanID: toolID, Name: "DangEval"}}, nested...)
+		for i := range spans {
+			spans[i].StartTime = 100
+			spans[i].EndTime = sql.NullInt64{Int64: 200, Valid: true}
+		}
+		_, err = store.AppendSpans(spans)
+		require.NoError(t, err)
+		_, err = store.AppendLogs([]clientdb.Log{
+			persistedCaptureLog(t, traceID, toolID, "stdout", stringLogBody(report)),
+			persistedCaptureLog(t, traceID, execID, "stdout", stringLogBody("hi\n")),
+		})
+		require.NoError(t, err)
+		ctx := ContextWithQuery(dangToolCallCtx(t, toolID), &Query{Server: &logCaptureTestServer{mockServer: &mockServer{}, dbs: dbs}})
+		return newMCP().dangToolResult(ctx, DangReport{Text: report})
+	}
+	call := clientdb.Span{TraceID: traceID, SpanID: callID, ParentSpanID: validSpanID(toolID), Name: "Container.withExec"}
+	exec := clientdb.Span{TraceID: traceID, SpanID: execID, ParentSpanID: validSpanID(callID), Name: "exec echo hi"}
+	check := func(name string, failed bool) clientdb.Span {
+		span := clientdb.Span{TraceID: traceID, SpanID: callID, ParentSpanID: validSpanID(toolID), Name: "Check.pass",
+			Attributes: marshalSpanAttrs(t, attr(telemetry.CheckNameAttr, name))}
+		if failed {
+			span.StatusCode = int64(codes.Error)
+			span.StatusMessage = "the probe failed"
+		}
+		return span
+	}
+
+	t.Run("a chain of API calls shows the report alone", func(t *testing.T) {
+		require.Equal(t, strings.TrimSuffix(report, "\n"), result(t, call, exec))
+	})
+
+	t.Run("a passing check is reported beside it", func(t *testing.T) {
+		got := result(t, check("probe:ok", false))
+		require.Contains(t, got, "== OUTPUT ==\n"+strings.TrimSuffix(report, "\n"))
+		require.Contains(t, got, "== CHECKS ==")
+		require.Contains(t, got, "probe:ok")
+		require.Contains(t, got, "use ReadLogs(span: "+toolID+") to read the full logs")
+	})
+
+	t.Run("a failing check leads with its failure", func(t *testing.T) {
+		got := result(t, check("probe:broken", true))
+		require.True(t, strings.HasPrefix(got, "== FAILURES =="), got)
+		require.Contains(t, got, `check "probe:broken"`)
+		require.Contains(t, got, "== OUTPUT ==\n"+strings.TrimSuffix(report, "\n"))
+	})
+}
 
 // A DangEval snippet's writes are all or nothing: when one fails to commit,
 // the ones before it are undone.

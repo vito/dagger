@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 	"sync"
@@ -249,35 +250,78 @@ func (m *MCP) loadDangTools(srv *dagql.Server, allTools *LLMToolSet) {
 // Dang's own diagnostics.
 const dangSkillNudge = "See the " + dangSkillName + " skill (ReadSkill) for Dang's syntax and semantics."
 
-// dangToolResult is what the model sees of a Dang tool's report. The report
-// is bounded as a module tool's printed output is (see flatLogs): long lines
-// are clamped, and past the byte budget the middle gives way to a pointer to
-// ReadLogs on the tool call's span, which the report was logged to, line for
-// line (see DangTools). The pointer names the span's own logs: the engine
-// calls a snippet makes log beneath it too. Only a conversation's tool call
-// has a span of its own to point at; elsewhere (dagger mcp), the report is
-// only guarded, as any tool result is. A report whose source failed to parse
-// or type-check points at the dang-language skill, until the conversation
-// reads it.
+// dangToolResult is what the model sees of a Dang tool's report: a module
+// tool call's result (see dangSpanResult), with the report as its output.
+// Only a conversation's tool call has a span of its own to point at and to
+// report on; elsewhere (dagger mcp), the report is only guarded, as any tool
+// result is. A report whose source failed to parse or type-check points at
+// the dang-language skill, until the conversation reads it.
 func (m *MCP) dangToolResult(ctx context.Context, rep DangReport) string {
-	text := rep.Text
+	var text string
 	if spanID := trace.SpanContextFromContext(ctx).SpanID(); spanID.IsValid() && IsAgentToolCall(ctx) {
-		lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
-		captured := make([]capturedLine, len(lines))
-		for i, line := range lines {
-			// Clamped on a rune boundary, with room for the marker, so
-			// neither flatLogs nor the result guard clamps it again.
-			captured[i] = capturedLine{text: clampLineBytes(line, llmLogsMaxLineLen-dangLineMarkerMax), direct: true}
-		}
-		// flatLogs names the span in its pointer as ReadLogs(span: X).
-		text = flatLogs(fmt.Sprintf(`%s, scope: "own"`, spanID), captured)
+		text = m.dangSpanResult(ctx, spanID.String(), rep.Text)
 	} else {
-		text = guardToolResult(text)
+		text = guardToolResult(rep.Text)
 	}
 	if rep.Rejected && !m.hasReadSkill(dangSkillName) {
 		text = strings.TrimRight(text, "\n") + "\n" + dangSkillNudge
 	}
 	return text
+}
+
+// dangSpanResult shapes a Dang tool call's result as a module tool call's
+// is (see MCP.toolLogs and spanResult), with the report, which is the tool
+// call span's own logs line for line (see DangTools), as the tool's output.
+// When nothing nested renders -- a snippet's API calls alone surface
+// nothing with the span tree hidden -- that is the report alone, bounded as
+// a module tool's flat output is. When the snippet ran checks or tests, the
+// trace report's CHECKS, TESTS and FAILURES sections follow it, under the
+// same headings as a module tool's.
+//
+// The report's own bound points at ReadLogs on the span's own logs: the
+// engine calls a snippet makes log beneath the span too, so its line counts
+// match those, not the span's whole scope.
+func (m *MCP) dangSpanResult(ctx context.Context, spanID, report string) string {
+	own := func(budget int) string {
+		return boundDangReport(fmt.Sprintf(`%s, scope: "own"`, spanID), report, budget)
+	}
+	if !toolSpanHasDescendants(ctx, spanID) {
+		return own(llmToolLogsMaxBytes)
+	}
+	opts := toolCallReportOpts()
+	// The span's own logs are the report, shown as OUTPUT.
+	opts.HideLogSpans = map[string]bool{spanID: true}
+	nested, err := renderTraceReport(ctx, spanID, opts)
+	if err != nil {
+		// Decoration must not replace the result with a telemetry failure.
+		slog.Warn("incomplete Dang tool trace decoration", "span", spanID, "error", err)
+		return own(llmToolLogsMaxBytes)
+	}
+	if strings.TrimSpace(nested.body) == "" && nested.failures == "" {
+		return own(llmToolLogsMaxBytes)
+	}
+	// The combined result answers to the trace report's budget: leave the
+	// nested sections their share of it.
+	budget := max(traceReportMaxBytes-len(nested.body)-len(nested.failures)-dangReportSlack, traceReportMaxBytes/4)
+	return combineSpanResult(spanID, own(budget), nested.body, nested.failures)
+}
+
+// dangReportSlack is room in a combined result for its headings, separators
+// and the ReadLogs footer.
+const dangReportSlack = 512
+
+// boundDangReport bounds a Dang tool's report as flatLogs bounds a module
+// tool's printed output, to budget bytes: long lines are clamped, and past
+// the budget the middle gives way to "... N lines omitted (use ReadLogs(span:
+// ref) to read more) ...".
+func boundDangReport(ref, report string, budget int) string {
+	lines := strings.Split(strings.TrimRight(report, "\n"), "\n")
+	for i, line := range lines {
+		// Clamped on a rune boundary, with room for the marker, so the
+		// result guard doesn't clamp it again.
+		lines[i] = clampLineBytes(line, llmLogsMaxLineLen-dangLineMarkerMax)
+	}
+	return strings.TrimRight(strings.Join(capLinesBytes(ref, lines, budget), "\n"), "\n")
 }
 
 // dangLineMarkerMax is room for clampLineBytes' marker on a clamped line.

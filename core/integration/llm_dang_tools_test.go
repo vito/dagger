@@ -181,6 +181,37 @@ func (LLMSuite) TestDangTools(ctx context.Context, t *testctx.T) {
 		require.NotContains(t, out, "chars omitted")
 	})
 
+	t.Run("checks a snippet runs are reported", func(ctx context.Context, t *testctx.T) {
+		// A Dang tool call's result is a module tool call's: a chain of API
+		// calls shows the report alone; checks it ran add their sections.
+		probe := base.
+			WithNewFile(".dagger/modules/probe/dagger-module.toml", "name = \"probe\"\nengineVersion = \"latest\"\n\n[runtime]\n  source = \"dang\"\n").
+			WithNewFile(".dagger/modules/probe/main.dang", `type Probe {
+  pub ok: Void @check {
+    null
+  }
+
+  pub broken: Void @check {
+    raise "the probe failed"
+  }
+}
+`).
+			WithNewFile("dagger.toml", "[modules.notes]\nsource = \".dagger/modules/notes\"\n\n[modules.probe]\nsource = \".dagger/modules/probe\"\n")
+		out := runDangToolCalls(ctx, t, c, probe, daggerShellNoMod, bind, []dangToolCall{
+			{"DangEval", map[string]string{"source": `container.from("alpine").withExec(["echo", "hi"]).stdout`}},
+			{"DangEval", map[string]string{"source": `ws.artifacts.filterUri(uri: "probe/ok").asChecks.{{pass}}`}},
+			{"DangEval", map[string]string{"source": `ws.artifacts.filterUri(uri: "probe/broken").asChecks.{{pass}}`}},
+		})
+		// The API chain: the report alone, as before.
+		require.Regexp(t, `\[Tool result\]: String! = "hi\\n"\nmembers: [^\n]*\nok · [^\n]*engine calls? · workspace scope\n\n\[Assistant`, out)
+		// Checks: the report as OUTPUT, beside what they surfaced.
+		require.Contains(t, out, "== CHECKS ==")
+		require.Contains(t, out, "== OUTPUT ==\n")
+		require.Contains(t, out, "pass: true")
+		require.Contains(t, out, "pass: false")
+		require.Contains(t, out, "== FAILURES ==")
+	})
+
 	t.Run("bound tool objects", func(ctx context.Context, t *testctx.T) {
 		// The bound Notes has a greeting its constructor doesn't give it:
 		// `notes` in a snippet is the bound object, as of the call, not a
