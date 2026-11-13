@@ -190,6 +190,10 @@ type DB struct {
 	// snapshots, until the completed span arrives with its final name.
 	namesFromLog map[SpanID]string
 
+	// toolArgsJSON holds the JSON arguments streamed by the display spans of
+	// tool calls that render from their arguments (see ingestToolArgs).
+	toolArgsJSON map[SpanID]*toolArgsJSON
+
 	// spanCalls caches Span.Call and Span.Base for the spans that have been
 	// asked (mostly rendered ones), rather than every span carrying room for
 	// them. addCall invalidates provisional entries.
@@ -799,6 +803,7 @@ func (db *DB) ingestLogs(logs []sdklog.Record, collectRenderable bool) []sdklog.
 		}
 		// flag that the span has received logs
 		db.initSpan(spanID).HasLogs = true
+		db.ingestToolArgs(log, spanID, body)
 	}
 	return renderable
 }
@@ -1261,6 +1266,7 @@ func (db *DB) integrateSpan(span *Span) { //nolint: gocyclo
 	// track the span's own interval
 	span.Activity.Add(span)
 	db.update(span)
+	db.pruneToolArgs(span)
 
 	// keep track of the time boundary
 	if db.Epoch.IsZero() ||
