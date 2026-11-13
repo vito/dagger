@@ -81,9 +81,9 @@ type DangWrite struct {
 // DangScope is the default scope of a Dang tool call: the conversation's API
 // and the values bound in it besides `ws`.
 type DangScope struct {
-	// Deps is the API: the core API, the modules installed in the
-	// conversation's workspace as of the call (else the modules its schema
-	// serves), and the modules of its bound tool objects. A nested client
+	// Deps is the API: the conversation's schema (see MCP.baseServer), the
+	// modules installed in its workspace as of the call included, and the
+	// modules of its bound tool objects. A nested client
 	// running code in the scope serves it (see
 	// engine.ClientMetadata.ServedDeps).
 	Deps *SchemaBuilder
@@ -185,9 +185,7 @@ func (m *MCP) loadDangTools(srv *dagql.Server, allTools *LLMToolSet) {
 		return DangToolEnv{
 			Server:    srv,
 			Workspace: start,
-			Scope: func(ctx context.Context) (*DangScope, error) {
-				return m.dangScope(ctx, srv, start)
-			},
+			Scope:     m.dangScope,
 			Write: func(ctx context.Context, writes []DangWrite) (string, error) {
 				return m.applyDangWrites(ctx, srv, start, writes)
 			},
@@ -334,13 +332,11 @@ const dangLineMarkerMax = 32
 // its result; reassigning the binding is what rebinds the object (see
 // applyDangWrites).
 //
-// The API has the modules installed in ws, the conversation's workspace as
-// the call begins, loaded from ws itself (see LoadWorkspaceModules): a value
-// workspace's from its own tree, which baseServer leaves out, and a module
-// an earlier snippet installed (`ws = ws.withModule(…)`) as soon as it is,
-// one it uninstalled no longer. Successful loads are cached, so an unchanged
-// workspace costs little after the first call; like Workspace.artifacts,
-// a module that fails to load is tried again on each call.
+// The API is baseServer's: the conversation's workspace's installed modules
+// included, as the call begins (see MCP.loadBase), so a module an earlier
+// snippet installed (`ws = ws.withModule(…)`) is in it, and one it
+// uninstalled or broke isn't. The scope also records what loading them
+// found, for `at` and for a note when a snippet names a module that failed.
 //
 // Only module objects are bound: a core type's name would shadow a core
 // field (`container`), and `ws` is the workspace already. A bound object's
@@ -348,21 +344,32 @@ const dangLineMarkerMax = 32
 // the same name that differs (one whose source the agent is editing). An
 // object whose module can't join the API is skipped rather than failing the
 // call, and so are installed modules that can't.
-func (m *MCP) dangScope(ctx context.Context, srv *dagql.Server, ws dagql.ObjectResult[*Workspace]) (*DangScope, error) {
-	ctx, served, err := m.baseDeps(ctx)
+func (m *MCP) dangScope(ctx context.Context) (*DangScope, error) {
+	ctx, base, err := m.loadBase(ctx)
 	if err != nil {
 		return nil, err
 	}
-	scope := &DangScope{}
+	scope := &DangScope{InstalledErr: base.installedErr}
 	boundByName, err := m.dangBindings(scope)
 	if err != nil {
 		return nil, err
 	}
-	base := served
-	if ws.Self() != nil {
-		base = scope.withInstalled(dagql.ContextWithServer(ctx, srv.Canonical()), ws, served, boundByName)
+	deps := base.deps
+	if installed := base.installed; installed != nil {
+		scope.Installed, scope.LoadFailures = installed.Loaded, installed.Failures
+		// A bound object's types are its own module's.
+		var overrides []Mod
+		for _, mod := range installed.Loaded {
+			userMod := NewUserMod(mod)
+			if boundMod, ok := boundByName[userMod.Name()]; ok {
+				if same, err := boundMod.Same(userMod); err != nil || !same {
+					overrides = append(overrides, boundMod)
+				}
+			}
+		}
+		deps = deps.WithPrimaryMods(overrides, nil)
 	}
-	if err := scope.serve(ctx, base, served); err != nil {
+	if err := scope.serve(ctx, deps, base.served); err != nil {
 		return nil, err
 	}
 	return scope, nil
@@ -427,33 +434,6 @@ func (m *MCP) dangBindings(scope *DangScope) (map[string]Mod, error) {
 		scope.BoundMods = append(scope.BoundMods, boundMods...)
 	}
 	return boundByName, nil
-}
-
-// withInstalled loads the modules installed in ws into scope, and returns
-// served with them. Where a bound object's module is another revision of
-// one, the API serves the bound object's, replacing even the one served.
-func (scope *DangScope) withInstalled(ctx context.Context, ws dagql.ObjectResult[*Workspace], served *SchemaBuilder, boundByName map[string]Mod) *SchemaBuilder {
-	installed, err := LoadWorkspaceModules(ctx, ws)
-	if err != nil {
-		scope.InstalledErr = err
-		return served
-	}
-	scope.LoadFailures = installed.Failures
-	var mods []Mod
-	for _, mod := range installed.Loaded {
-		// `at` the module sees it as installed, whatever the API serves.
-		scope.Installed = append(scope.Installed, mod)
-		userMod := NewUserMod(mod)
-		if boundMod, ok := boundByName[userMod.Name()]; ok {
-			if same, err := boundMod.Same(userMod); err != nil || !same {
-				// A bound object's types are its own module's.
-				mods = append(mods, boundMod)
-				continue
-			}
-		}
-		mods = append(mods, userMod)
-	}
-	return served.WithPrimaryMods(mods, installed.Removed)
 }
 
 // serve sets scope's API: base (served with the installed modules) and the

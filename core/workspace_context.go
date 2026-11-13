@@ -198,7 +198,8 @@ func LoadWorkspaceModules(ctx context.Context, ws dagql.ObjectResult[*Workspace]
 
 // loadWorkspaceOwnerContext switches to a live Workspace's owning client and
 // loads its served modules. MCP.baseServer calls this only for live workspaces;
-// value workspaces use core directly and never load the caller's modules.
+// value workspaces load their modules from their own trees (see
+// LoadWorkspaceModules), never the caller's.
 //
 // The load is best-effort: a module that cannot load is skipped rather than
 // failing every LLM step, so the FindArtifacts builtin (via Workspace.artifacts)

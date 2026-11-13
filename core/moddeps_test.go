@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/dagger/dagger/dagql"
@@ -171,6 +172,35 @@ func TestSchemaBuilderMemoOwnsACopy(t *testing.T) {
 	}
 }
 
+// A value workspace's installed modules are loaded once per session, failures
+// included; a failed load is tried again.
+func TestSchemaBuilderMemoWorkspaceModules(t *testing.T) {
+	memo := NewSchemaBuilderMemo()
+	loads := 0
+	loaded := &InstalledWorkspaceModules{Failures: []ModuleLoadFailure{{Name: "broken"}}}
+	load := func() (*InstalledWorkspaceModules, error) {
+		loads++
+		if loads == 1 {
+			return nil, errors.New("canceled")
+		}
+		return loaded, nil
+	}
+	_, err := memo.WorkspaceModules("ws", load)
+	require.Error(t, err)
+	got, err := memo.WorkspaceModules("ws", load)
+	require.NoError(t, err)
+	require.Same(t, loaded, got)
+	got, err = memo.WorkspaceModules("ws", load)
+	require.NoError(t, err)
+	require.Same(t, loaded, got)
+	require.Equal(t, 2, loads)
+
+	var none *SchemaBuilderMemo
+	_, err = none.WorkspaceModules("ws", load)
+	require.NoError(t, err)
+	require.Equal(t, 3, loads, "a nil memo loads every time")
+}
+
 func TestSchemaBuilderWithCoreMod(t *testing.T) {
 	oldCore := &memoTestMod{name: ModuleName}
 	newCore := &memoTestMod{name: ModuleName}
@@ -223,6 +253,8 @@ func TestSchemaBuilderWithPrimaryMods(t *testing.T) {
 	opts, _ = replaced.InstallOpts("served")
 	require.True(t, opts.Main, "a replaced entry keeps its install options")
 	require.Equal(t, base.Mods(), base.WithPrimaryMods(nil, nil).Mods())
+	require.Same(t, base, base.WithPrimaryMods([]Mod{sameServed, other}, []string{"types-only"}),
+		"a builder nothing changes is kept, with its server")
 
 	// A module the workspace uninstalled is dropped; a module served only
 	// for its types, which no workspace installs, is kept.

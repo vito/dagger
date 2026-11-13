@@ -295,44 +295,111 @@ func (m *MCP) LastResult() dagql.Typed {
 }
 
 // baseServer provides the schema for core tools and dispatch. Bound module
-// tools retain their own defining schemas. Value workspaces use only core here;
-// their modules are loaded from their trees during explicit agent composition.
-// Live workspaces load their modules best-effort: a broken module is left out
-// of the schema (and listed by FindArtifacts as a load failure) instead of
-// failing every step.
+// tools retain their own defining schemas.
+//
+// A bound workspace's installed modules are part of it, live or value alike
+// (a snapshot is a workspace too): a live workspace's as its owning client
+// serves them, a value workspace's loaded from its own tree, and either's
+// as its pending edits leave them, so a module a tool installs or
+// uninstalls (`withModule`, `withoutModule`) joins or leaves the next step's
+// schema. Loading is best-effort: a broken module is left out of the schema
+// (and listed by FindArtifacts as a load failure) instead of failing every
+// step, and if the installed modules don't fit together, the schema goes
+// without them.
 func (m *MCP) baseServer(ctx context.Context) (*dagql.Server, error) {
-	ctx, deps, err := m.baseDeps(ctx)
+	ctx, base, err := m.loadBase(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return deps.Schema(ctx)
+	srv, err := base.deps.Schema(ctx)
+	if err != nil && base.deps != base.served {
+		return base.served.Schema(ctx)
+	}
+	return srv, err
 }
 
-// baseDeps returns the dependencies baseServer serves, with the context to
-// build from them in (a live workspace's owner context).
-func (m *MCP) baseDeps(ctx context.Context) (context.Context, *SchemaBuilder, error) {
+// mcpBase is what baseServer serves.
+type mcpBase struct {
+	// deps is the schema's dependencies: served with the workspace's
+	// installed modules.
+	deps *SchemaBuilder
+	// served is the schema without the workspace's installed modules: the
+	// calling client's or the owning client's served modules, or core.
+	served *SchemaBuilder
+	// installed is what loading the workspace's installed modules found,
+	// or installedErr why it couldn't; neither is set without a workspace.
+	installed    *InstalledWorkspaceModules
+	installedErr error
+}
+
+// loadBase loads what baseServer serves, with the context to build it in (a
+// live workspace's owner context).
+func (m *MCP) loadBase(ctx context.Context) (context.Context, *mcpBase, error) {
 	query, err := CurrentQuery(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	var deps *SchemaBuilder
+	ws := m.workspace
+	var served *SchemaBuilder
 	switch {
-	case m.workspace.Self() == nil:
-		deps, err = query.CurrentServedDeps(ctx)
-	case m.workspace.Self().IsValueWorkspace():
-		deps, err = query.DefaultDeps(ctx)
+	case ws.Self() == nil:
+		served, err = query.CurrentServedDeps(ctx)
+	case ws.Self().IsValueWorkspace():
+		// No client serves a value's modules: they load from its tree.
+		served, err = query.DefaultDeps(ctx)
 	default:
-		ctx, err = loadWorkspaceOwnerContext(ctx, m.workspace)
+		ctx, err = loadWorkspaceOwnerContext(ctx, ws)
 		if err != nil {
 			return nil, nil, err
 		}
-		deps, err = query.CurrentServedDeps(ctx)
+		served, err = query.CurrentServedDeps(ctx)
 	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("load tool base schema dependencies: %w", err)
 	}
-	return ctx, deps, nil
+	base := &mcpBase{deps: served, served: served}
+	if ws.Self() == nil {
+		return ctx, base, nil
+	}
+	base.installed, base.installedErr = installedWorkspaceModules(ctx, served, ws)
+	if base.installedErr == nil {
+		mods := make([]Mod, len(base.installed.Loaded))
+		for i, mod := range base.installed.Loaded {
+			mods[i] = NewUserMod(mod)
+		}
+		base.deps = served.WithPrimaryMods(mods, base.installed.Removed)
+	}
+	return ctx, base, nil
+}
+
+// installedWorkspaceModules loads the modules installed in ws (see
+// LoadWorkspaceModules) with the schema of served. A value workspace's,
+// identified by its content, are loaded once per session, failures
+// included: every step asks for them, and a module that failed to build
+// would otherwise build again each time. A live workspace's change with its
+// host, and its owning client keeps its own record of what failed.
+func installedWorkspaceModules(ctx context.Context, served *SchemaBuilder, ws dagql.ObjectResult[*Workspace]) (*InstalledWorkspaceModules, error) {
+	srv, err := served.Schema(ctx)
+	if err != nil {
+		return nil, err
+	}
+	load := func() (*InstalledWorkspaceModules, error) {
+		installed, err := LoadWorkspaceModules(dagql.ContextWithServer(ctx, srv), ws)
+		if err == nil && ctx.Err() != nil {
+			// Failures of a canceled load say nothing about the modules.
+			return nil, ctx.Err()
+		}
+		return installed, err
+	}
+	if !ws.Self().IsValueWorkspace() {
+		return load()
+	}
+	key, err := ws.RecipeDigest(ctx)
+	if err != nil {
+		return load()
+	}
+	return currentSessionSchemaBuilderMemo(ctx).WorkspaceModules(key.String(), load)
 }
 
 func (m *MCP) WithMCPServer(srv *MCPServerConfig) *MCP {

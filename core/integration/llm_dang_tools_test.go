@@ -312,7 +312,7 @@ func (LLMSuite) TestDangTools(ctx context.Context, t *testctx.T) {
 
 	t.Run("installed modules of a snapshot workspace", func(ctx context.Context, t *testctx.T) {
 		// `dagger agent` binds a snapshot of the workspace: a value, whose
-		// conversation schema is core only. The Dang tools still see the
+		// modules no client serves. The conversation's schema still has the
 		// modules it installs, loaded from its own tree, a git module
 		// included, and `at` names one whose source isn't in the tree.
 		helper := base.Directory(".dagger/modules/helper")
@@ -408,6 +408,29 @@ func (LLMSuite) TestDangTools(ctx context.Context, t *testctx.T) {
 		require.Contains(t, out, `String! = "hello, X"`)
 		require.Contains(t, out, `<check>:1:1: error: "notes" not found`)
 		require.Contains(t, out, "note: installed modules that failed to load aren't in scope: notes (")
+	})
+
+	t.Run("a snapshot with a broken module", func(ctx context.Context, t *testctx.T) {
+		// A snapshot's conversation schema has its installed modules, loaded
+		// from its own tree, best effort: a broken one is left out, not an
+		// error for every step, and a snippet naming it is told why.
+		broken := base.
+			WithNewFile(".dagger/modules/bad/dagger-module.toml", "name = \"bad\"\nengineVersion = \"latest\"\n\n[runtime]\n  source = \"dang\"\n").
+			WithNewFile(".dagger/modules/bad/main.dang", "type Bad {\n").
+			WithNewFile("dagger.toml", "[modules.notes]\nsource = \".dagger/modules/notes\"\n\n[modules.bad]\nsource = \".dagger/modules/bad\"\n").
+			WithExec([]string{"git", "add", "."}).
+			WithExec([]string{"git", "commit", "-m", "install a broken module"})
+		const snapshot = `with-workspace --workspace $(current-workspace | snapshot)`
+		tools, err := broken.With(daggerShellNoMod("llm | " + snapshot + " | tools")).Stdout(ctx)
+		require.NoError(t, err)
+		require.Contains(t, tools, "## DangEval\n")
+		out := runDangToolCalls(ctx, t, c, broken, daggerShellNoMod, snapshot, []dangToolCall{
+			{"DangEval", map[string]string{"source": `notes.greet(name: "x")`}},
+			{"DangCheck", map[string]string{"source": `bad`}},
+		})
+		require.Contains(t, out, `String! = "hello, X"`)
+		require.Contains(t, out, `<check>:1:1: error: "bad" not found`)
+		require.Contains(t, out, "note: installed modules that failed to load aren't in scope: bad (")
 	})
 
 	t.Run("a commit through ws is written", func(ctx context.Context, t *testctx.T) {
