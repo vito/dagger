@@ -40,18 +40,27 @@ const (
 	// before it is shown as a block of lines rather than one quoted line:
 	// the width Describe lays values out in.
 	dangBlockStringMin = 80
+	// dangLineMax is the line clamp of the tool result and of ReadLogs
+	// (core's llmLogsMaxLineLen): a longer line keeps only its head.
+	dangLineMax = 2000
 	// dangLineStringMax is how many characters a string shown quoted, on
-	// one line, keeps. It fits the line clamp of the tool result and of
-	// ReadLogs (core's llmLogsMaxLineLen, 2000 bytes), which would keep
-	// only a longer line's head: Describe keeps its head and its tail.
+	// one line, keeps, so the line fits dangLineMax: Describe keeps its
+	// head and its tail, where errors tend to be. Characters count, not
+	// bytes; a result with a line still too long (wide characters, many
+	// escapes) is described again keeping a quarter as many.
 	dangLineStringMax = 1500
+	// dangItemsMax caps the elements, entries and fields described of a
+	// list, map or object, the rest counted: Describe lays out every one
+	// it shows before its byte cap applies, so this, not dangOutputMax,
+	// bounds the work.
+	dangItemsMax = 512
 )
 
 // dangDescribeOptions describe a DangEval result whole, but for what no
-// reader could see anyway: a string on one line is cut to fit a line, and
-// the whole description to dangOutputMax. Depth stays capped too: a value
-// is described, not dumped.
-var dangDescribeOptions = dang.DescribeOptions{MaxString: dangLineStringMax, MaxItems: -1, MaxBytes: dangOutputMax}
+// reader could see, or would want to: a string on one line is cut to fit a
+// line, long collections and deep nesting are summarized, and the whole
+// description is capped at dangOutputMax.
+var dangDescribeOptions = dang.DescribeOptions{MaxString: dangLineStringMax, MaxItems: dangItemsMax, MaxBytes: dangOutputMax}
 
 // dangWrite is a bound value a snippet reassigned, with the ID of its final
 // value (see core.DangWrite).
@@ -292,7 +301,13 @@ func reportEvalResult(ctx context.Context, r *dangReport, calls *countingClient,
 func describeResult(ctx context.Context, val dang.Value, typ hm.Type) string {
 	s, ok := val.(dang.StringValue)
 	if !ok || !isBlockString(s.Val) {
-		return dang.Describe(ctx, val, typ, dangDescribeOptions)
+		desc := dang.Describe(ctx, val, typ, dangDescribeOptions)
+		if longestLine(desc) > dangLineMax {
+			opts := dangDescribeOptions
+			opts.MaxString /= 4
+			desc = dang.Describe(ctx, val, typ, opts)
+		}
+		return desc
 	}
 	if typ == nil {
 		typ = s.Type()
@@ -319,6 +334,15 @@ func describeResult(ctx context.Context, val dang.Value, typ hm.Type) string {
 func isBlockString(s string) bool {
 	body := strings.TrimSuffix(s, "\n")
 	return strings.Contains(body, "\n") && len(s)+strings.Count(s, "\n")+2 > dangBlockStringMin
+}
+
+// longestLine is the length in bytes of the longest line of s.
+func longestLine(s string) int {
+	longest := 0
+	for line := range strings.Lines(s) {
+		longest = max(longest, len(strings.TrimSuffix(line, "\n")))
+	}
+	return longest
 }
 
 func hasErrors(diags []analysis.Diagnostic) bool {

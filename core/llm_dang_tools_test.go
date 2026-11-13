@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/trace"
@@ -56,15 +57,16 @@ func TestCommitDangWritesAllOrNothing(t *testing.T) {
 	require.True(t, m.stateChanged)
 }
 
-// dangToolCallCtx is a context in a tool call's span, as a Dang tool's call
-// runs in.
+// dangToolCallCtx is a context in a conversation's tool call, with its span,
+// as a Dang tool's call runs in.
 func dangToolCallCtx(t *testing.T, spanID string) context.Context {
 	t.Helper()
 	traceID, err := trace.TraceIDFromHex("000102030405060708090a0b0c0d0e0f")
 	require.NoError(t, err)
 	span, err := trace.SpanIDFromHex(spanID)
 	require.NoError(t, err)
-	return trace.ContextWithSpanContext(t.Context(), trace.NewSpanContext(trace.SpanContextConfig{
+	ctx := context.WithValue(t.Context(), agentToolCallKey{}, true)
+	return trace.ContextWithSpanContext(ctx, trace.NewSpanContext(trace.SpanContextConfig{
 		TraceID: traceID,
 		SpanID:  span,
 	}))
@@ -99,15 +101,22 @@ func TestDangToolResultBounds(t *testing.T) {
 		require.True(t, strings.HasSuffix(got, "line 1999 of a long file\n\"\"\"\nok · 1ms · 1 engine call · workspace scope"), got)
 	})
 
-	t.Run("a long line is clamped", func(t *testing.T) {
-		got := m.dangToolResult(ctx, DangReport{Text: "String! = \"" + strings.Repeat("x", 3*llmLogsMaxLineLen) + "\"\n"})
-		require.Contains(t, got, "chars truncated]")
-		require.Less(t, len(got), 2*llmLogsMaxLineLen)
+	t.Run("a long line is clamped once, on a rune boundary", func(t *testing.T) {
+		got := m.dangToolResult(ctx, DangReport{Text: "String! = \"" + strings.Repeat("日", llmLogsMaxLineLen) + "\"\n"})
+		require.Contains(t, got, "bytes truncated]")
+		require.LessOrEqual(t, len(got), llmLogsMaxLineLen)
+		require.True(t, utf8.ValidString(got))
+		require.Equal(t, got, guardToolResult(got), "the result guard leaves it be")
 	})
 
-	t.Run("without a span, the report is left to the result guard", func(t *testing.T) {
+	t.Run("outside a conversation's tool call, the report is only guarded", func(t *testing.T) {
+		// dagger mcp: no span of the call's own to point at.
 		report := strings.Repeat("a line of the report\n", 2000)
 		require.Equal(t, report, m.dangToolResult(t.Context(), DangReport{Text: report}))
+		long := strings.Repeat("a line of the report\n", 5000)
+		got := m.dangToolResult(trace.ContextWithSpanContext(t.Context(), trace.SpanContextFromContext(ctx)), DangReport{Text: long})
+		require.Equal(t, guardToolResult(long), got)
+		require.NotContains(t, got, "ReadLogs")
 	})
 }
 

@@ -254,25 +254,34 @@ const dangSkillNudge = "See the " + dangSkillName + " skill (ReadSkill) for Dang
 // are clamped, and past the byte budget the middle gives way to a pointer to
 // ReadLogs on the tool call's span, which the report was logged to, line for
 // line (see DangTools). The pointer names the span's own logs: the engine
-// calls a snippet makes log beneath it too. A report whose source failed to
-// parse or type-check points at the dang-language skill, until the
-// conversation reads it.
+// calls a snippet makes log beneath it too. Only a conversation's tool call
+// has a span of its own to point at; elsewhere (dagger mcp), the report is
+// only guarded, as any tool result is. A report whose source failed to parse
+// or type-check points at the dang-language skill, until the conversation
+// reads it.
 func (m *MCP) dangToolResult(ctx context.Context, rep DangReport) string {
 	text := rep.Text
-	if spanID := trace.SpanContextFromContext(ctx).SpanID(); spanID.IsValid() {
+	if spanID := trace.SpanContextFromContext(ctx).SpanID(); spanID.IsValid() && IsAgentToolCall(ctx) {
 		lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
 		captured := make([]capturedLine, len(lines))
 		for i, line := range lines {
-			captured[i] = capturedLine{text: line, direct: true}
+			// Clamped on a rune boundary, with room for the marker, so
+			// neither flatLogs nor the result guard clamps it again.
+			captured[i] = capturedLine{text: clampLineBytes(line, llmLogsMaxLineLen-dangLineMarkerMax), direct: true}
 		}
 		// flatLogs names the span in its pointer as ReadLogs(span: X).
 		text = flatLogs(fmt.Sprintf(`%s, scope: "own"`, spanID), captured)
+	} else {
+		text = guardToolResult(text)
 	}
 	if rep.Rejected && !m.hasReadSkill(dangSkillName) {
 		text = strings.TrimRight(text, "\n") + "\n" + dangSkillNudge
 	}
 	return text
 }
+
+// dangLineMarkerMax is room for clampLineBytes' marker on a clamped line.
+const dangLineMarkerMax = 32
 
 // dangScope is the default scope of a Dang tool call: the conversation's
 // API, plus each bound tool object, under its type's lowerCamel name, with

@@ -414,26 +414,37 @@ func TestDangEval(t *testing.T) {
 		require.NoError(t, err)
 		require.Contains(t, out, "line 299 of a README\n\"\"\" (no final newline)\nmembers: ")
 
-		// A long list isn't cut, nor a one-line string that fits a line.
+		// A one-line string that fits a line isn't cut, nor a list of a few
+		// hundred elements.
 		line := strings.Repeat("ab", 700)
 		out, err = evalTest(t, sc, `container.withExec(["cat"]).stdout`, stdout(line))
 		require.NoError(t, err)
 		require.Contains(t, out, `String! = "`+line+`"`)
-		out, err = evalTest(t, sc, `container.withExec(["cat"]).stdout.split("")`, stdout(line))
+		out, err = evalTest(t, sc, `container.withExec(["cat"]).stdout.split("")`, stdout(line[:500]))
 		require.NoError(t, err)
-		require.Equal(t, len(line), strings.Count(out, `"a"`)+strings.Count(out, `"b"`), out)
+		require.Equal(t, 500, strings.Count(out, `"a"`)+strings.Count(out, `"b"`), out)
 		require.NotContains(t, out, "more)")
 		require.NotContains(t, out, "omitted")
+		// A longer one is counted past dangItemsMax.
+		out, err = evalTest(t, sc, `container.withExec(["cat"]).stdout.split("")`, stdout(line))
+		require.NoError(t, err)
+		require.Contains(t, out, fmt.Sprintf("… (%d more)", len(line)-dangItemsMax))
 
 		// A one-line string a line can't hold keeps its head and its tail,
-		// where a line clamp would keep only its head.
-		long := strings.Repeat("x", 3000) + "THE END"
-		out, err = evalTest(t, sc, `container.withExec(["cat"]).stdout`, stdout(long))
-		require.NoError(t, err)
-		require.Contains(t, out, "chars omitted)…")
-		require.Contains(t, out, `THE END"`)
-		for l := range strings.SplitSeq(out, "\n") {
-			require.LessOrEqual(t, len(l), 2000, "every line fits the line clamp")
+		// where a line clamp would keep only its head, whether its
+		// characters are narrow, wide or escaped.
+		for _, long := range []string{
+			strings.Repeat("x", 3000) + "THE END",
+			strings.Repeat("日本語", 1000) + "THE END",
+			strings.Repeat(`["a","b","c"],`, 300) + "THE END",
+		} {
+			out, err = evalTest(t, sc, `container.withExec(["cat"]).stdout`, stdout(long))
+			require.NoError(t, err)
+			require.Contains(t, out, "chars omitted)…")
+			require.Contains(t, out, `THE END"`)
+			for l := range strings.SplitSeq(out, "\n") {
+				require.LessOrEqual(t, len(l), dangLineMax, "every line fits the line clamp")
+			}
 		}
 	})
 
