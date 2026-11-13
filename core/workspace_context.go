@@ -167,7 +167,8 @@ type InstalledWorkspaceModules struct {
 	// Failures are the modules that failed to load, and why.
 	Failures []ModuleLoadFailure
 	// Removed names, by LatestNamer.CLIName, the modules a live workspace's
-	// session serves that its pending dagger.toml edits uninstall.
+	// session serves that its pending edits uninstall or break: those its
+	// dagger.toml no longer installs, and those that failed to load.
 	Removed []string
 }
 

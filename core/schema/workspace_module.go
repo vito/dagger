@@ -32,6 +32,15 @@ func loadInstalledWorkspaceModules(ctx context.Context, ws dagql.ObjectResult[*c
 	if err != nil {
 		return nil, err
 	}
+	// A module that no longer loads (its source broken by a pending edit)
+	// is gone from the workspace's API, not left at the copy the session
+	// served before.
+	for _, failure := range failures {
+		if removed == nil {
+			removed = map[string]bool{}
+		}
+		removed[canonicalOverlayModuleName(failure.Name)] = true
+	}
 	return &core.InstalledWorkspaceModules{
 		Loaded:   loaded,
 		Failures: failures,

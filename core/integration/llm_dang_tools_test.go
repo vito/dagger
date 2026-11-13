@@ -342,6 +342,20 @@ func (LLMSuite) TestDangTools(ctx context.Context, t *testctx.T) {
 		}
 	})
 
+	t.Run("a module broken by a snippet", func(ctx context.Context, t *testctx.T) {
+		// An edit that breaks an installed module's source takes it out of
+		// the scope, rather than leaving the copy the session served, and
+		// says why when a snippet names it.
+		out := runDangToolCalls(ctx, t, c, base, daggerShellNoMod, bind, []dangToolCall{
+			{"DangEval", map[string]string{"source": `notes.greet(name: "x")`}},
+			{"DangEval", map[string]string{"source": `ws = ws.withNewFile(path: ".dagger/modules/notes/main.dang", contents: "type Notes {\n")`}},
+			{"DangCheck", map[string]string{"source": `notes.greet(name: "x")`}},
+		})
+		require.Contains(t, out, `String! = "hello, X"`)
+		require.Contains(t, out, `<check>:1:1: error: "notes" not found`)
+		require.Contains(t, out, "note: installed modules that failed to load aren't in scope: notes (")
+	})
+
 	t.Run("a commit through ws is written", func(ctx context.Context, t *testctx.T) {
 		// A commit moves HEAD without leaving a file delta: writing ws makes
 		// the committed workspace the conversation's, as a tool returning it

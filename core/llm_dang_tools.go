@@ -324,8 +324,8 @@ func (m *MCP) dangBindings(scope *DangScope) (map[string]Mod, error) {
 }
 
 // withInstalled loads the modules installed in ws into scope, and returns
-// served with them, but for any whose name a bound object's module of
-// another revision takes.
+// served with them. Where a bound object's module is another revision of
+// one, the API serves the bound object's, replacing even the one served.
 func (scope *DangScope) withInstalled(ctx context.Context, ws dagql.ObjectResult[*Workspace], served *SchemaBuilder, boundByName map[string]Mod) *SchemaBuilder {
 	installed, err := LoadWorkspaceModules(ctx, ws)
 	if err != nil {
@@ -335,13 +335,16 @@ func (scope *DangScope) withInstalled(ctx context.Context, ws dagql.ObjectResult
 	scope.LoadFailures = installed.Failures
 	var mods []Mod
 	for _, mod := range installed.Loaded {
+		// `at` the module sees it as installed, whatever the API serves.
+		scope.Installed = append(scope.Installed, mod)
 		userMod := NewUserMod(mod)
 		if boundMod, ok := boundByName[userMod.Name()]; ok {
 			if same, err := boundMod.Same(userMod); err != nil || !same {
+				// A bound object's types are its own module's.
+				mods = append(mods, boundMod)
 				continue
 			}
 		}
-		scope.Installed = append(scope.Installed, mod)
 		mods = append(mods, userMod)
 	}
 	return served.WithPrimaryMods(mods, installed.Removed)
