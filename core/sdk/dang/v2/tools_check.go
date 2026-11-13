@@ -14,6 +14,8 @@ import (
 	"github.com/vito/dang/v2/pkg/dang/analysis"
 	"github.com/vito/dang/v2/pkg/hm"
 	"github.com/vito/dang/v2/pkg/introspection"
+
+	"github.com/dagger/dagger/core"
 )
 
 // This file is the Dang side of the DangCheck builtin (see
@@ -253,11 +255,11 @@ func plural(n int, noun string) string {
 
 // checkDang is DangCheck: diagnostics for the scope's module or file, or a
 // snippet's diagnostics or description, then search results.
-func checkDang(ctx context.Context, sc *dangScope, source, search string) (string, error) {
+func checkDang(ctx context.Context, sc *dangScope, source, search string) (core.DangReport, error) {
 	source = strings.TrimSpace(source)
 	search = strings.TrimSpace(search)
 	if source == "" && search == "" && !sc.module {
-		return "", errors.New("nothing to check: pass source, search, or at (a module, file or position)")
+		return core.DangReport{}, errors.New("nothing to check: pass source, search, or at (a module, file or position)")
 	}
 
 	var r dangReport
@@ -274,7 +276,7 @@ func checkDang(ctx context.Context, sc *dangScope, source, search string) (strin
 			DiagnosticContext: true,
 		})
 		if err != nil {
-			return "", err
+			return core.DangReport{}, err
 		}
 		files = countFiles(a)
 		if sc.module {
@@ -296,7 +298,7 @@ func checkDang(ctx context.Context, sc *dangScope, source, search string) (strin
 			DiagnosticContext: true,
 		})
 		if err != nil {
-			return "", err
+			return core.DangReport{}, err
 		}
 		files = countFiles(a)
 		scope = a.ScopeAt(sc.file, *sc.pos)
@@ -318,7 +320,7 @@ func checkDang(ctx context.Context, sc *dangScope, source, search string) (strin
 			DiagnosticContext: true,
 		})
 		if err != nil {
-			return "", err
+			return core.DangReport{}, err
 		}
 		files = countFiles(a)
 		scope = a.FileScope(snippet)
@@ -342,7 +344,7 @@ func checkDang(ctx context.Context, sc *dangScope, source, search string) (strin
 	}
 	footer = append(footer, "nothing ran")
 	r.linef("%s", strings.Join(footer, " · "))
-	return r.String(), nil
+	return core.DangReport{Text: r.String()}, nil
 }
 
 // noDangFilesMessage says why a module scope has no .dang files to

@@ -158,6 +158,18 @@ func (LLMSuite) TestDangTools(ctx context.Context, t *testctx.T) {
 		require.False(t, strings.Contains(out, "/tmp/"), "paths are workspace-relative:\n%s", out)
 	})
 
+	t.Run("long results", func(ctx context.Context, t *testctx.T) {
+		out := runDangToolCalls(ctx, t, c, base, daggerShellNoMod, bind, []dangToolCall{
+			// A long result is bounded as a module tool's output is, its
+			// middle in the tool call's logs.
+			{"DangEval", map[string]string{"source": `container.from("alpine").withExec(["seq", "1", "20000"]).stdout`}},
+		})
+		require.Contains(t, out, "String! = \"\"\"\n1\n2\n3\n")
+		require.Contains(t, out, "\n20000\n\"\"\"\n")
+		require.Regexp(t, `\.\.\. \d+ lines omitted \(use ReadLogs\(span: [0-9a-f]+\) to read more\) \.\.\.`, out)
+		require.NotContains(t, out, "chars omitted")
+	})
+
 	t.Run("bound tool objects", func(ctx context.Context, t *testctx.T) {
 		// The bound Notes has a greeting its constructor doesn't give it:
 		// `notes` in a snippet is the bound object, as of the call, not a

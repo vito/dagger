@@ -9,6 +9,7 @@ import (
 
 	"github.com/dagger/dagger/dagql"
 	"github.com/dagger/dagger/dagql/call"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // The Dang builtins: a workbench for agents writing Dang, the language
@@ -25,13 +26,24 @@ const (
 // dang SDK's implementation package (core/sdk/dang/v2) may import Dang (see
 // core/sdk/dang/README.md), so it implements this and registers it with
 // RegisterDangTools; core only describes the tools and dispatches to it.
+//
+// Each method logs its whole report to the tool call's span (ctx's), as a
+// module function's prints go to its call's: that is where ReadLogs reads
+// what the tool result leaves out, since the caller bounds the result as it
+// bounds a module tool's output (see dangToolResult).
 type DangTools interface {
 	// Check type-checks without running anything and returns the report.
-	Check(ctx context.Context, env DangToolEnv, args DangCheckArgs) (string, error)
+	Check(ctx context.Context, env DangToolEnv, args DangCheckArgs) (DangReport, error)
 	// Eval runs a snippet and returns its report: printed output and the
 	// result, or the diagnostics or failure that stopped it. An error is
 	// for what keeps the tool itself from running (e.g. an unknown `at`).
-	Eval(ctx context.Context, env DangToolEnv, args DangEvalArgs) (string, error)
+	Eval(ctx context.Context, env DangToolEnv, args DangEvalArgs) (DangReport, error)
+}
+
+// DangReport is what a Dang tool call reports.
+type DangReport struct {
+	// Text is the whole report, as logged to the tool call's span.
+	Text string
 }
 
 // DangToolEnv is what a Dang tool call sees of its conversation.
@@ -197,7 +209,11 @@ func (m *MCP) loadDangTools(srv *dagql.Server, allTools *LLMToolSet) {
 			At     string `default:""`
 			Search string `default:""`
 		}) (any, error) {
-			return impl.Check(ctx, env(), DangCheckArgs(args))
+			rep, err := impl.Check(ctx, env(), DangCheckArgs(args))
+			if err != nil {
+				return nil, err
+			}
+			return m.dangToolResult(ctx, rep), nil
 		}),
 	})
 	allTools.Add(LLMTool{
@@ -216,9 +232,31 @@ func (m *MCP) loadDangTools(srv *dagql.Server, allTools *LLMToolSet) {
 			Source string
 			At     string `default:""`
 		}) (any, error) {
-			return impl.Eval(ctx, env(), DangEvalArgs(args))
+			rep, err := impl.Eval(ctx, env(), DangEvalArgs(args))
+			if err != nil {
+				return nil, err
+			}
+			return m.dangToolResult(ctx, rep), nil
 		}),
 	})
+}
+
+// dangToolResult is what the model sees of a Dang tool's report. The report
+// is bounded as a module tool's printed output is (see flatLogs): long lines
+// are clamped, and past the byte budget the middle gives way to a pointer to
+// ReadLogs on the tool call's span, which the report was logged to (see
+// DangTools).
+func (m *MCP) dangToolResult(ctx context.Context, rep DangReport) string {
+	text := rep.Text
+	if spanID := trace.SpanContextFromContext(ctx).SpanID(); spanID.IsValid() {
+		lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
+		captured := make([]capturedLine, len(lines))
+		for i, line := range lines {
+			captured[i] = capturedLine{text: line, direct: true}
+		}
+		text = flatLogs(spanID.String(), captured)
+	}
+	return text
 }
 
 // dangScope is the default scope of a Dang tool call: the conversation's

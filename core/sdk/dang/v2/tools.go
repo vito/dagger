@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path"
@@ -38,31 +39,37 @@ func init() {
 
 type dangTools struct{}
 
-func (dangTools) Check(ctx context.Context, env core.DangToolEnv, args core.DangCheckArgs) (string, error) {
+func (dangTools) Check(ctx context.Context, env core.DangToolEnv, args core.DangCheckArgs) (core.DangReport, error) {
 	ctx = withDangSyntaxCache(ctx)
-	var out string
+	var rep core.DangReport
 	err := withDangScope(ctx, env, args.At, true, func(ctx context.Context, sc *dangScope, _ dangRuntime) error {
 		var err error
-		out, err = checkDang(ctx, sc, args.Source, args.Search)
-		out = withUnloadedNote(sc, out)
+		rep, err = checkDang(ctx, sc, args.Source, args.Search)
+		rep.Text = withUnloadedNote(sc, rep.Text)
 		return err
 	})
 	if report, ok := dangAtReport(err); ok {
-		return report, nil
+		rep, err = core.DangReport{Text: report}, nil
 	}
-	return out, err
+	if err != nil {
+		return rep, err
+	}
+	// The report is the tool call's logs, as a module function's prints
+	// are its call's: the engine bounds what the model sees of it.
+	logDangReport(ctx, rep.Text)
+	return rep, nil
 }
 
-func (dangTools) Eval(ctx context.Context, env core.DangToolEnv, args core.DangEvalArgs) (string, error) {
+func (dangTools) Eval(ctx context.Context, env core.DangToolEnv, args core.DangEvalArgs) (core.DangReport, error) {
 	if strings.TrimSpace(args.Source) == "" {
-		return "", errors.New("source is required")
+		return core.DangReport{}, errors.New("source is required")
 	}
 	ctx = withDangSyntaxCache(ctx)
 	query, err := core.CurrentQuery(ctx)
 	if err != nil {
-		return "", err
+		return core.DangReport{}, err
 	}
-	var out string
+	var rep core.DangReport
 	err = withDangScope(ctx, env, args.At, false, func(ctx context.Context, sc *dangScope, rt dangRuntime) error {
 		nestedClientMetadata, err := dangshared.NewNestedClientMetadata(ctx)
 		if err != nil {
@@ -79,8 +86,9 @@ func (dangTools) Eval(ctx context.Context, env core.DangToolEnv, args core.DangE
 		case len(rt.bound) > 0:
 			nestedClientMetadata.ServedDeps = core.NewSchemaBuilder(nil, rt.bound)
 		}
-		// Printed output goes to the tool call's span, as a module
-		// function's goes to its call's.
+		// The report goes to the tool call's span, as a module function's
+		// prints go to its call's: printed output as it is printed, the
+		// rest once it is known.
 		stdio := telemetry.SpanStdio(ctx, core.InstrumentationLibrary)
 		defer stdio.Close()
 		_, err = dangshared.WithNestedClientServer(ctx, query, nestedClientMetadata, true /* inert attachables */, nil, modCtx, func(ctx context.Context, client graphql.Client) ([]byte, error) {
@@ -94,16 +102,29 @@ func (dangTools) Eval(ctx context.Context, env core.DangToolEnv, args core.DangE
 				return env.Write(ctx, ws)
 			}
 			var err error
-			out, err = evalDang(ctx, sc, args.Source, client, stdio.Stdout, write)
-			out = withUnloadedNote(sc, out)
+			rep, err = evalDang(ctx, sc, args.Source, client, stdio.Stdout, write)
+			// The note follows the report, in the logs too.
+			if noted := withUnloadedNote(sc, rep.Text); noted != rep.Text {
+				_, _ = io.WriteString(stdio.Stdout, noted[len(rep.Text):])
+				rep.Text = noted
+			}
 			return nil, err
 		})
 		return err
 	})
 	if report, ok := dangAtReport(err); ok {
-		return report, nil
+		logDangReport(ctx, report)
+		return core.DangReport{Text: report}, nil
 	}
-	return out, err
+	return rep, err
+}
+
+// logDangReport logs a Dang tool's report to the tool call's span, as a
+// module function's prints go to its call's.
+func logDangReport(ctx context.Context, report string) {
+	stdio := telemetry.SpanStdio(ctx, core.InstrumentationLibrary)
+	defer stdio.Close()
+	_, _ = io.WriteString(stdio.Stdout, report)
 }
 
 // dangRuntime is what running code in a scope needs beyond its source: the

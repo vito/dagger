@@ -116,7 +116,7 @@ func checkTest(t *testing.T, sc *dangScope, source, search string) string {
 	t.Helper()
 	out, err := checkDang(context.Background(), sc, source, search)
 	require.NoError(t, err)
-	return out
+	return out.Text
 }
 
 func TestDangCheckWorkspaceScope(t *testing.T) {
@@ -303,18 +303,24 @@ func (f *fakeAPI) MakeRequest(_ context.Context, req *graphql.Request, resp *gra
 
 func evalTest(t *testing.T, sc *dangScope, source string, api *fakeAPI) (string, error) {
 	t.Helper()
+	rep, _, err := evalReport(t, sc, source, api)
+	return rep.Text, err
+}
+
+// evalReport runs source, and returns its report and what it logged to the
+// tool call's span: the report, but for the heading of its printed output.
+func evalReport(t *testing.T, sc *dangScope, source string, api *fakeAPI) (core.DangReport, string, error) {
+	t.Helper()
 	if api == nil {
 		api = &fakeAPI{answer: func(q string) string { t.Errorf("unexpected query %s", q); return "{}" }}
 	}
 	var spanLogs strings.Builder
-	out, err := evalDang(context.Background(), sc, source, api, &spanLogs, nil)
+	rep, err := evalDang(context.Background(), sc, source, api, &spanLogs, nil)
 	if err == nil {
-		// Printed output reaches the span's logs too.
-		for _, line := range strings.Split(spanLogs.String(), "\n") {
-			require.Contains(t, out, line)
-		}
+		require.Equal(t, strings.TrimPrefix(rep.Text, "output:\n"), spanLogs.String(),
+			"the span's logs have the whole report")
 	}
-	return out, err
+	return rep, spanLogs.String(), err
 }
 
 func TestDangEval(t *testing.T) {
@@ -383,6 +389,63 @@ func TestDangEval(t *testing.T) {
 		require.True(t, strings.HasPrefix(out, "output:\nmodule loaded\nString! = \"hello, dang\"\n"), out)
 		require.Contains(t, out, " · module mod (mod)\n")
 	})
+
+	t.Run("a long result is described in full", func(t *testing.T) {
+		// Bounding what the model sees is the engine's, as for a module
+		// tool's output; the report and the logs hold it all.
+		stdout := func(s string) *fakeAPI {
+			return &fakeAPI{answer: func(string) string {
+				data, err := json.Marshal(map[string]any{"container": map[string]any{"withExec": map[string]any{"stdout": s}}})
+				require.NoError(t, err)
+				return string(data)
+			}}
+		}
+		var file strings.Builder
+		for i := range 300 {
+			fmt.Fprintf(&file, "line %03d of a README\n", i)
+		}
+		rep, logs, err := evalReport(t, sc, "print(\"reading\")\ncontainer.withExec([\"cat\"]).stdout", stdout(file.String()))
+		require.NoError(t, err)
+		// A file's contents read as its lines, between triple quotes.
+		require.Contains(t, rep.Text, "output:\nreading\nString! = \"\"\"\n"+file.String()+"\"\"\"\nmembers: ")
+		require.Contains(t, logs, "reading\nString! = \"\"\"\n"+file.String()+"\"\"\"\n")
+
+		// A long one-line string isn't cut in the middle, nor a long list.
+		line := strings.Repeat("ab", 1000)
+		out, err := evalTest(t, sc, `container.withExec(["cat"]).stdout`, stdout(line))
+		require.NoError(t, err)
+		require.Contains(t, out, `String! = "`+line+`"`)
+		out, err = evalTest(t, sc, `container.withExec(["cat"]).stdout.split("")`, stdout(line))
+		require.NoError(t, err)
+		require.Equal(t, 2000, strings.Count(out, `"a"`)+strings.Count(out, `"b"`), out)
+		require.NotContains(t, out, "more)")
+		require.NotContains(t, out, "omitted")
+		require.NotContains(t, out, "truncated")
+	})
+
+	t.Run("a short multi-line string stays quoted", func(t *testing.T) {
+		out, err := evalTest(t, sc, `"a\nb\n"`, nil)
+		require.NoError(t, err)
+		require.Contains(t, out, "String! = \"a\\nb\\n\"\n")
+	})
+}
+
+// The rest of a report is logged on a line of its own, after printed output
+// that didn't end one.
+func TestLineEndWriter(t *testing.T) {
+	t.Parallel()
+	var logs strings.Builder
+	w := &lineEndWriter{w: &logs}
+	w.WriteRest("")
+	_, _ = w.Write([]byte("no newline"))
+	w.WriteRest("Int! = 1\n")
+	require.Equal(t, "no newline\nInt! = 1\n", logs.String())
+
+	logs.Reset()
+	w = &lineEndWriter{w: &logs}
+	_, _ = w.Write([]byte("line\n"))
+	w.WriteRest("Int! = 1\n")
+	require.Equal(t, "line\nInt! = 1\n", logs.String())
 }
 
 func TestDangBoundValues(t *testing.T) {
@@ -485,7 +548,7 @@ func TestDangEvalWrites(t *testing.T) {
 		var calls int
 		out, err := evalDang(context.Background(), sc, source, writeAPI(), nil, recordWrites(&got, &calls))
 		require.NoError(t, err)
-		return out, got, calls
+		return out.Text, got, calls
 	}
 
 	t.Run("assigning ws writes it", func(t *testing.T) {

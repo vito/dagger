@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -17,6 +18,8 @@ import (
 	"github.com/vito/dang/v2/pkg/dang/analysis"
 	"github.com/vito/dang/v2/pkg/hm"
 	"github.com/vito/dang/v2/pkg/ioctx"
+
+	"github.com/dagger/dagger/core"
 )
 
 // This file is the Dang side of the DangEval builtin (see
@@ -25,12 +28,25 @@ import (
 const (
 	// dangEvalName names an evaluated snippet in positions and messages.
 	dangEvalName = "<eval>"
-	// dangOutputMax caps the printed output a DangEval result shows; its
-	// tail is kept, where failures and results tend to be.
-	dangOutputMax = 8 << 10
+	// dangOutputMax caps the printed output a DangEval report holds, only
+	// to bound its memory: the tool call's logs have all of it, and the
+	// engine bounds what the model sees of the report as it bounds a
+	// module tool's output. Its tail is kept.
+	dangOutputMax = 1 << 20
 	// dangMemberNamesMax caps the member names listed after a result.
 	dangMemberNamesMax = 80
+	// dangBlockStringMin is how long (quoted) a multi-line string result
+	// gets before it is shown as a block of lines rather than one quoted
+	// line: the width Describe lays values out in.
+	dangBlockStringMin = 80
 )
+
+// dangDescribeOptions describe a DangEval result in full, without
+// eliding the middle of strings, the rest of lists or the end of the
+// rendering: the engine bounds the report as it bounds a module tool's
+// output, and the tool call's logs keep it whole. Depth stays capped:
+// a value is described, not dumped.
+var dangDescribeOptions = dang.DescribeOptions{MaxString: -1, MaxItems: -1, MaxBytes: -1}
 
 // dangWrite is a bound value a snippet reassigned, with the ID of its final
 // value (see core.DangWrite).
@@ -43,17 +59,33 @@ type dangWriter func(context.Context, []dangWrite) (string, error)
 
 // evalDang is DangEval: it checks source as one more file of the scope, and
 // only if that succeeds loads the scope (a module's top level runs) and runs
-// source in it, with the Dagger import's queries sent to client. Printed
-// output goes to output as well as into the report. A type error or a
-// failure is reported like a result, as DangCheck reports diagnostics: the
-// error return is for what keeps it from running at all.
+// source in it, with the Dagger import's queries sent to client. A type error
+// or a failure is reported like a result, as DangCheck reports diagnostics:
+// the error return is for what keeps it from running at all.
+//
+// The whole report goes to output too, as a module function's prints go to
+// its call's logs: printed output as it is printed, and the rest of the
+// report once it is known. Secret plaintexts are scrubbed from both.
 //
 // Assignment is the write: when source succeeds, the scope's bound values
 // (`ws`, the bound tool objects) it reassigned are handed to write with
 // their final values. A snippet that fails writes nothing.
-func evalDang(ctx context.Context, sc *dangScope, source string, client graphql.Client, output io.Writer, write dangWriter) (string, error) {
+func evalDang(ctx context.Context, sc *dangScope, source string, client graphql.Client, output io.Writer, write dangWriter) (core.DangReport, error) {
 	start := time.Now()
 	var r dangReport
+	calls := &countingClient{inner: client}
+	if output == nil {
+		output = io.Discard
+	}
+	logs := &lineEndWriter{w: output}
+	// printedEnd is where the report's printed output ends: the rest is
+	// logged when the report is done.
+	printedEnd := 0
+	done := func() core.DangReport {
+		report := r.String()
+		logs.WriteRest(calls.secrets.scrub(report[printedEnd:]))
+		return core.DangReport{Text: calls.secrets.scrub(report)}
+	}
 
 	// Check first: a type error runs nothing.
 	snippet := sc.snippetPath()
@@ -63,24 +95,19 @@ func evalDang(ctx context.Context, sc *dangScope, source string, client graphql.
 		DiagnosticContext: true,
 	})
 	if err != nil {
-		return "", err
+		return core.DangReport{}, err
 	}
 	if diags := a.Diagnostics(); hasErrors(diags) {
 		r.diagnostics(sc, diags)
 		r.linef("%s · %s · nothing ran", r.counts(), sc.label)
-		return r.String(), nil
+		return done(), nil
 	}
 
-	calls := &countingClient{inner: client}
 	ctx = dang.ContextWithImportConfigs(ctx, dang.ImportConfig{
 		Name: "Dagger", Client: calls, Schema: sc.schema, AutoImport: true,
 	})
 	var printed tailBuffer
-	sink := io.Writer(&printed)
-	if output != nil {
-		sink = io.MultiWriter(&printed, output)
-	}
-	sink = &scrubWriter{w: sink, secrets: &calls.secrets}
+	sink := io.Writer(&scrubWriter{w: io.MultiWriter(&printed, logs), secrets: &calls.secrets})
 	ctx = ioctx.StdoutToContext(ctx, sink)
 	ctx = ioctx.StderrToContext(ctx, sink)
 
@@ -95,13 +122,14 @@ func evalDang(ctx context.Context, sc *dangScope, source string, client graphql.
 	writeOutput := func() {
 		if out := printed.String(); out != "" {
 			r.linef("output:")
-			r.WriteString(calls.secrets.scrub(out))
+			r.WriteString(out)
 			if !strings.HasSuffix(out, "\n") {
 				r.WriteByte('\n')
 			}
 		}
+		printedEnd = r.Len()
 	}
-	fail := func(err error) (string, error) {
+	fail := func(err error) core.DangReport {
 		writeOutput()
 		diags := errorDiagnostics(err)
 		if len(diags) == 0 {
@@ -110,29 +138,29 @@ func evalDang(ctx context.Context, sc *dangScope, source string, client graphql.
 		sc.attributeBindingFailures(diags)
 		r.diagnostics(sc, diags)
 		r.linef("%s", footer("failed"))
-		return calls.secrets.scrub(r.String()), nil
+		return done()
 	}
 
 	mod, err := dang.LoadDir(ctx, sc.dir, dang.LoadOptions{FS: sc.source(nil), Eager: sc.module})
 	if err != nil {
-		return fail(err)
+		return fail(err), nil
 	}
 	defer mod.Close()
 	session, err := mod.NewSession(ctx)
 	if err != nil {
-		return fail(err)
+		return fail(err), nil
 	}
 	ran, err := session.Check(ctx, dangEvalName, source)
 	if err != nil {
-		return fail(err)
+		return fail(err), nil
 	}
 	val, err := ran.Eval(ctx)
 	if err != nil {
-		return fail(err)
+		return fail(err), nil
 	}
 	writes, err := finalWrites(ctx, session, mod.Version, sc.bound, source)
 	if err != nil {
-		return fail(err)
+		return fail(err), nil
 	}
 
 	writeOutput()
@@ -151,7 +179,7 @@ func evalDang(ctx context.Context, sc *dangScope, source string, client graphql.
 		// Only where it matters: a result that looks like a write.
 		r.linef("0 writes")
 	}
-	return calls.secrets.scrub(r.String()), nil
+	return done(), nil
 }
 
 // finalWrites returns the bound values source reassigns, with their values
@@ -216,7 +244,7 @@ func reassignedNames(source string, version dang.Version) map[string]bool {
 // finalWrites), so a Workspace or Changeset the snippet only returns says
 // how to write it; reportEvalResult reports whether it was one.
 func reportEvalResult(ctx context.Context, r *dangReport, calls *countingClient, val dang.Value, typ hm.Type, wroteWS bool) (unwritten bool) {
-	r.linef("%s", calls.secrets.scrub(dang.Describe(ctx, val, typ, dang.DescribeOptions{})))
+	r.linef("%s", calls.secrets.scrub(describeResult(ctx, val, typ)))
 	if typ == nil {
 		return false
 	}
@@ -244,6 +272,31 @@ func reportEvalResult(ctx context.Context, r *dangReport, calls *countingClient,
 	}
 	r.linef("members: %s", strings.Join(names, " "))
 	return unwritten
+}
+
+// describeResult describes a snippet's result as `TYPE = value`, in full
+// (see dangDescribeOptions). A long multi-line string, such as a file's
+// contents, is shown as a block of its own lines between triple quotes
+// rather than as one quoted line, so it reads as the text it is, and a
+// reader that bounds lines (the tool result, ReadLogs) cuts it by lines.
+func describeResult(ctx context.Context, val dang.Value, typ hm.Type) string {
+	if s, ok := val.(dang.StringValue); ok && isBlockString(s.Val) {
+		if typ == nil {
+			typ = s.Type()
+		}
+		text := s.Val
+		if !strings.HasSuffix(text, "\n") {
+			text += "\n"
+		}
+		return fmt.Sprintf("%s = \"\"\"\n%s\"\"\"", typ, text)
+	}
+	return dang.Describe(ctx, val, typ, dangDescribeOptions)
+}
+
+// isBlockString reports whether a string result is shown as a block: it
+// spans lines, and quoted on one it would not fit dangBlockStringMin.
+func isBlockString(s string) bool {
+	return strings.Contains(strings.TrimSuffix(s, "\n"), "\n") && len(strconv.Quote(s)) > dangBlockStringMin
 }
 
 func hasErrors(diags []analysis.Diagnostic) bool {
@@ -360,4 +413,37 @@ func (b *tailBuffer) String() string {
 		return fmt.Sprintf("… (%d earlier bytes cut)\n%s", b.dropped, b.buf.String())
 	}
 	return b.buf.String()
+}
+
+// lineEndWriter writes to w, remembering whether what it wrote last ended
+// a line, so the rest of a report logged after printed output starts on a
+// line of its own, as it does in the report.
+type lineEndWriter struct {
+	mu      sync.Mutex
+	w       io.Writer
+	midLine bool
+}
+
+func (l *lineEndWriter) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(p) > 0 {
+		l.midLine = p[len(p)-1] != '\n'
+	}
+	return l.w.Write(p)
+}
+
+// WriteRest writes the rest of a report, on a line of its own. Logging is
+// best effort: a failure to log doesn't fail the call.
+func (l *lineEndWriter) WriteRest(rest string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if rest == "" {
+		return
+	}
+	if l.midLine {
+		rest = "\n" + rest
+	}
+	_, _ = io.WriteString(l.w, rest)
+	l.midLine = !strings.HasSuffix(rest, "\n")
 }
