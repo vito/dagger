@@ -364,13 +364,51 @@ func (m *MCP) loadBase(ctx context.Context) (context.Context, *mcpBase, error) {
 	}
 	base.installed, base.installedErr = installedWorkspaceModules(ctx, served, ws)
 	if base.installedErr == nil {
+		bound := m.boundModules()
 		mods := make([]Mod, len(base.installed.Loaded))
 		for i, mod := range base.installed.Loaded {
 			mods[i] = NewUserMod(mod)
+			// A bound object's types are its own module's: where the
+			// workspace installs another revision of it that no client
+			// serves (one loaded from a snapshot's tree, or whose source
+			// the agent is editing), the bound object's module takes its
+			// place, as the session's served copy keeps it for a live one.
+			boundMod, ok := bound[mods[i].Name()]
+			if !ok {
+				continue
+			}
+			if same, err := boundMod.Same(mods[i]); err == nil && same {
+				continue
+			}
+			if servedMod, ok := served.Lookup(mods[i].Name()); ok {
+				if same, err := servedMod.Same(mods[i]); err == nil && same {
+					continue
+				}
+			}
+			mods[i] = boundMod
 		}
 		base.deps = served.WithPrimaryMods(mods, base.installed.Removed)
 	}
 	return ctx, base, nil
+}
+
+// boundModules are the modules of the bound tool objects, by name.
+func (m *MCP) boundModules() map[string]Mod {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	mods := map[string]Mod{}
+	for _, b := range m.boundTools {
+		objType := b.objType
+		if b.object != nil {
+			objType = b.object.ObjectType()
+		}
+		if mod, ok := ModuleObjectTypeModule(objType); ok {
+			if _, seen := mods[mod.Self().Name()]; !seen {
+				mods[mod.Self().Name()] = NewUserMod(mod)
+			}
+		}
+	}
+	return mods
 }
 
 // installedWorkspaceModules loads the modules installed in ws (see
