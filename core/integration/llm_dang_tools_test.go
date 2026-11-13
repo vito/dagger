@@ -303,7 +303,8 @@ func (LLMSuite) TestDangTools(ctx context.Context, t *testctx.T) {
 
 	t.Run("a module installed by a snippet", func(ctx context.Context, t *testctx.T) {
 		// A module a snippet installs (`ws = ws.withModule(…)`) is in the
-		// next call's scope, in a live workspace and in a snapshot.
+		// next call's scope, and one it uninstalls isn't, in a live workspace
+		// and in a snapshot.
 		helper := base.Directory(".dagger/modules/helper")
 		svc, _ := gitSmartHTTPServiceDirAuth(ctx, t, c, "", makeGitDir(c, helper, "main"), "", nil)
 		repo := "http://" + startedServiceIP(ctx, t, c, svc) + "/repo.git"
@@ -316,6 +317,10 @@ func (LLMSuite) TestDangTools(ctx context.Context, t *testctx.T) {
 			{"DangCheck", map[string]string{"source": `helper.ping`}},
 			{"DangEval", map[string]string{"source": `helper.ping`}},
 			{"DangEval", map[string]string{"at": "helper", "source": `Helper.ping + "?"`}},
+			// One it uninstalls leaves it, even if the session serves it.
+			{"DangCheck", map[string]string{"source": `notes.greet(name: "x")`}},
+			{"DangEval", map[string]string{"source": `ws = ws.withoutModule(name: "notes")`}},
+			{"DangCheck", map[string]string{"source": `notes.greet(name: "x")`}},
 		}
 		for name, bind := range map[string]string{
 			"live":     bind,
@@ -329,6 +334,8 @@ func (LLMSuite) TestDangTools(ctx context.Context, t *testctx.T) {
 				"Dagger.Helper.ping: String!",
 				`String! = "pong"`,
 				`String! = "pong?"`,
+				"String! has ",
+				`<check>:1:1: error: "notes" not found`,
 			} {
 				require.Contains(t, out, want, name)
 			}

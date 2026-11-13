@@ -685,3 +685,26 @@ func TestDangAtReport(t *testing.T) {
 	_, ok = dangAtReport(nil)
 	require.False(t, ok)
 }
+
+// A name the default scope doesn't find may be an installed module that
+// failed to load: a report that couldn't find one says which did.
+func TestDangUnloadedNote(t *testing.T) {
+	t.Parallel()
+	require.Empty(t, unloadedNote(&core.DangScope{}))
+	scope := &core.DangScope{LoadFailures: []core.ModuleLoadFailure{
+		{Name: "go", Message: "exit code 1\nlong build log"},
+		{Name: "broken", Message: "no dagger-module.toml"},
+	}}
+	note := unloadedNote(scope)
+	require.Equal(t, "note: installed modules that failed to load aren't in scope: broken (no dagger-module.toml), go (exit code 1)", note)
+
+	sc := workspaceTestScope(t)
+	sc.unloaded = note
+	out := checkTest(t, sc, "go", "")
+	require.True(t, strings.HasSuffix(withUnloadedNote(sc, out), "1 error · workspace scope · nothing ran\n"+note+"\n"), out)
+	out = checkTest(t, sc, `true`, "")
+	require.Equal(t, out, withUnloadedNote(sc, out), "only a report that couldn't find a name")
+
+	scope = &core.DangScope{InstalledErr: errors.New("bad dagger.toml")}
+	require.Equal(t, "note: the workspace's installed modules aren't in scope: bad dagger.toml", unloadedNote(scope))
+}

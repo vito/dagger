@@ -75,6 +75,10 @@ type dangScope struct {
 	// a module that isn't written in Dang has no .dang files to diagnose.
 	sdk string
 
+	// unloaded, for the workspace scope, notes the installed modules left
+	// out of it because they failed to load (see unloadedNote).
+	unloaded string
+
 	// values, for the workspace scope, declares `ws` and the bound tool
 	// objects (see valueDeclarations).
 	values string

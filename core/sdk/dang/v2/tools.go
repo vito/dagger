@@ -44,6 +44,7 @@ func (dangTools) Check(ctx context.Context, env core.DangToolEnv, args core.Dang
 	err := withDangScope(ctx, env, args.At, true, func(ctx context.Context, sc *dangScope, _ dangRuntime) error {
 		var err error
 		out, err = checkDang(ctx, sc, args.Source, args.Search)
+		out = withUnloadedNote(sc, out)
 		return err
 	})
 	if report, ok := dangAtReport(err); ok {
@@ -94,6 +95,7 @@ func (dangTools) Eval(ctx context.Context, env core.DangToolEnv, args core.DangE
 			}
 			var err error
 			out, err = evalDang(ctx, sc, args.Source, client, stdio.Stdout, write)
+			out = withUnloadedNote(sc, out)
 			return nil, err
 		})
 		return err
@@ -174,7 +176,7 @@ func withDangScope(
 	}
 
 	if strings.TrimSpace(at) == "" {
-		sc := &dangScope{fsys: fstest.MapFS{}, dir: ".", label: "workspace scope", schema: defaultSchema}
+		sc := &dangScope{fsys: fstest.MapFS{}, dir: ".", label: "workspace scope", schema: defaultSchema, unloaded: unloadedNote(scope)}
 		if err := bindDangValues(env, scope, sc, nil); err != nil {
 			return err
 		}
@@ -225,7 +227,9 @@ func withDangScope(
 	rt := dangRuntime{deps: scope.Deps}
 	if loc.src.Self() != nil {
 		rt = dangRuntime{src: loc.src, bound: scope.BoundMods}
-		rt.mod, schema, err = moduleScopeSchema(ctx, env.Server, loc.src, dagql.ObjectResult[*core.Module]{}, defaultSchema, label)
+		// The module the default scope loaded, if the workspace installs it.
+		installed, _ := installedModule(scope, loc.name)
+		rt.mod, schema, err = moduleScopeSchema(ctx, env.Server, loc.src, installed, defaultSchema, label)
 		if err != nil {
 			return err
 		}
@@ -387,6 +391,10 @@ type dangLocation struct {
 	// source isn't in the workspace's tree (a git module), and source its
 	// ref as the workspace installs it; dir and src are unset then.
 	installed, source string
+
+	// name is the name of the installed module `at` names when its source
+	// is in the workspace's tree: dir is its root.
+	name string
 }
 
 // resolveDangLocation finds what `at` (without a position) names: a module of
@@ -409,6 +417,7 @@ func resolveDangLocation(ctx context.Context, srv *dagql.Server, ws dagql.Object
 			return loc, nil
 		case ok:
 			loc.dir = cleanWorkspacePath(strings.TrimPrefix(source, "/"))
+			loc.name = target
 		default:
 			p, err := dangWorkspacePath(ws.Self(), target)
 			if err != nil {
@@ -523,8 +532,9 @@ func withInstalledModuleScope(
 // declaration-pass schema, its dependencies: its own API is what its .dang
 // files declare (see ensureModuleSelfTypes). A module written with another
 // SDK declares nothing Dang reads, so its scope sees its full API, as a
-// snippet's client serves it: its dependencies and the module itself,
-// loaded from src unless mod is given. It returns the module, if loaded.
+// snippet's client serves it: its dependencies and the module itself, mod
+// if given (the module the default scope loaded) or else loaded from src.
+// For such a module, it returns the module, if it loaded.
 func moduleScopeSchema(
 	ctx context.Context,
 	srv *dagql.Server,
@@ -534,17 +544,18 @@ func moduleScopeSchema(
 	label string,
 ) (dagql.ObjectResult[*core.Module], *introspection.Schema, error) {
 	var file dagql.Result[*core.File]
-	if !isDangSDK(moduleSDK(src.Self())) {
+	if isDangSDK(moduleSDK(src.Self())) {
+		mod = dagql.ObjectResult[*core.Module]{}
+	} else {
+		// A module that doesn't load leaves its scope its declared schema.
 		if mod.Self() == nil {
 			if err := srv.Select(ctx, src, &mod, dagql.Selector{View: srv.View, Field: "asModule"}); err != nil {
-				return mod, nil, fmt.Errorf("load %s: %w", label, err)
+				mod = dagql.ObjectResult[*core.Module]{}
 			}
 		}
-		if deps := mod.Self().Deps; deps != nil {
-			var err error
-			file, err = deps.Append(core.NewUserMod(mod)).SchemaIntrospectionJSONFileForModule(ctx)
-			if err != nil {
-				return mod, nil, fmt.Errorf("load the schema of %s: %w", label, err)
+		if mod.Self() != nil && mod.Self().Deps != nil {
+			if full, err := mod.Self().Deps.Append(core.NewUserMod(mod)).SchemaIntrospectionJSONFileForModule(ctx); err == nil {
+				file = full
 			}
 		}
 	}
@@ -572,6 +583,9 @@ func isDangSDK(sdk string) bool {
 // installedModule is the module the default scope loaded for the one the
 // workspace installs as name.
 func installedModule(scope *core.DangScope, name string) (dagql.ObjectResult[*core.Module], bool) {
+	if name == "" {
+		return dagql.ObjectResult[*core.Module]{}, false
+	}
 	want := core.LatestNamer.CLIName(name)
 	for _, mod := range scope.Installed {
 		if core.LatestNamer.CLIName(mod.Self().Name()) == want {
@@ -594,6 +608,33 @@ func unloadedModuleMessage(scope *core.DangScope, loc dangLocation) string {
 		return fmt.Sprintf("module %s (%s) is installed, but the workspace's modules didn't load: %v", loc.installed, loc.source, scope.InstalledErr)
 	}
 	return fmt.Sprintf("module %s (%s) is installed, but didn't load", loc.installed, loc.source)
+}
+
+// unloadedNote says which installed modules aren't in the default scope
+// because they failed to load, or "" if none: a name the scope doesn't find
+// may be one of them rather than a typo.
+func unloadedNote(scope *core.DangScope) string {
+	if scope.InstalledErr != nil {
+		return fmt.Sprintf("note: the workspace's installed modules aren't in scope: %v", scope.InstalledErr)
+	}
+	if len(scope.LoadFailures) == 0 {
+		return ""
+	}
+	failures := make([]string, len(scope.LoadFailures))
+	for i, failure := range scope.LoadFailures {
+		failures[i] = fmt.Sprintf("%s (%s)", failure.Name, firstLine(failure.Message))
+	}
+	slices.Sort(failures)
+	return "note: installed modules that failed to load aren't in scope: " + strings.Join(failures, ", ")
+}
+
+// withUnloadedNote adds sc's note about installed modules that failed to
+// load to a report that couldn't find a name.
+func withUnloadedNote(sc *dangScope, out string) string {
+	if sc == nil || sc.unloaded == "" || !strings.Contains(out, " not found") {
+		return out
+	}
+	return out + sc.unloaded + "\n"
 }
 
 // installedNames lists the installed modules of the default scope, for a
