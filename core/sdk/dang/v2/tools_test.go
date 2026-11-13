@@ -901,16 +901,24 @@ func TestDangReassigned(t *testing.T) {
 	require.Empty(t, dangTools{}.Reassigned(`chat = `))
 }
 
-func TestDeclaredNames(t *testing.T) {
+func TestModuleScopeNames(t *testing.T) {
 	t.Parallel()
 	sc := moduleTestScope(t, map[string]string{
 		"main.dang": testModuleMain,
 		"ws.dang":   "let ws = \"mine\"\n",
+		"llm.dang":  "let ask(chat: LLM!): LLM! { chat }\n",
 	})
-	names := declaredNames(context.Background(), sc.fsys, sc.dir)
-	require.True(t, names["ws"])
-	require.True(t, names["stableOrder"])
-	require.False(t, names["box"])
+	names := moduleScopeNames(context.Background(), sc.fsys, sc.dir, "")
+	require.True(t, names.declared["ws"])
+	require.True(t, names.declared["stableOrder"])
+	require.False(t, names.declared["box"])
+	// A file or the call's source mentioning a name, as a whole word.
+	require.True(t, names.mentions("chat"))
+	require.False(t, names.mentions("me"))
+	require.True(t, scopeNames{source: "chat = x"}.mentions("chat"))
+	require.True(t, scopeNames{source: "f(llm: chat)"}.mentions("chat"))
+	require.False(t, scopeNames{source: "chatter + mychat + chat_x"}.mentions("chat"))
+	require.False(t, scopeNames{}.mentions("chat"))
 }
 
 func TestParseDangAt(t *testing.T) {

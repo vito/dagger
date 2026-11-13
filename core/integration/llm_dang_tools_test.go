@@ -564,7 +564,7 @@ type Gadget {
 		snapshot := core.Ref[*core.LLM](core.NewQuery(c), core.ID(owner.mustRun(ctx, t, "snapshot { id }").Get("snapshot.id").String()))
 		tools, err := snapshot.Tools(ctx)
 		require.NoError(t, err)
-		require.Contains(t, tools, "`me` (your Agent, read-only)")
+		require.Contains(t, tools, "`me` (the Agent owning this conversation; can't be reassigned)")
 		const prompt = "who am I"
 		script := core.NewQuery(c).LLM().WithPrompt(prompt)
 		for i, call := range []dangToolCall{

@@ -141,7 +141,16 @@ func TestCheckDangWrites(t *testing.T) {
 	w := func(names ...string) []DangWrite {
 		var writes []DangWrite
 		for _, name := range names {
-			writes = append(writes, DangWrite{Name: name})
+			typeName := "Editor"
+			switch name {
+			case "chat":
+				typeName = "LLM"
+			case "ws":
+				typeName = "Workspace"
+			case "me":
+				typeName = "Agent"
+			}
+			writes = append(writes, DangWrite{Name: name, TypeName: typeName})
 		}
 		return writes
 	}
@@ -155,7 +164,7 @@ func TestCheckDangWrites(t *testing.T) {
 
 	// Nothing is loaded or written: the refusal comes first.
 	m := &MCP{mu: &sync.Mutex{}}
-	_, err = m.applyDangWrites(t.Context(), nil, dagql.ObjectResult[*Workspace]{}, []DangWrite{{Name: "ws", ID: "x"}, {Name: "chat", ID: "y"}})
+	_, err = m.applyDangWrites(t.Context(), nil, dagql.ObjectResult[*Workspace]{}, w("ws", "chat"))
 	require.ErrorContains(t, err, DangChatAloneMessage)
 }
 
@@ -165,7 +174,7 @@ func TestDangToolDescriptions(t *testing.T) {
 	t.Parallel()
 	full := dangBindingsDoc{ws: true, chat: true, me: true, tools: []string{"editor", "committer"}}
 	check, eval := full.checkDescription(), full.evalDescription()
-	require.Contains(t, check, "Every scope binds `ws` (your Workspace); `chat` (this conversation, an LLM); `me` (your Agent, read-only); your tool objects `editor`, `committer`.")
+	require.Contains(t, check, "Every scope binds `ws` (your Workspace); `chat` (this conversation, an LLM); `me` (the Agent owning this conversation; can't be reassigned); your tool objects `editor`, `committer`.")
 	require.Contains(t, eval, "a reassigned `ws` (`ws = ws.withChanges(…)`) becomes your workspace")
 	require.Contains(t, eval, "a reassigned tool object (`editor = editor.someMethod(…)`) its state")
 	require.Contains(t, eval, "a reassigned `chat`")
@@ -183,13 +192,17 @@ func TestDangToolDescriptions(t *testing.T) {
 		require.NotContains(t, desc, "tool object")
 	}
 
-	// dagger mcp: no conversation, so no `chat`.
+	// dagger mcp: no conversation, so no `chat`, nor is the name reserved.
 	m := newMCP().Standalone()
 	m.ownerAgent = ""
 	doc := m.dangBindingsDoc()
 	require.Equal(t, dangBindingsDoc{}, doc)
 	require.NotContains(t, doc.checkDescription(), "Every scope binds")
 	require.NotContains(t, doc.evalDescription(), "Assignment is the write")
+	require.False(t, m.dangReservedNames()["chat"])
+	require.True(t, newMCP().dangReservedNames()["chat"])
+	// A tool object named `chat` there is written as a tool object.
+	require.NoError(t, checkDangWrites([]DangWrite{{Name: "chat", TypeName: "Chat"}, {Name: "ws", TypeName: "Workspace"}}))
 
 	owned := newMCP()
 	owned.ownerAgent = "agent-1"

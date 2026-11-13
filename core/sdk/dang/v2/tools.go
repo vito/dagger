@@ -44,7 +44,7 @@ type dangTools struct{}
 func (dangTools) Check(ctx context.Context, env core.DangToolEnv, args core.DangCheckArgs) (core.DangReport, error) {
 	ctx = withDangSyntaxCache(ctx)
 	var rep core.DangReport
-	err := withDangScope(ctx, env, args.At, true, func(ctx context.Context, sc *dangScope, _ dangRuntime) error {
+	err := withDangScope(ctx, env, args.At, args.Source, true, func(ctx context.Context, sc *dangScope, _ dangRuntime) error {
 		var err error
 		rep, err = checkDang(ctx, sc, args.Source, args.Search)
 		rep.Text = withUnloadedNote(sc, rep.Text)
@@ -72,7 +72,7 @@ func (dangTools) Eval(ctx context.Context, env core.DangToolEnv, args core.DangE
 		return core.DangReport{}, err
 	}
 	var rep core.DangReport
-	err = withDangScope(ctx, env, args.At, false, func(ctx context.Context, sc *dangScope, rt dangRuntime) error {
+	err = withDangScope(ctx, env, args.At, args.Source, false, func(ctx context.Context, sc *dangScope, rt dangRuntime) error {
 		nestedClientMetadata, err := dangshared.NewNestedClientMetadata(ctx)
 		if err != nil {
 			return err
@@ -189,11 +189,11 @@ func parseDangAt(at string) (string, *analysis.Pos, error) {
 
 // withDangScope resolves `at` into a scope and calls fn with it, and with
 // the module source of a module scope, if the directory is one's. Only
-// DangCheck takes positions.
+// DangCheck takes positions. source is the call's source, if any.
 func withDangScope(
 	ctx context.Context,
 	env core.DangToolEnv,
-	at string,
+	at, source string,
 	allowPosition bool,
 	fn func(context.Context, *dangScope, dangRuntime) error,
 ) error {
@@ -207,7 +207,7 @@ func withDangScope(
 
 	if strings.TrimSpace(at) == "" {
 		sc := &dangScope{fsys: fstest.MapFS{}, dir: ".", label: "workspace scope", schema: defaultSchema, unloaded: unloadedNote(scope)}
-		if err := bindDangValues(env, scope, sc, nil); err != nil {
+		if err := bindDangValues(env, scope, sc, scopeNames{source: source}); err != nil {
 			return err
 		}
 		return fn(ctx, sc, dangRuntime{deps: scope.Deps})
@@ -232,7 +232,7 @@ func withDangScope(
 		return fmt.Errorf("at %q: a position needs a .dang file", at)
 	}
 	if loc.installed != "" {
-		return withInstalledModuleScope(ctx, env, scope, defaultSchema, at, loc, fn)
+		return withInstalledModuleScope(ctx, env, scope, defaultSchema, at, source, loc, fn)
 	}
 
 	cwd := cleanWorkspacePath(strings.TrimPrefix(ws.Self().Cwd, "/"))
@@ -306,7 +306,7 @@ func withDangScope(
 				return &dangAtError{at: at, msg: fmt.Sprintf("no file %s in the workspace", sc.display(loc.file))}
 			}
 		}
-		if err := bindDangValues(env, scope, sc, declaredNames(ctx, sc.fsys, sc.dir)); err != nil {
+		if err := bindDangValues(env, scope, sc, moduleScopeNames(ctx, sc.fsys, sc.dir, source)); err != nil {
 			return err
 		}
 		return fn(ctx, sc, rt)
@@ -322,8 +322,11 @@ func withDangScope(
 // `ws` (or `editor`) is the module's, as any other of its declarations would
 // shadow an import, so it is not bound, and assigning it writes nothing.
 // `me` is bound whenever the schema has agents: the conversation's agent, or
-// null without one.
-func bindDangValues(env core.DangToolEnv, scope *core.DangScope, sc *dangScope, declared map[string]bool) error {
+// null without one. `chat` is bound only where the scope's source mentions
+// it: its ID holds the whole conversation, which every call would otherwise
+// parse.
+func bindDangValues(env core.DangToolEnv, scope *core.DangScope, sc *dangScope, names scopeNames) error {
+	declared := names.declared
 	var values []dangValue
 	if ws := env.Workspace; ws.Self() != nil && !declared[core.DangWorkspaceBinding] {
 		encoded, err := encodedID(ws.ID)
@@ -332,7 +335,7 @@ func bindDangValues(env core.DangToolEnv, scope *core.DangScope, sc *dangScope, 
 		}
 		values = append(values, dangValue{name: core.DangWorkspaceBinding, typeName: "Workspace", id: encoded})
 	}
-	if chat := env.Chat; chat.Self() != nil && !declared[core.DangChatBinding] && sc.schema.Types.Get("LLM") != nil {
+	if chat := env.Chat; chat.Self() != nil && !declared[core.DangChatBinding] && names.mentions(core.DangChatBinding) && sc.schema.Types.Get("LLM") != nil {
 		encoded, err := encodedID(chat.ID)
 		if err != nil {
 			return err
@@ -370,10 +373,31 @@ func encodedID(id func() (*call.ID, error)) (string, error) {
 	return i.Encode()
 }
 
-// declaredNames are the names dir's .dang files declare at their top level.
-// Files that don't parse are skipped: their diagnostics say why.
-func declaredNames(ctx context.Context, fsys fs.FS, dir string) map[string]bool {
-	names := map[string]bool{}
+// scopeNames is what bindDangValues reads of a scope's source: the names its
+// own files declare at their top level, and the text of its files and of the
+// call's source, to tell whether a name is mentioned at all.
+type scopeNames struct {
+	declared map[string]bool
+	source   string
+	files    []string
+}
+
+// mentions reports whether the call's source or the scope's files spell
+// name as a word, without resolving it: a mention in a comment or a string
+// counts too, which only binds a value nothing reads.
+func (n scopeNames) mentions(name string) bool {
+	word := regexp.MustCompile(`(^|[^A-Za-z0-9_$])` + regexp.QuoteMeta(name) + `($|[^A-Za-z0-9_])`)
+	if word.MatchString(n.source) {
+		return true
+	}
+	return slices.ContainsFunc(n.files, word.MatchString)
+}
+
+// moduleScopeNames reads the names of a module scope: dir's .dang files, and
+// the names they declare at their top level. Files that don't parse declare
+// nothing: their diagnostics say why.
+func moduleScopeNames(ctx context.Context, fsys fs.FS, dir, source string) scopeNames {
+	names := scopeNames{declared: map[string]bool{}, source: source}
 	entries, err := fs.ReadDir(fsys, dir)
 	if err != nil {
 		return names
@@ -388,6 +412,7 @@ func declaredNames(ctx context.Context, fsys fs.FS, dir string) map[string]bool 
 		if err != nil {
 			continue
 		}
+		names.files = append(names.files, string(text))
 		parsed, err := dang.Parse(p, text, dang.WithVersion(version))
 		if err != nil {
 			continue
@@ -398,7 +423,7 @@ func declaredNames(ctx context.Context, fsys fs.FS, dir string) map[string]bool 
 		}
 		for _, form := range block.Forms {
 			for _, name := range form.DeclaredSymbols() {
-				names[name] = true
+				names.declared[name] = true
 			}
 		}
 	}
@@ -519,7 +544,7 @@ func withInstalledModuleScope(
 	env core.DangToolEnv,
 	scope *core.DangScope,
 	defaultSchema *introspection.Schema,
-	at string,
+	at, source string,
 	loc dangLocation,
 	fn func(context.Context, *dangScope, dangRuntime) error,
 ) error {
@@ -575,7 +600,7 @@ func withInstalledModuleScope(
 			sdk:    moduleSDK(src.Self()),
 			schema: ensureModuleSelfTypes(ctx, schema, selfSource, mnt),
 		}
-		if err := bindDangValues(env, scope, sc, declaredNames(ctx, sc.fsys, sc.dir)); err != nil {
+		if err := bindDangValues(env, scope, sc, moduleScopeNames(ctx, sc.fsys, sc.dir, source)); err != nil {
 			return err
 		}
 		return fn(ctx, sc, rt)

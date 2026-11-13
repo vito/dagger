@@ -148,15 +148,21 @@ type dangValue struct {
 
 // what says what v is, for a message about it.
 func (v dangValue) what() string {
-	switch v.name {
-	case core.DangWorkspaceBinding:
+	switch {
+	case v.name == core.DangWorkspaceBinding:
 		return "the conversation's workspace"
-	case core.DangChatBinding:
+	case v.isChat():
 		return "the conversation"
-	case core.DangAgentBinding:
+	case v.name == core.DangAgentBinding:
 		return "the conversation's agent"
 	}
 	return "bound tool object"
+}
+
+// isChat reports whether v is the conversation, rather than a tool object
+// named `chat` where the conversation isn't bound (dagger mcp).
+func (v dangValue) isChat() bool {
+	return v.name == core.DangChatBinding && v.typeName == "LLM"
 }
 
 // valueDeclarations is the source binding each value by name, as a module
@@ -336,7 +342,7 @@ func bindingWriteDiagnostics(assigned []boundAssignment) []analysis.Diagnostic {
 			diag(as, fmt.Sprintf("cannot assign to `%s`: it is %s, bound read-only", as.value.name, as.value.what()))
 			continue
 		}
-		if as.value.name != core.DangChatBinding && !seen[as.value.name] {
+		if !as.value.isChat() && !seen[as.value.name] {
 			seen[as.value.name] = true
 			others = append(others, "`"+as.value.name+"`")
 		}
@@ -345,7 +351,7 @@ func bindingWriteDiagnostics(assigned []boundAssignment) []analysis.Diagnostic {
 		return diags
 	}
 	for _, as := range assigned {
-		if as.value.name == core.DangChatBinding {
+		if as.value.isChat() {
 			diag(as, fmt.Sprintf("cannot assign to `chat` and %s in one snippet: %s", strings.Join(others, " and "), core.DangChatAloneMessage))
 			break
 		}

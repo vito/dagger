@@ -90,9 +90,10 @@ const (
 )
 
 // dangReservedNames are the names the default scope binds before any tool
-// object.
-func dangReservedNames() map[string]bool {
-	return map[string]bool{DangWorkspaceBinding: true, DangChatBinding: true, DangAgentBinding: true}
+// object: `chat` only for a conversation's step, not a standalone server
+// (dagger mcp), which has no conversation to bind.
+func (m *MCP) dangReservedNames() map[string]bool {
+	return map[string]bool{DangWorkspaceBinding: true, DangChatBinding: !m.standalone, DangAgentBinding: true}
 }
 
 // DangChatAloneMessage says why a snippet can't reassign `chat` together with
@@ -108,6 +109,13 @@ type DangWrite struct {
 	TypeName string
 	// ID is the encoded ID of its final value.
 	ID string
+}
+
+// isChat reports whether w writes the conversation, rather than a tool object
+// that happens to be named `chat` where the conversation isn't bound (see
+// MCP.dangReservedNames).
+func (w DangWrite) isChat() bool {
+	return w.Name == DangChatBinding && w.TypeName == "LLM"
 }
 
 // DangScope is the default scope of a Dang tool call: the conversation's API
@@ -231,7 +239,7 @@ func (m *MCP) dangBindingsDoc() dangBindingsDoc {
 		chat: !m.standalone,
 		me:   m.ownerAgent != "",
 	}
-	seen := dangReservedNames()
+	seen := m.dangReservedNames()
 	for _, b := range bound {
 		name, ok := dangToolObjectName(b, seen)
 		if ok {
@@ -267,7 +275,7 @@ func (d dangBindingsDoc) list() string {
 		names = append(names, "`chat` (this conversation, an LLM)")
 	}
 	if d.me {
-		names = append(names, "`me` (your Agent, read-only)")
+		names = append(names, "`me` (the Agent owning this conversation; can't be reassigned)")
 	}
 	if len(d.tools) > 0 {
 		tools := make([]string, len(d.tools))
@@ -549,7 +557,7 @@ func (m *MCP) dangBindings(scope *DangScope) (map[string]Mod, error) {
 	bound := slices.Clone(m.boundTools)
 	m.mu.Unlock()
 
-	seen := dangReservedNames()
+	seen := m.dangReservedNames()
 	boundByName := map[string]Mod{}
 	for _, b := range bound {
 		typeName := b.typeName()
@@ -684,8 +692,8 @@ func (m *MCP) applyDangWrites(ctx context.Context, srv *dagql.Server, start dagq
 		if err != nil {
 			return "", fmt.Errorf("load the final %s: %w", w.Name, err)
 		}
-		switch w.Name {
-		case DangWorkspaceBinding:
+		switch {
+		case w.Name == DangWorkspaceBinding:
 			ws, ok := dagql.UnwrapAs[dagql.ObjectResult[*Workspace]](final)
 			if !ok {
 				return "", fmt.Errorf("write ws: got a %s, not a Workspace", final.Type().Name())
@@ -697,7 +705,7 @@ func (m *MCP) applyDangWrites(ctx context.Context, srv *dagql.Server, start dagq
 				return m.writeDangWorkspace(ctx, srv, ws)
 			}})
 			continue
-		case DangChatBinding:
+		case w.isChat():
 			next, ok := dagql.UnwrapAs[dagql.ObjectResult[*LLM]](final)
 			if !ok {
 				return "", fmt.Errorf("write chat: got a %s, not an LLM", final.Type().Name())
@@ -803,10 +811,10 @@ func checkDangWrites(writes []DangWrite) error {
 	var others []string
 	chat := false
 	for _, w := range writes {
-		switch w.Name {
-		case DangAgentBinding:
+		switch {
+		case w.Name == DangAgentBinding:
 			return fmt.Errorf("write me: `me` is read-only (nothing was written)")
-		case DangChatBinding:
+		case w.isChat():
 			chat = true
 		default:
 			others = append(others, "`"+w.Name+"`")
