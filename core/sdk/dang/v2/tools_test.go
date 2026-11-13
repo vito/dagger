@@ -303,13 +303,13 @@ func (f *fakeAPI) MakeRequest(_ context.Context, req *graphql.Request, resp *gra
 
 func evalTest(t *testing.T, sc *dangScope, source string, api *fakeAPI) (string, error) {
 	t.Helper()
-	rep, _, err := evalReport(t, sc, source, api)
+	rep, err := evalReport(t, sc, source, api)
 	return rep.Text, err
 }
 
-// evalReport runs source, and returns its report and what it logged to the
-// tool call's span: the report, but for the heading of its printed output.
-func evalReport(t *testing.T, sc *dangScope, source string, api *fakeAPI) (core.DangReport, string, error) {
+// evalReport runs source and returns its report, checking what it logged to
+// the tool call's span: the same, line for line.
+func evalReport(t *testing.T, sc *dangScope, source string, api *fakeAPI) (core.DangReport, error) {
 	t.Helper()
 	if api == nil {
 		api = &fakeAPI{answer: func(q string) string { t.Errorf("unexpected query %s", q); return "{}" }}
@@ -317,10 +317,9 @@ func evalReport(t *testing.T, sc *dangScope, source string, api *fakeAPI) (core.
 	var spanLogs strings.Builder
 	rep, err := evalDang(context.Background(), sc, source, api, &spanLogs, nil)
 	if err == nil {
-		require.Equal(t, strings.TrimPrefix(rep.Text, "output:\n"), spanLogs.String(),
-			"the span's logs have the whole report")
+		require.Equal(t, rep.Text, spanLogs.String(), "the span's logs are the report")
 	}
-	return rep, spanLogs.String(), err
+	return rep, err
 }
 
 func TestDangEval(t *testing.T) {
@@ -404,24 +403,38 @@ func TestDangEval(t *testing.T) {
 		for i := range 300 {
 			fmt.Fprintf(&file, "line %03d of a README\n", i)
 		}
-		rep, logs, err := evalReport(t, sc, "print(\"reading\")\ncontainer.withExec([\"cat\"]).stdout", stdout(file.String()))
+		rep, err := evalReport(t, sc, "print(\"reading\")\ncontainer.withExec([\"cat\"]).stdout", stdout(file.String()))
 		require.NoError(t, err)
 		// A file's contents read as its lines, between triple quotes.
 		require.Contains(t, rep.Text, "output:\nreading\nString! = \"\"\"\n"+file.String()+"\"\"\"\nmembers: ")
-		require.Contains(t, logs, "reading\nString! = \"\"\"\n"+file.String()+"\"\"\"\n")
 		require.False(t, rep.Rejected)
 
-		// A long one-line string isn't cut in the middle, nor a long list.
-		line := strings.Repeat("ab", 1000)
-		out, err := evalTest(t, sc, `container.withExec(["cat"]).stdout`, stdout(line))
+		// Verbatim: a missing final newline is said, not added.
+		out, err := evalTest(t, sc, `container.withExec(["cat"]).stdout`, stdout(strings.TrimSuffix(file.String(), "\n")))
+		require.NoError(t, err)
+		require.Contains(t, out, "line 299 of a README\n\"\"\" (no final newline)\nmembers: ")
+
+		// A long list isn't cut, nor a one-line string that fits a line.
+		line := strings.Repeat("ab", 700)
+		out, err = evalTest(t, sc, `container.withExec(["cat"]).stdout`, stdout(line))
 		require.NoError(t, err)
 		require.Contains(t, out, `String! = "`+line+`"`)
 		out, err = evalTest(t, sc, `container.withExec(["cat"]).stdout.split("")`, stdout(line))
 		require.NoError(t, err)
-		require.Equal(t, 2000, strings.Count(out, `"a"`)+strings.Count(out, `"b"`), out)
+		require.Equal(t, len(line), strings.Count(out, `"a"`)+strings.Count(out, `"b"`), out)
 		require.NotContains(t, out, "more)")
 		require.NotContains(t, out, "omitted")
-		require.NotContains(t, out, "truncated")
+
+		// A one-line string a line can't hold keeps its head and its tail,
+		// where a line clamp would keep only its head.
+		long := strings.Repeat("x", 3000) + "THE END"
+		out, err = evalTest(t, sc, `container.withExec(["cat"]).stdout`, stdout(long))
+		require.NoError(t, err)
+		require.Contains(t, out, "chars omitted)…")
+		require.Contains(t, out, `THE END"`)
+		for l := range strings.SplitSeq(out, "\n") {
+			require.LessOrEqual(t, len(l), 2000, "every line fits the line clamp")
+		}
 	})
 
 	t.Run("a short multi-line string stays quoted", func(t *testing.T) {
@@ -431,22 +444,24 @@ func TestDangEval(t *testing.T) {
 	})
 }
 
-// The rest of a report is logged on a line of its own, after printed output
-// that didn't end one.
+// Printed output is logged under the report's heading for it, and the rest
+// of a report on a line of its own, after output that didn't end one.
 func TestLineEndWriter(t *testing.T) {
 	t.Parallel()
 	var logs strings.Builder
-	w := &lineEndWriter{w: &logs}
+	w := &lineEndWriter{w: &logs, heading: dangOutputHeading}
 	w.WriteRest("")
+	_, _ = w.Write(nil)
+	require.Empty(t, logs.String(), "no output, no heading")
 	_, _ = w.Write([]byte("no newline"))
 	w.WriteRest("Int! = 1\n")
-	require.Equal(t, "no newline\nInt! = 1\n", logs.String())
+	require.Equal(t, "output:\nno newline\nInt! = 1\n", logs.String())
 
 	logs.Reset()
-	w = &lineEndWriter{w: &logs}
+	w = &lineEndWriter{w: &logs, heading: dangOutputHeading}
 	_, _ = w.Write([]byte("line\n"))
 	w.WriteRest("Int! = 1\n")
-	require.Equal(t, "line\nInt! = 1\n", logs.String())
+	require.Equal(t, "output:\nline\nInt! = 1\n", logs.String())
 }
 
 // A snippet that fails to parse or type-check is rejected: the engine points
@@ -464,7 +479,7 @@ func TestDangRejected(t *testing.T) {
 		{"success", "1 + 1", false},
 	} {
 		t.Run("DangEval: "+tc.name, func(t *testing.T) {
-			rep, _, err := evalReport(t, sc, tc.source, nil)
+			rep, err := evalReport(t, sc, tc.source, nil)
 			require.NoError(t, err)
 			require.Equal(t, tc.rejected, rep.Rejected, rep.Text)
 		})

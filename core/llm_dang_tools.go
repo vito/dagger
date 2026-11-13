@@ -27,10 +27,10 @@ const (
 // core/sdk/dang/README.md), so it implements this and registers it with
 // RegisterDangTools; core only describes the tools and dispatches to it.
 //
-// Each method logs its whole report to the tool call's span (ctx's), as a
-// module function's prints go to its call's: that is where ReadLogs reads
-// what the tool result leaves out, since the caller bounds the result as it
-// bounds a module tool's output (see dangToolResult).
+// Each method logs its whole report to the tool call's span (ctx's), line
+// for line, as a module function's prints go to its call's: that is where
+// ReadLogs reads what the tool result leaves out, since the caller bounds
+// the result as it bounds a module tool's output (see dangToolResult).
 type DangTools interface {
 	// Check type-checks without running anything and returns the report.
 	Check(ctx context.Context, env DangToolEnv, args DangCheckArgs) (DangReport, error)
@@ -252,9 +252,11 @@ const dangSkillNudge = "See the " + dangSkillName + " skill (ReadSkill) for Dang
 // dangToolResult is what the model sees of a Dang tool's report. The report
 // is bounded as a module tool's printed output is (see flatLogs): long lines
 // are clamped, and past the byte budget the middle gives way to a pointer to
-// ReadLogs on the tool call's span, which the report was logged to (see
-// DangTools). A report whose source failed to parse or type-check points at
-// the dang-language skill, until the conversation reads it.
+// ReadLogs on the tool call's span, which the report was logged to, line for
+// line (see DangTools). The pointer names the span's own logs: the engine
+// calls a snippet makes log beneath it too. A report whose source failed to
+// parse or type-check points at the dang-language skill, until the
+// conversation reads it.
 func (m *MCP) dangToolResult(ctx context.Context, rep DangReport) string {
 	text := rep.Text
 	if spanID := trace.SpanContextFromContext(ctx).SpanID(); spanID.IsValid() {
@@ -263,7 +265,8 @@ func (m *MCP) dangToolResult(ctx context.Context, rep DangReport) string {
 		for i, line := range lines {
 			captured[i] = capturedLine{text: line, direct: true}
 		}
-		text = flatLogs(spanID.String(), captured)
+		// flatLogs names the span in its pointer as ReadLogs(span: X).
+		text = flatLogs(fmt.Sprintf(`%s, scope: "own"`, spanID), captured)
 	}
 	if rep.Rejected && !m.hasReadSkill(dangSkillName) {
 		text = strings.TrimRight(text, "\n") + "\n" + dangSkillNudge

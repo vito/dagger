@@ -177,7 +177,7 @@ func (LLMSuite) TestDangTools(ctx context.Context, t *testctx.T) {
 		require.Contains(t, out, "boom")
 		require.Contains(t, out, "String! = \"\"\"\n1\n2\n3\n")
 		require.Contains(t, out, "\n20000\n\"\"\"\n")
-		require.Regexp(t, `\.\.\. \d+ lines omitted \(use ReadLogs\(span: [0-9a-f]+\) to read more\) \.\.\.`, out)
+		require.Regexp(t, `\.\.\. \d+ lines omitted \(use ReadLogs\(span: [0-9a-f]+, scope: "own"\) to read more\) \.\.\.`, out)
 		require.NotContains(t, out, "chars omitted")
 	})
 

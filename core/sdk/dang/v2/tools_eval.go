@@ -7,11 +7,11 @@ import (
 	"fmt"
 	"io"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Khan/genqlient/graphql"
 	"github.com/vito/dang/v2/pkg/dang"
@@ -28,25 +28,30 @@ import (
 const (
 	// dangEvalName names an evaluated snippet in positions and messages.
 	dangEvalName = "<eval>"
-	// dangOutputMax caps the printed output a DangEval report holds, only
-	// to bound its memory: the tool call's logs have all of it, and the
+	// dangOutputMax caps the printed output a DangEval report holds, and
+	// the description of its result, only to bound their memory: the
 	// engine bounds what the model sees of the report as it bounds a
-	// module tool's output. Its tail is kept.
+	// module tool's output, and the tool call's logs have the report. The
+	// tail of printed output is kept, the head of a result.
 	dangOutputMax = 1 << 20
 	// dangMemberNamesMax caps the member names listed after a result.
 	dangMemberNamesMax = 80
-	// dangBlockStringMin is how long (quoted) a multi-line string result
-	// gets before it is shown as a block of lines rather than one quoted
-	// line: the width Describe lays values out in.
+	// dangBlockStringMin is how long a multi-line string result gets
+	// before it is shown as a block of lines rather than one quoted line:
+	// the width Describe lays values out in.
 	dangBlockStringMin = 80
+	// dangLineStringMax is how many characters a string shown quoted, on
+	// one line, keeps. It fits the line clamp of the tool result and of
+	// ReadLogs (core's llmLogsMaxLineLen, 2000 bytes), which would keep
+	// only a longer line's head: Describe keeps its head and its tail.
+	dangLineStringMax = 1500
 )
 
-// dangDescribeOptions describe a DangEval result in full, without
-// eliding the middle of strings, the rest of lists or the end of the
-// rendering: the engine bounds the report as it bounds a module tool's
-// output, and the tool call's logs keep it whole. Depth stays capped:
-// a value is described, not dumped.
-var dangDescribeOptions = dang.DescribeOptions{MaxString: -1, MaxItems: -1, MaxBytes: -1}
+// dangDescribeOptions describe a DangEval result whole, but for what no
+// reader could see anyway: a string on one line is cut to fit a line, and
+// the whole description to dangOutputMax. Depth stays capped too: a value
+// is described, not dumped.
+var dangDescribeOptions = dang.DescribeOptions{MaxString: dangLineStringMax, MaxItems: -1, MaxBytes: dangOutputMax}
 
 // dangWrite is a bound value a snippet reassigned, with the ID of its final
 // value (see core.DangWrite).
@@ -64,8 +69,10 @@ type dangWriter func(context.Context, []dangWrite) (string, error)
 // the error return is for what keeps it from running at all.
 //
 // The whole report goes to output too, as a module function's prints go to
-// its call's logs: printed output as it is printed, and the rest of the
-// report once it is known. Secret plaintexts are scrubbed from both.
+// its call's logs: printed output as it is printed, under the report's
+// heading for it, and the rest of the report once it is known, so the logs
+// read line for line as the report does. Secret plaintexts are scrubbed
+// from both.
 //
 // Assignment is the write: when source succeeds, the scope's bound values
 // (`ws`, the bound tool objects) it reassigned are handed to write with
@@ -77,7 +84,7 @@ func evalDang(ctx context.Context, sc *dangScope, source string, client graphql.
 	if output == nil {
 		output = io.Discard
 	}
-	logs := &lineEndWriter{w: output}
+	logs := &lineEndWriter{w: output, heading: dangOutputHeading}
 	// printedEnd is where the report's printed output ends: the rest is
 	// logged when the report is done.
 	printedEnd := 0
@@ -121,7 +128,7 @@ func evalDang(ctx context.Context, sc *dangScope, source string, client graphql.
 	}
 	writeOutput := func() {
 		if out := printed.String(); out != "" {
-			r.linef("output:")
+			r.WriteString(dangOutputHeading)
 			r.WriteString(out)
 			if !strings.HasSuffix(out, "\n") {
 				r.WriteByte('\n')
@@ -275,29 +282,43 @@ func reportEvalResult(ctx context.Context, r *dangReport, calls *countingClient,
 	return unwritten
 }
 
-// describeResult describes a snippet's result as `TYPE = value`, in full
-// (see dangDescribeOptions). A long multi-line string, such as a file's
+// describeResult describes a snippet's result as `TYPE = value` (see
+// dangDescribeOptions). A long multi-line string, such as a file's
 // contents, is shown as a block of its own lines between triple quotes
 // rather than as one quoted line, so it reads as the text it is, and a
 // reader that bounds lines (the tool result, ReadLogs) cuts it by lines.
+// The block is the string verbatim, not a Dang literal (which would drop
+// common indentation): a string without a final newline says so.
 func describeResult(ctx context.Context, val dang.Value, typ hm.Type) string {
-	if s, ok := val.(dang.StringValue); ok && isBlockString(s.Val) {
-		if typ == nil {
-			typ = s.Type()
-		}
-		text := s.Val
-		if !strings.HasSuffix(text, "\n") {
-			text += "\n"
-		}
-		return fmt.Sprintf("%s = \"\"\"\n%s\"\"\"", typ, text)
+	s, ok := val.(dang.StringValue)
+	if !ok || !isBlockString(s.Val) {
+		return dang.Describe(ctx, val, typ, dangDescribeOptions)
 	}
-	return dang.Describe(ctx, val, typ, dangDescribeOptions)
+	if typ == nil {
+		typ = s.Type()
+	}
+	text, closing := s.Val, `"""`
+	if over := len(text) - dangOutputMax; over > 0 {
+		cut := dangOutputMax
+		for cut > 0 && !utf8.RuneStart(text[cut]) {
+			cut--
+		}
+		text = text[:cut]
+		closing += fmt.Sprintf(" (%d more bytes not shown; slice the string to read them)", len(s.Val)-cut)
+	} else if !strings.HasSuffix(text, "\n") {
+		closing += " (no final newline)"
+	}
+	if !strings.HasSuffix(text, "\n") {
+		text += "\n"
+	}
+	return fmt.Sprintf("%s = \"\"\"\n%s%s", typ, text, closing)
 }
 
 // isBlockString reports whether a string result is shown as a block: it
 // spans lines, and quoted on one it would not fit dangBlockStringMin.
 func isBlockString(s string) bool {
-	return strings.Contains(strings.TrimSuffix(s, "\n"), "\n") && len(strconv.Quote(s)) > dangBlockStringMin
+	body := strings.TrimSuffix(s, "\n")
+	return strings.Contains(body, "\n") && len(s)+strings.Count(s, "\n")+2 > dangBlockStringMin
 }
 
 func hasErrors(diags []analysis.Diagnostic) bool {
@@ -416,21 +437,34 @@ func (b *tailBuffer) String() string {
 	return b.buf.String()
 }
 
-// lineEndWriter writes to w, remembering whether what it wrote last ended
-// a line, so the rest of a report logged after printed output starts on a
-// line of its own, as it does in the report.
+// dangOutputHeading heads a DangEval report's printed output.
+const dangOutputHeading = "output:\n"
+
+// lineEndWriter writes printed output to w under a heading, written before
+// the first of it, and remembers whether what it wrote last ended a line,
+// so the rest of a report logged after the output starts on a line of its
+// own, as it does in the report.
 type lineEndWriter struct {
 	mu      sync.Mutex
 	w       io.Writer
+	heading string
+	wrote   bool
 	midLine bool
 }
 
 func (l *lineEndWriter) Write(p []byte) (int, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if len(p) > 0 {
-		l.midLine = p[len(p)-1] != '\n'
+	if len(p) == 0 {
+		return 0, nil
 	}
+	if !l.wrote {
+		l.wrote = true
+		if _, err := io.WriteString(l.w, l.heading); err != nil {
+			return 0, err
+		}
+	}
+	l.midLine = p[len(p)-1] != '\n'
 	return l.w.Write(p)
 }
 

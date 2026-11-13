@@ -93,7 +93,7 @@ func TestDangToolResultBounds(t *testing.T) {
 		report.WriteString("\"\"\"\nok · 1ms · 1 engine call · workspace scope\n")
 		got := m.dangToolResult(ctx, DangReport{Text: report.String()})
 		require.LessOrEqual(t, len(got), llmToolLogsMaxBytes+128)
-		require.Regexp(t, `\n\.\.\. \d+ lines omitted \(use ReadLogs\(span: `+spanID+`\) to read more\) \.\.\.\n`, got)
+		require.Regexp(t, `\n\.\.\. \d+ lines omitted \(use ReadLogs\(span: `+spanID+`, scope: "own"\) to read more\) \.\.\.\n`, got)
 		// Both ends survive: the value's head, and the footer.
 		require.True(t, strings.HasPrefix(got, "String! = \"\"\"\nline 0000 of a long file\n"), got)
 		require.True(t, strings.HasSuffix(got, "line 1999 of a long file\n\"\"\"\nok · 1ms · 1 engine call · workspace scope"), got)
