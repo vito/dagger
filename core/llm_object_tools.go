@@ -1662,6 +1662,10 @@ func toolCallReportOpts() traceReportOpts {
 		// surfaced sections (CHECKS, SERVICES, CONVERSATION, ...) are rolled
 		// up relative to the tool call regardless; see traceReportOpts.Scoped.
 		Scoped: true,
+		// A tool that runs a nested LLM loop (summarize this page, delegate
+		// to a sub-agent) is called to keep that conversation out of the
+		// caller's context. Render a pointer to it, not the transcript.
+		HideConversation: true,
 		// Nested work is abridged to a tail, exactly as in the flat path; the
 		// OUTPUT section carries the tool's own lines unabridged.
 		NestedLogLines: llmToolLogsMaxLines,

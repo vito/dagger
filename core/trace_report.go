@@ -91,7 +91,9 @@ type traceReportOpts struct {
 	//
 	// Everything the surfacing sections themselves show (CHECKS, CONVERSATION,
 	// SERVICES, GENERATORS) is now rolled up relative to the zoomed span, so
-	// none of them need this flag any more.
+	// none of them need this flag any more. In particular it does NOT keep a
+	// conversation that ran beneath root out of the report; HideConversation
+	// does.
 	Scoped bool
 
 	// HideConversation replaces the surfaced transcript with a pointer to
@@ -375,11 +377,12 @@ func renderTraceReportSession(session *idtui.ReportSession, root string, opt tra
 		// (tests/checks/...) exists.
 		Verbosity: dagui.ShowCompletedVerbosity,
 		// Whether to leave completed steps expanded.
-		ExpandCompleted: true,
-		NestedLogLimit:  opt.NestedLogLines,
-		ScopedSubtree:   opt.Scoped,
-		Root:            primary,
-		HideSpanTree:    opt.HideSpanTree,
+		ExpandCompleted:  true,
+		NestedLogLimit:   opt.NestedLogLines,
+		ScopedSubtree:    opt.Scoped,
+		Root:             primary,
+		HideSpanTree:     opt.HideSpanTree,
+		HideConversation: opt.HideConversation,
 		// Every report rendered here is assembled for an LLM: a tool call's own
 		// result, or the ReadTrace builtin. Inside the engine there is no agent
 		// env var to sniff (it's a daemon), so say so explicitly, per render.
