@@ -344,7 +344,9 @@ func checkDang(ctx context.Context, sc *dangScope, source, search string) (core.
 	}
 	footer = append(footer, "nothing ran")
 	r.linef("%s", strings.Join(footer, " · "))
-	return core.DangReport{Text: r.String()}, nil
+	// A snippet that doesn't parse or check is rejected; the diagnostics of
+	// a module or file checked without one are only reported.
+	return core.DangReport{Text: r.String(), Rejected: source != "" && r.errors > 0}, nil
 }
 
 // noDangFilesMessage says why a module scope has no .dang files to

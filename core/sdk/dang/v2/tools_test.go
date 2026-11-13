@@ -409,6 +409,7 @@ func TestDangEval(t *testing.T) {
 		// A file's contents read as its lines, between triple quotes.
 		require.Contains(t, rep.Text, "output:\nreading\nString! = \"\"\"\n"+file.String()+"\"\"\"\nmembers: ")
 		require.Contains(t, logs, "reading\nString! = \"\"\"\n"+file.String()+"\"\"\"\n")
+		require.False(t, rep.Rejected)
 
 		// A long one-line string isn't cut in the middle, nor a long list.
 		line := strings.Repeat("ab", 1000)
@@ -446,6 +447,44 @@ func TestLineEndWriter(t *testing.T) {
 	_, _ = w.Write([]byte("line\n"))
 	w.WriteRest("Int! = 1\n")
 	require.Equal(t, "line\nInt! = 1\n", logs.String())
+}
+
+// A snippet that fails to parse or type-check is rejected: the engine points
+// the model at the dang-language skill. Nothing else is.
+func TestDangRejected(t *testing.T) {
+	t.Parallel()
+	sc := workspaceTestScope(t)
+	for _, tc := range []struct {
+		name, source string
+		rejected     bool
+	}{
+		{"a type error", "nope", true},
+		{"a parse error", "let x = ", true},
+		{"a runtime error", `raise "boom"`, false},
+		{"success", "1 + 1", false},
+	} {
+		t.Run("DangEval: "+tc.name, func(t *testing.T) {
+			rep, _, err := evalReport(t, sc, tc.source, nil)
+			require.NoError(t, err)
+			require.Equal(t, tc.rejected, rep.Rejected, rep.Text)
+		})
+		t.Run("DangCheck: "+tc.name, func(t *testing.T) {
+			if tc.name == "a runtime error" {
+				t.Skip("DangCheck runs nothing")
+			}
+			rep, err := checkDang(context.Background(), sc, tc.source, "")
+			require.NoError(t, err)
+			require.Equal(t, tc.rejected, rep.Rejected, rep.Text)
+		})
+	}
+
+	t.Run("DangCheck: a module's own errors", func(t *testing.T) {
+		sc := moduleTestScope(t, map[string]string{"main.dang": "pub broken: String! { nope }\n"})
+		rep, err := checkDang(context.Background(), sc, "", "")
+		require.NoError(t, err)
+		require.Contains(t, rep.Text, "error")
+		require.False(t, rep.Rejected, "only a snippet is rejected")
+	})
 }
 
 func TestDangBoundValues(t *testing.T) {

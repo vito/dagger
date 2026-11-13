@@ -81,10 +81,10 @@ func evalDang(ctx context.Context, sc *dangScope, source string, client graphql.
 	// printedEnd is where the report's printed output ends: the rest is
 	// logged when the report is done.
 	printedEnd := 0
-	done := func() core.DangReport {
+	done := func(rejected bool) core.DangReport {
 		report := r.String()
 		logs.WriteRest(calls.secrets.scrub(report[printedEnd:]))
-		return core.DangReport{Text: calls.secrets.scrub(report)}
+		return core.DangReport{Text: calls.secrets.scrub(report), Rejected: rejected}
 	}
 
 	// Check first: a type error runs nothing.
@@ -100,7 +100,7 @@ func evalDang(ctx context.Context, sc *dangScope, source string, client graphql.
 	if diags := a.Diagnostics(); hasErrors(diags) {
 		r.diagnostics(sc, diags)
 		r.linef("%s · %s · nothing ran", r.counts(), sc.label)
-		return done(), nil
+		return done(true), nil
 	}
 
 	ctx = dang.ContextWithImportConfigs(ctx, dang.ImportConfig{
@@ -129,7 +129,8 @@ func evalDang(ctx context.Context, sc *dangScope, source string, client graphql.
 		}
 		printedEnd = r.Len()
 	}
-	fail := func(err error) core.DangReport {
+	// fail reports err; rejected says it is the snippet failing to check.
+	fail := func(err error, rejected bool) core.DangReport {
 		writeOutput()
 		diags := errorDiagnostics(err)
 		if len(diags) == 0 {
@@ -138,29 +139,29 @@ func evalDang(ctx context.Context, sc *dangScope, source string, client graphql.
 		sc.attributeBindingFailures(diags)
 		r.diagnostics(sc, diags)
 		r.linef("%s", footer("failed"))
-		return done()
+		return done(rejected)
 	}
 
 	mod, err := dang.LoadDir(ctx, sc.dir, dang.LoadOptions{FS: sc.source(nil), Eager: sc.module})
 	if err != nil {
-		return fail(err), nil
+		return fail(err, false), nil
 	}
 	defer mod.Close()
 	session, err := mod.NewSession(ctx)
 	if err != nil {
-		return fail(err), nil
+		return fail(err, false), nil
 	}
 	ran, err := session.Check(ctx, dangEvalName, source)
 	if err != nil {
-		return fail(err), nil
+		return fail(err, true), nil
 	}
 	val, err := ran.Eval(ctx)
 	if err != nil {
-		return fail(err), nil
+		return fail(err, false), nil
 	}
 	writes, err := finalWrites(ctx, session, mod.Version, sc.bound, source)
 	if err != nil {
-		return fail(err), nil
+		return fail(err, false), nil
 	}
 
 	writeOutput()
@@ -179,7 +180,7 @@ func evalDang(ctx context.Context, sc *dangScope, source string, client graphql.
 		// Only where it matters: a result that looks like a write.
 		r.linef("0 writes")
 	}
-	return done(), nil
+	return done(false), nil
 }
 
 // finalWrites returns the bound values source reassigns, with their values

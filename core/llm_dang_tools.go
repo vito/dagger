@@ -44,6 +44,8 @@ type DangTools interface {
 type DangReport struct {
 	// Text is the whole report, as logged to the tool call's span.
 	Text string
+	// Rejected says the call's source failed to parse or type-check.
+	Rejected bool
 }
 
 // DangToolEnv is what a Dang tool call sees of its conversation.
@@ -241,11 +243,18 @@ func (m *MCP) loadDangTools(srv *dagql.Server, allTools *LLMToolSet) {
 	})
 }
 
+// dangSkillNudge follows a Dang tool's report when its source failed to
+// parse or type-check and the conversation hasn't read the dang-language
+// skill. It stays generic: guidance on a particular mistake belongs in
+// Dang's own diagnostics.
+const dangSkillNudge = "See the " + dangSkillName + " skill (ReadSkill) for Dang's syntax and semantics."
+
 // dangToolResult is what the model sees of a Dang tool's report. The report
 // is bounded as a module tool's printed output is (see flatLogs): long lines
 // are clamped, and past the byte budget the middle gives way to a pointer to
 // ReadLogs on the tool call's span, which the report was logged to (see
-// DangTools).
+// DangTools). A report whose source failed to parse or type-check points at
+// the dang-language skill, until the conversation reads it.
 func (m *MCP) dangToolResult(ctx context.Context, rep DangReport) string {
 	text := rep.Text
 	if spanID := trace.SpanContextFromContext(ctx).SpanID(); spanID.IsValid() {
@@ -255,6 +264,9 @@ func (m *MCP) dangToolResult(ctx context.Context, rep DangReport) string {
 			captured[i] = capturedLine{text: line, direct: true}
 		}
 		text = flatLogs(spanID.String(), captured)
+	}
+	if rep.Rejected && !m.hasReadSkill(dangSkillName) {
+		text = strings.TrimRight(text, "\n") + "\n" + dangSkillNudge
 	}
 	return text
 }

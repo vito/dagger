@@ -106,6 +106,10 @@ type MCP struct {
 	// the model through ListSkills/ReadSkill alongside the engine-embedded and
 	// workspace-discovered skills.
 	skillDirs []ownedSkillDirectory
+	// readSkills are the skills ReadSkill read on this MCP, by name (see
+	// hasReadSkill). A step's ReadSkill calls are on the conversation's
+	// record only once the step ends; this sees them sooner.
+	readSkills map[string]bool
 	// selfLLM is the conversation dispatching the current step's tool calls —
 	// inst + withResponse, i.e. up to and including the in-flight tool call.
 	// The object-tool adapter passes it explicitly to hidden LLM arguments.
@@ -187,6 +191,7 @@ func (m *MCP) Clone() *MCP {
 	cp := *m
 	cp.boundTools = slices.Clone(cp.boundTools)
 	cp.skillDirs = slices.Clone(cp.skillDirs)
+	cp.readSkills = maps.Clone(cp.readSkills)
 	cp.mcpServers = maps.Clone(cp.mcpServers)
 	cp.returned = false
 	// Per-step scratch state: the dispatching conversation and any continuation

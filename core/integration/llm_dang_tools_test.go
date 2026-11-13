@@ -158,12 +158,23 @@ func (LLMSuite) TestDangTools(ctx context.Context, t *testctx.T) {
 		require.False(t, strings.Contains(out, "/tmp/"), "paths are workspace-relative:\n%s", out)
 	})
 
-	t.Run("long results", func(ctx context.Context, t *testctx.T) {
+	t.Run("long results and the skill nudge", func(ctx context.Context, t *testctx.T) {
+		const nudge = "See the dang-language skill (ReadSkill) for Dang's syntax and semantics."
 		out := runDangToolCalls(ctx, t, c, base, daggerShellNoMod, bind, []dangToolCall{
+			// Source that doesn't parse or check points at the skill.
+			{"DangEval", map[string]string{"source": "nope"}},
+			{"DangCheck", map[string]string{"source": "[1,"}},
+			// A failure at runtime doesn't.
+			{"DangEval", map[string]string{"source": `raise "boom"`}},
 			// A long result is bounded as a module tool's output is, its
 			// middle in the tool call's logs.
 			{"DangEval", map[string]string{"source": `container.from("alpine").withExec(["seq", "1", "20000"]).stdout`}},
+			// Once the skill is read, the nudge stops.
+			{"ReadSkill", map[string]string{"name": "dang-language"}},
+			{"DangEval", map[string]string{"source": "nope"}},
 		})
+		require.Equal(t, 2, strings.Count(out, nudge), out)
+		require.Contains(t, out, "boom")
 		require.Contains(t, out, "String! = \"\"\"\n1\n2\n3\n")
 		require.Contains(t, out, "\n20000\n\"\"\"\n")
 		require.Regexp(t, `\.\.\. \d+ lines omitted \(use ReadLogs\(span: [0-9a-f]+\) to read more\) \.\.\.`, out)

@@ -110,3 +110,70 @@ func TestDangToolResultBounds(t *testing.T) {
 		require.Equal(t, report, m.dangToolResult(t.Context(), DangReport{Text: report}))
 	})
 }
+
+// A Dang tool's source that fails to parse or type-check points at the
+// dang-language skill, until the conversation reads it.
+func TestDangToolResultSkillNudge(t *testing.T) {
+	t.Parallel()
+	ctx := dangToolCallCtx(t, "00000000000000d2")
+	typeError := DangReport{Text: "<check>:1:1: error: \"nope\" not found\n1 error · workspace scope · nothing ran\n", Rejected: true}
+	parseError := DangReport{Text: "<check>:1:5: error: unexpected end of input\n1 error · workspace scope · nothing ran\n", Rejected: true}
+	runtimeError := DangReport{Text: "error: boom\nfailed · 1ms · 0 engine calls · workspace scope\n"}
+	success := DangReport{Text: "Int! = 2\nok · 1ms · 0 engine calls · workspace scope\n"}
+
+	m := newMCP()
+	for _, rep := range []DangReport{typeError, parseError} {
+		got := m.dangToolResult(ctx, rep)
+		require.True(t, strings.HasSuffix(got, "nothing ran\n"+dangSkillNudge), got)
+	}
+	for _, rep := range []DangReport{runtimeError, success} {
+		require.NotContains(t, m.dangToolResult(ctx, rep), "skill")
+	}
+
+	// Reading the skill, with ReadSkill as the model calls it, stops it.
+	tools := NewLLMToolSet()
+	m.loadSkillTools(&dagql.Server{}, tools)
+	readSkillTool, ok := tools.Map["ReadSkill"]
+	require.True(t, ok)
+	_, err := readSkillTool.Call(ctx, map[string]any{"name": "nope"})
+	require.Error(t, err)
+	require.Contains(t, m.dangToolResult(ctx, typeError), dangSkillNudge, "a failed read reads nothing")
+	_, err = readSkillTool.Call(ctx, map[string]any{"name": dangSkillName})
+	require.NoError(t, err)
+	require.NotContains(t, m.dangToolResult(ctx, typeError), "skill")
+	require.NotContains(t, m.dangToolResult(ctx, parseError), "skill")
+	require.NotContains(t, m.Clone().dangToolResult(ctx, typeError), "skill", "a clone carries what was read")
+}
+
+// A conversation has read a skill when its record holds a ReadSkill call
+// naming it that succeeded.
+func TestMessagesReadSkill(t *testing.T) {
+	t.Parallel()
+	call := func(id, tool, args string) *LLMMessage {
+		return &LLMMessage{Role: LLMMessageRoleAssistant, Content: []*LLMContentBlock{
+			{Kind: LLMContentToolCall, CallID: id, ToolName: tool, Arguments: JSON(args)},
+		}}
+	}
+	result := func(id string, errored bool) *LLMMessage {
+		return &LLMMessage{Role: LLMMessageRoleUser, Content: []*LLMContentBlock{
+			{Kind: LLMContentToolResult, CallID: id, Text: "…", Errored: errored},
+		}}
+	}
+	for _, tc := range []struct {
+		name     string
+		messages []*LLMMessage
+		read     bool
+	}{
+		{"none", nil, false},
+		{"read", []*LLMMessage{call("1", "ReadSkill", `{"name":"dang-language"}`), result("1", false)}, true},
+		{"a reference file", []*LLMMessage{call("1", "ReadSkill", `{"name":"dang-language","file":"reference/objects.md"}`), result("1", false)}, true},
+		{"another skill", []*LLMMessage{call("1", "ReadSkill", `{"name":"other"}`), result("1", false)}, false},
+		{"failed", []*LLMMessage{call("1", "ReadSkill", `{"name":"dang-language"}`), result("1", true)}, false},
+		{"not answered yet", []*LLMMessage{call("1", "ReadSkill", `{"name":"dang-language"}`)}, false},
+		{"another tool", []*LLMMessage{call("1", "DangEval", `{"name":"dang-language"}`), result("1", false)}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.read, messagesReadSkill(tc.messages, dangSkillName))
+		})
+	}
+}
