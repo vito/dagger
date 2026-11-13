@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -39,6 +40,10 @@ type DangTools interface {
 	// result, or the diagnostics or failure that stopped it. An error is
 	// for what keeps the tool itself from running (e.g. an unknown `at`).
 	Eval(ctx context.Context, env DangToolEnv, args DangEvalArgs) (DangReport, error)
+	// Reassigned names what source reassigns (`name = …`), by its syntax
+	// alone, without a scope: enough to schedule a DangEval call that may
+	// write `chat` as the continuation it may be (see LLMTool.Continues).
+	Reassigned(source string) []string
 }
 
 // DangReport is what a Dang tool call reports.
@@ -58,19 +63,46 @@ type DangToolEnv struct {
 	// default scope binds it as `ws`, and `at` names modules and files in it.
 	Workspace dagql.ObjectResult[*Workspace]
 
+	// Chat is the conversation dispatching the call, if one does (not under
+	// dagger mcp): every scope binds it as `chat`, and a snippet reassigning
+	// it continues the conversation from the value assigned.
+	Chat dagql.ObjectResult[*LLM]
+
+	// Agent is the agent owning the conversation, if any: every scope binds
+	// it as `me`, read-only, and null without one.
+	Agent dagql.ObjectResult[*Agent]
+
 	// Scope returns the default scope, as of the call.
 	Scope func(context.Context) (*DangScope, error)
 
 	// Write applies what a successful DangEval snippet wrote, by reassigning
-	// `ws` or a bound tool object, and summarizes it. It is called while
-	// the snippet's client still holds the written values.
+	// `ws`, `chat` or a bound tool object, and summarizes it. It is called
+	// while the snippet's client still holds the written values.
 	Write func(context.Context, []DangWrite) (string, error)
 }
+
+// The names every scope binds besides the bound tool objects, which a tool
+// object's name can't take.
+const (
+	DangWorkspaceBinding = "ws"
+	DangChatBinding      = "chat"
+	DangAgentBinding     = "me"
+)
+
+// dangReservedNames are the names the default scope binds before any tool
+// object.
+func dangReservedNames() map[string]bool {
+	return map[string]bool{DangWorkspaceBinding: true, DangChatBinding: true, DangAgentBinding: true}
+}
+
+// DangChatAloneMessage says why a snippet can't reassign `chat` together with
+// another binding: the LLM it assigns is the whole state of the conversation.
+const DangChatAloneMessage = "an LLM carries its own workspace and tool objects: reassign `chat` alone; its workspace and tools come with it"
 
 // DangWrite is a value of the default scope a DangEval snippet reassigned:
 // its final value, to apply.
 type DangWrite struct {
-	// Name is the binding: "ws", or a bound tool object's name.
+	// Name is the binding: "ws", "chat", or a bound tool object's name.
 	Name string
 	// TypeName is its GraphQL type.
 	TypeName string
@@ -157,21 +189,126 @@ func registeredDangTools() DangTools {
 }
 
 // Descriptions of the Dang builtins. Every conversation pays for them, so
-// they stay terse; they are the only guidance pointing at the tools.
+// they stay terse; they are the only guidance pointing at the tools. What
+// every scope binds is the conversation's own (see dangBindingsDoc), so the
+// descriptions name it as it is.
 const (
-	dangCheckDescription = "Type-check Dang without running anything. Scope: the core API and installed modules (as `Dagger`), or with `at` a module of the workspace, one of its .dang files, or a path:line:col in one (seeing the locals there). Either way `ws: Workspace!` and your tool objects (by type name: `editor`) are bound." + "\n" +
-		"Without `source`: the module's or file's errors, warnings and deprecations, as path:line:col." + "\n" +
+	dangCheckDescriptionHead = "Type-check Dang without running anything. Scope: the core API and installed modules (as `Dagger`), or with `at` a module of the workspace, one of its .dang files, or a path:line:col in one (seeing the locals there)."
+	dangCheckDescriptionTail = "Without `source`: the module's or file's errors, warnings and deprecations, as path:line:col." + "\n" +
 		"With `source`: its errors, else what it is. A member reference (`xs.reduce`, `JSON.encode`, `Container.withExec`) gives the member's signature, docs and example; a type name, the type and its members; any other expression, its type, and an object's members. Probe before writing a helper (`List` lists every list method), and check after each edit, before running a @check." + "\n" +
 		"`search` ranks builtins, API fields and the module's declarations by name and docs."
 	dangCheckSourceDescription = "Dang to check as one more file of the scope; its last expression is described."
 	dangCheckAtDescription     = "Scope: a module installed in the workspace (by name), a Dang module's directory, a .dang file of one, or path:line:col in one. Default: the workspace scope."
 	dangCheckSearchDescription = "Words to find in names and docs, e.g. \"sort\" or \"escape html\"."
 
-	dangEvalDescription = "Run Dang: printed output, then the result as `TYPE = value` and, for an object, its members. Scope as for DangCheck, without positions: `at` a module runs the snippet as one more file of it, after its top level. A type error runs nothing." + "\n" +
-		"Engine calls go through the scope's API (with `at`, the module's dependencies and own API), with no access to the host, and are counted. Assignment is the write: if the snippet succeeds, a reassigned `ws` (`ws = ws.withChanges(editor.edit(source: ws, …))`) is applied to the workspace and a reassigned tool object (`editor = editor.todoWrite(…)`) becomes its state; nothing else is. Objects stay lazy (shown as their query) until you select a scalar such as `.stdout` or `.sync`. Each call is standalone; wrap long runs in Timeout."
+	dangEvalDescriptionHead = "Run Dang: printed output, then the result as `TYPE = value` and, for an object, its members. Scope as for DangCheck, without positions: `at` a module runs the snippet as one more file of it, after its top level. A type error runs nothing." + "\n" +
+		"Engine calls go through the scope's API (with `at`, the module's dependencies and own API), with no access to the host, and are counted."
+	dangEvalDescriptionTail   = "Objects stay lazy (shown as their query) until you select a scalar such as `.stdout` or `.sync`. Each call is standalone; wrap long runs in Timeout."
 	dangEvalSourceDescription = "Dang statements to run; the last expression is the result."
 	dangEvalAtDescription     = "A module installed in the workspace (by name), a Dang module's directory, or a .dang file of one. Default: the workspace scope."
 )
+
+// dangBindingsDoc is what every scope of a conversation's Dang tool calls
+// binds, as the tool descriptions name it: `ws`, `chat` and `me` when the
+// conversation has them, and its bound tool objects by name. A description
+// changes when they do (a tool object bound or rebound to another type).
+type dangBindingsDoc struct {
+	ws, chat, me bool
+	// tools are the bound tool objects' names, in binding order.
+	tools []string
+}
+
+// dangBindingsDoc describes m's bindings as a Dang tool call would bind
+// them (see dangBindings).
+func (m *MCP) dangBindingsDoc() dangBindingsDoc {
+	m.mu.Lock()
+	bound := slices.Clone(m.boundTools)
+	m.mu.Unlock()
+	doc := dangBindingsDoc{
+		ws: m.workspace.Self() != nil,
+		// Only a conversation's step dispatches a call with a conversation
+		// to bind; a standalone server (dagger mcp) has none.
+		chat: !m.standalone,
+		me:   m.ownerAgent != "",
+	}
+	seen := dangReservedNames()
+	for _, b := range bound {
+		name, ok := dangToolObjectName(b, seen)
+		if ok {
+			seen[name] = true
+			doc.tools = append(doc.tools, name)
+		}
+	}
+	return doc
+}
+
+// dangToolObjectName is the name a bound tool object is bound by, its type
+// name in lowerCamel case, unless it isn't a module object or another
+// binding (in seen) has the name.
+func dangToolObjectName(b boundTool, seen map[string]bool) (string, bool) {
+	objType := b.objType
+	if b.object != nil {
+		objType = b.object.ObjectType()
+	}
+	if _, ok := ModuleObjectTypeModule(objType); !ok {
+		return "", false
+	}
+	name := LatestNamer.FieldName(b.typeName())
+	return name, !seen[name]
+}
+
+// list names the bindings, each with what it is.
+func (d dangBindingsDoc) list() string {
+	var names []string
+	if d.ws {
+		names = append(names, "`ws` (your Workspace)")
+	}
+	if d.chat {
+		names = append(names, "`chat` (this conversation, an LLM)")
+	}
+	if d.me {
+		names = append(names, "`me` (your Agent, read-only)")
+	}
+	if len(d.tools) > 0 {
+		tools := make([]string, len(d.tools))
+		for i, name := range d.tools {
+			tools[i] = "`" + name + "`"
+		}
+		names = append(names, "your tool objects "+strings.Join(tools, ", "))
+	}
+	return strings.Join(names, "; ")
+}
+
+// checkDescription is DangCheck's description.
+func (d dangBindingsDoc) checkDescription() string {
+	head := dangCheckDescriptionHead
+	if list := d.list(); list != "" {
+		head += " Every scope binds " + list + "."
+	}
+	return head + "\n" + dangCheckDescriptionTail
+}
+
+// evalDescription is DangEval's description: what writing each binding does.
+func (d dangBindingsDoc) evalDescription() string {
+	var writes []string
+	if d.ws {
+		writes = append(writes, "a reassigned `ws` (`ws = ws.withChanges(…)`) becomes your workspace")
+	}
+	if len(d.tools) > 0 {
+		writes = append(writes, fmt.Sprintf("a reassigned tool object (`%[1]s = %[1]s.someMethod(…)`) its state", d.tools[0]))
+	}
+	if d.chat {
+		writes = append(writes, "a reassigned `chat` (an LLM, such as one a tool method returns given `llm: chat`) the conversation; assign it alone, as its workspace and tools come with it")
+	}
+	text := dangEvalDescriptionHead
+	if len(writes) > 0 {
+		text += " Assignment is the write: if the snippet succeeds, " + strings.Join(writes, "; ") + "; nothing else is."
+		if d.ws || d.chat {
+			text += " A module installed through `ws` or `chat` is callable in the next call."
+		}
+	}
+	return text + " " + dangEvalDescriptionTail
+}
 
 // loadDangTools registers DangCheck and DangEval, whenever the engine has a
 // Dang implementation (always, outside of tests).
@@ -180,20 +317,23 @@ func (m *MCP) loadDangTools(srv *dagql.Server, allTools *LLMToolSet) {
 	if impl == nil {
 		return
 	}
-	env := func() DangToolEnv {
+	env := func(ctx context.Context) DangToolEnv {
 		start := m.workspace
 		return DangToolEnv{
 			Server:    srv,
 			Workspace: start,
+			Chat:      m.currentLLM(),
+			Agent:     m.dangAgent(ctx),
 			Scope:     m.dangScope,
 			Write: func(ctx context.Context, writes []DangWrite) (string, error) {
 				return m.applyDangWrites(ctx, srv, start, writes)
 			},
 		}
 	}
+	doc := m.dangBindingsDoc()
 	allTools.Add(LLMTool{
 		Name:        dangCheckToolName,
-		Description: dangCheckDescription,
+		Description: doc.checkDescription(),
 		ReadOnly:    true,
 		Schema: map[string]any{
 			"type": "object",
@@ -210,7 +350,7 @@ func (m *MCP) loadDangTools(srv *dagql.Server, allTools *LLMToolSet) {
 			At     string `default:""`
 			Search string `default:""`
 		}) (any, error) {
-			rep, err := impl.Check(ctx, env(), DangCheckArgs(args))
+			rep, err := impl.Check(ctx, env(ctx), DangCheckArgs(args))
 			if err != nil {
 				return nil, err
 			}
@@ -219,7 +359,7 @@ func (m *MCP) loadDangTools(srv *dagql.Server, allTools *LLMToolSet) {
 	})
 	allTools.Add(LLMTool{
 		Name:        dangEvalToolName,
-		Description: dangEvalDescription,
+		Description: doc.evalDescription(),
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -229,17 +369,44 @@ func (m *MCP) loadDangTools(srv *dagql.Server, allTools *LLMToolSet) {
 			"required":             []string{"source"},
 			"additionalProperties": false,
 		},
+		// A snippet reassigning `chat` replaces the conversation, as a tool
+		// returning an LLM does: it runs as a continuation, handed the
+		// conversation with the changes of the calls before it.
+		Continues: func(arguments []byte) bool {
+			var args struct {
+				Source string `json:"source"`
+			}
+			if json.Unmarshal(arguments, &args) != nil {
+				return false
+			}
+			return slices.Contains(impl.Reassigned(args.Source), DangChatBinding)
+		},
 		Call: ToolFunc(srv, func(ctx context.Context, args struct {
 			Source string
 			At     string `default:""`
 		}) (any, error) {
-			rep, err := impl.Eval(ctx, env(), DangEvalArgs(args))
+			rep, err := impl.Eval(ctx, env(ctx), DangEvalArgs(args))
 			if err != nil {
 				return nil, err
 			}
 			return m.dangToolResult(ctx, rep), nil
 		}),
 	})
+}
+
+// dangAgent is the agent owning the conversation, as `me` binds it: a
+// seed-free reference to its runtime, or none when the conversation has no
+// owner or its owner doesn't run in this session.
+func (m *MCP) dangAgent(ctx context.Context) dagql.ObjectResult[*Agent] {
+	if m.ownerAgent == "" {
+		return dagql.ObjectResult[*Agent]{}
+	}
+	agent, err := AgentReference(ctx, m.ownerAgent)
+	if err != nil {
+		slog.Debug("no agent to bind as me", "handle", m.ownerAgent, "error", err)
+		return dagql.ObjectResult[*Agent]{}
+	}
+	return agent
 }
 
 // dangSkillNudge follows a Dang tool's report when its source failed to
@@ -382,7 +549,7 @@ func (m *MCP) dangBindings(scope *DangScope) (map[string]Mod, error) {
 	bound := slices.Clone(m.boundTools)
 	m.mu.Unlock()
 
-	seen := map[string]bool{"ws": true}
+	seen := dangReservedNames()
 	boundByName := map[string]Mod{}
 	for _, b := range bound {
 		typeName := b.typeName()
@@ -395,8 +562,8 @@ func (m *MCP) dangBindings(scope *DangScope) (map[string]Mod, error) {
 			scope.Skipped = append(scope.Skipped, typeName+": not a module object")
 			continue
 		}
-		name := LatestNamer.FieldName(typeName)
-		if seen[name] {
+		name, ok := dangToolObjectName(b, seen)
+		if !ok {
 			scope.Skipped = append(scope.Skipped, fmt.Sprintf("%s: %q is taken", typeName, name))
 			continue
 		}
@@ -489,17 +656,23 @@ func (scope *DangScope) serve(ctx context.Context, base, served *SchemaBuilder) 
 // applyDangWrites applies what a DangEval snippet wrote: assignment is the
 // write. The final `ws` becomes the conversation's workspace, as a tool
 // returning a Workspace makes it (commits and resets included); a reassigned
-// tool object is rebound as a tool call returning its own type rebinds it.
-// start is the workspace the snippet began with. It summarizes what was
-// written.
+// tool object is rebound as a tool call returning its own type rebinds it;
+// the final `chat` becomes the conversation the step resumes from, as a tool
+// returning an LLM makes it (see adoptLLM). start is the workspace the
+// snippet began with. It summarizes what was written.
 //
 // Writes are all or nothing: every final value is loaded and validated, and
 // each tool object's new state computed, before anything changes; then they
 // are committed together (see commitDangWrites), and a commit that fails
-// undoes the ones before it.
+// undoes the ones before it. `chat` is written alone, since the LLM carries
+// its own workspace and tool objects; `me` is never written. The Dang side
+// refuses both before running a snippet; this refuses them again.
 func (m *MCP) applyDangWrites(ctx context.Context, srv *dagql.Server, start dagql.ObjectResult[*Workspace], writes []DangWrite) (string, error) {
 	if len(writes) == 0 {
 		return "0 writes", nil
+	}
+	if err := checkDangWrites(writes); err != nil {
+		return "", err
 	}
 	var commits []dangCommit
 	for _, w := range writes {
@@ -511,7 +684,8 @@ func (m *MCP) applyDangWrites(ctx context.Context, srv *dagql.Server, start dagq
 		if err != nil {
 			return "", fmt.Errorf("load the final %s: %w", w.Name, err)
 		}
-		if w.Name == "ws" {
+		switch w.Name {
+		case DangWorkspaceBinding:
 			ws, ok := dagql.UnwrapAs[dagql.ObjectResult[*Workspace]](final)
 			if !ok {
 				return "", fmt.Errorf("write ws: got a %s, not a Workspace", final.Type().Name())
@@ -519,8 +693,17 @@ func (m *MCP) applyDangWrites(ctx context.Context, srv *dagql.Server, start dagq
 			if start.Self() == nil {
 				return "", fmt.Errorf("write ws: no workspace bound")
 			}
-			commits = append(commits, dangCommit{name: "ws", apply: func() (string, error) {
+			commits = append(commits, dangCommit{name: w.Name, apply: func() (string, error) {
 				return m.writeDangWorkspace(ctx, srv, ws)
+			}})
+			continue
+		case DangChatBinding:
+			next, ok := dagql.UnwrapAs[dagql.ObjectResult[*LLM]](final)
+			if !ok {
+				return "", fmt.Errorf("write chat: got a %s, not an LLM", final.Type().Name())
+			}
+			commits = append(commits, dangCommit{name: w.Name, apply: func() (string, error) {
+				return m.writeDangChat(ctx, srv, next)
 			}})
 			continue
 		}
@@ -612,4 +795,40 @@ func (m *MCP) writeDangWorkspace(ctx context.Context, srv *dagql.Server, final d
 		line = fmt.Sprintf("ws written (%d %s)", n, files)
 	}
 	return line + "\n" + summary, nil
+}
+
+// checkDangWrites refuses writes no snippet may make: `me`, which is
+// read-only, and `chat` beside any other binding (see DangChatAloneMessage).
+func checkDangWrites(writes []DangWrite) error {
+	var others []string
+	chat := false
+	for _, w := range writes {
+		switch w.Name {
+		case DangAgentBinding:
+			return fmt.Errorf("write me: `me` is read-only (nothing was written)")
+		case DangChatBinding:
+			chat = true
+		default:
+			others = append(others, "`"+w.Name+"`")
+		}
+	}
+	if chat && len(others) > 0 {
+		return fmt.Errorf("write chat with %s: %s (nothing was written)", strings.Join(others, ", "), DangChatAloneMessage)
+	}
+	return nil
+}
+
+// writeDangChat makes next, an LLM a snippet assigned to `chat`, the
+// conversation the step resumes from, as a tool returning it does
+// (adoptLLM): its workspace, tools and history all carry over, from the next
+// call on, and the summary says what changed.
+func (m *MCP) writeDangChat(ctx context.Context, srv *dagql.Server, next dagql.ObjectResult[*LLM]) (string, error) {
+	summary, err := m.adoptLLM(ctx, srv, next)
+	if err != nil {
+		return "", err
+	}
+	if summary = strings.TrimSpace(summary); summary == "" {
+		return "chat written", nil
+	}
+	return "chat written\n" + summary, nil
 }

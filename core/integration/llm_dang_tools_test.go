@@ -454,4 +454,139 @@ func (LLMSuite) TestDangTools(ctx context.Context, t *testctx.T) {
 		require.Contains(t, out, `message: "commit from dang`)
 		require.Contains(t, out, `String! = "c"`)
 	})
+
+	t.Run("the descriptions name the bindings", func(ctx context.Context, t *testctx.T) {
+		tools, err := base.With(daggerShell("llm | " + bind + " | with-tools $(notes) | tools")).Stdout(ctx)
+		require.NoError(t, err)
+		require.Contains(t, tools, "Every scope binds `ws` (your Workspace); `chat` (this conversation, an LLM); your tool objects `notes`.")
+		require.Contains(t, tools, "a reassigned tool object (`notes = notes.someMethod(…)`) its state")
+		require.Contains(t, tools, "A module installed through `ws` or `chat` is callable in the next call.")
+		// Only what this conversation binds: no agent, no other tool object.
+		require.NotContains(t, tools, "`me`")
+		require.NotContains(t, tools, "`editor`")
+	})
+
+	t.Run("chat and me", func(ctx context.Context, t *testctx.T) {
+		out := runDangToolCalls(ctx, t, c, base, daggerShell, bind+` | with-tools $(notes | with-greeting "yo, ")`, []dangToolCall{
+			// me is read-only, and null without an agent.
+			{"DangCheck", map[string]string{"source": "me = null"}},
+			{"DangEval", map[string]string{"source": "print(\"never\")\nme = null"}},
+			{"DangEval", map[string]string{"source": `me == null`}},
+			// chat is the conversation.
+			{"DangCheck", map[string]string{"source": "chat"}},
+			// chat is written alone: with ws or a tool object, nothing is.
+			{"DangEval", map[string]string{"source": "ws = ws.withNewFile(path: \"both.txt\", contents: \"x\")\nchat = chat"}},
+			{"DangEval", map[string]string{"source": `ws.directory("/").entries.contains("both.txt")`}},
+			{"DangEval", map[string]string{"source": "notes = notes.withGreeting(greeting: \"both, \")\nchat = chat"}},
+			{"DangEval", map[string]string{"source": `notes.greeting`}},
+		})
+		for _, want := range []string{
+			"<check>:1:1: error: cannot assign to `me`: it is the conversation's agent, bound read-only",
+			"<check>:2:1: error: cannot assign to `me`: it is the conversation's agent, bound read-only",
+			"Boolean! = true",
+			"chat: Dagger.LLM!",
+			"error: cannot assign to `chat` and `ws` in one snippet: an LLM carries its own workspace and tool objects: reassign `chat` alone; its workspace and tools come with it",
+			"error: cannot assign to `chat` and `notes` in one snippet: ",
+			`String! = "yo, "`,
+		} {
+			require.Contains(t, out, want)
+		}
+		require.Regexp(t, `contains\(\\"both.txt\\"\)"\}\)\s+\[Tool result\]: Boolean! = false`, out)
+		require.NotContains(t, out, "never\n")
+		require.NotContains(t, out, "chat written")
+	})
+
+	t.Run("chat reassigned by a tool's continuation", func(ctx context.Context, t *testctx.T) {
+		// The way an agent gives itself a module's tools mid-turn: a tool
+		// method transforms the conversation it is given, and assigning the
+		// result to chat continues from it, for the next call.
+		helper := base.Directory(".dagger/modules/helper")
+		svc, _ := gitSmartHTTPServiceDirAuth(ctx, t, c, "", makeGitDir(c, helper, "main"), "", nil)
+		repo := "http://" + startedServiceIP(ctx, t, c, svc) + "/repo.git@main"
+		withInstaller := base.
+			WithNewFile(".dagger/modules/installer/dagger-module.toml", "name = \"installer\"\nengineVersion = \"latest\"\n\n[runtime]\n  source = \"dang\"\n").
+			WithNewFile(".dagger/modules/installer/main.dang", `type Installer {
+  """
+  Installs a module in the conversation's workspace, and gives it a gadget.
+  """
+  pub install(llm: LLM!, ref: String!): LLM! {
+    llm.withWorkspace(llm.workspace.withModule(ref: ref)).withTools(installer.gadget(ref: ref))
+  }
+
+  """
+  A gadget for a module.
+  """
+  pub gadget(ref: String!): Gadget! {
+    Gadget(ref: ref)
+  }
+}
+
+type Gadget {
+  pub ref: String!
+
+  """
+  Says what was installed.
+  """
+  pub installed: String! {
+    "installed " + ref
+  }
+}
+`).
+			WithNewFile("dagger.toml", "[modules.notes]\nsource = \".dagger/modules/notes\"\n\n[modules.installer]\nsource = \".dagger/modules/installer\"\n").
+			WithExec([]string{"git", "add", "."}).
+			WithExec([]string{"git", "commit", "-m", "initial"})
+		out := runDangToolCalls(ctx, t, c, withInstaller, daggerShell, bind+` | with-tools $(installer)`, []dangToolCall{
+			{"DangCheck", map[string]string{"source": `helper.ping`}},
+			{"DangEval", map[string]string{"source": fmt.Sprintf(`chat = installer.install(llm: chat, ref: %q)`, repo)}},
+			// The gadget's tools are the conversation's.
+			{"installed", map[string]string{}},
+			// The module is in the scope, and the gadget bound.
+			{"DangEval", map[string]string{"source": `helper.ping`}},
+			{"DangEval", map[string]string{"source": `installerGadget.installed`}},
+		})
+		for _, want := range []string{
+			`<check>:1:1: error: "helper" not found`,
+			"chat written",
+			"[Tool result]: installed " + repo,
+			`String! = "pong"`,
+			`String! = "installed ` + repo + `"`,
+		} {
+			require.Contains(t, out, want)
+		}
+		require.NotContains(t, out, "is not available")
+	})
+
+	t.Run("me in an agent's conversation", func(ctx context.Context, t *testctx.T) {
+		// A synchronous loop over an agent's conversation: it is owned, so
+		// me is its agent.
+		const handle = "dang-tools-me"
+		owner := spawnAgent(ctx, t, c, spawnOpts{model: emptyReplayModel, name: "owner", handle: handle})
+		snapshot := core.Ref[*core.LLM](core.NewQuery(c), core.ID(owner.mustRun(ctx, t, "snapshot { id }").Get("snapshot.id").String()))
+		tools, err := snapshot.Tools(ctx)
+		require.NoError(t, err)
+		require.Contains(t, tools, "`me` (your Agent, read-only)")
+		const prompt = "who am I"
+		script := core.NewQuery(c).LLM().WithPrompt(prompt)
+		for i, call := range []dangToolCall{
+			{"DangCheck", map[string]string{"source": "me"}},
+			{"DangEval", map[string]string{"source": "me.handle"}},
+			{"DangEval", map[string]string{"source": "me = me"}},
+		} {
+			args, err := json.Marshal(call.args)
+			require.NoError(t, err)
+			id := fmt.Sprintf("me_%d", i)
+			script = script.
+				WithResponse([]core.LLMContentBlockInput{{Kind: core.LLMContentBlockKindToolCall, CallID: id, ToolName: call.tool, Arguments: core.JSON(args)}}).
+				WithToolResult(id, "", false)
+		}
+		model := cannedRecordingModel(ctx, t, c, script.WithResponse([]core.LLMContentBlockInput{
+			{Kind: core.LLMContentBlockKindText, Text: "done"},
+		}))
+		transcript, err := snapshot.WithModel(model).WithPrompt(prompt).Loop().Transcript(ctx)
+		require.NoError(t, err)
+		require.Contains(t, transcript, "me: Dagger.Agent!")
+		require.Contains(t, transcript, `String! = "`+handle+`"`)
+		require.Contains(t, transcript, "cannot assign to `me`")
+		require.Contains(t, transcript, "done")
+	})
 }

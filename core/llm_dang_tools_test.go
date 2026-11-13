@@ -133,6 +133,87 @@ func TestCommitDangWritesAllOrNothing(t *testing.T) {
 	require.True(t, m.stateChanged)
 }
 
+// `chat` is written alone, since the LLM it assigns carries its own
+// workspace and tool objects, and `me` never: the Dang side refuses both
+// before running a snippet, and applying refuses them again.
+func TestCheckDangWrites(t *testing.T) {
+	t.Parallel()
+	w := func(names ...string) []DangWrite {
+		var writes []DangWrite
+		for _, name := range names {
+			writes = append(writes, DangWrite{Name: name})
+		}
+		return writes
+	}
+	require.NoError(t, checkDangWrites(w("chat")))
+	require.NoError(t, checkDangWrites(w("ws", "editor")))
+	err := checkDangWrites(w("ws", "chat"))
+	require.ErrorContains(t, err, "write chat with `ws`: "+DangChatAloneMessage+" (nothing was written)")
+	err = checkDangWrites(w("chat", "editor", "ws"))
+	require.ErrorContains(t, err, "write chat with `editor`, `ws`: ")
+	require.ErrorContains(t, checkDangWrites(w("me")), "`me` is read-only")
+
+	// Nothing is loaded or written: the refusal comes first.
+	m := &MCP{mu: &sync.Mutex{}}
+	_, err = m.applyDangWrites(t.Context(), nil, dagql.ObjectResult[*Workspace]{}, []DangWrite{{Name: "ws", ID: "x"}, {Name: "chat", ID: "y"}})
+	require.ErrorContains(t, err, DangChatAloneMessage)
+}
+
+// The Dang tools' descriptions name what every scope binds for this
+// conversation, and what writing each does.
+func TestDangToolDescriptions(t *testing.T) {
+	t.Parallel()
+	full := dangBindingsDoc{ws: true, chat: true, me: true, tools: []string{"editor", "committer"}}
+	check, eval := full.checkDescription(), full.evalDescription()
+	require.Contains(t, check, "Every scope binds `ws` (your Workspace); `chat` (this conversation, an LLM); `me` (your Agent, read-only); your tool objects `editor`, `committer`.")
+	require.Contains(t, eval, "a reassigned `ws` (`ws = ws.withChanges(…)`) becomes your workspace")
+	require.Contains(t, eval, "a reassigned tool object (`editor = editor.someMethod(…)`) its state")
+	require.Contains(t, eval, "a reassigned `chat`")
+	require.Contains(t, eval, "A module installed through `ws` or `chat` is callable in the next call.")
+	// Together they stay terse: every conversation pays for them.
+	require.LessOrEqual(t, len(check)+len(eval), 3000, "%d + %d", len(check), len(eval))
+	t.Logf("DangCheck: %d bytes, DangEval: %d bytes", len(check), len(eval))
+
+	// Only what the conversation has: no tool objects, no agent.
+	bare := dangBindingsDoc{ws: true, chat: true}
+	require.Contains(t, bare.checkDescription(), "Every scope binds `ws` (your Workspace); `chat` (this conversation, an LLM).")
+	for _, desc := range []string{bare.checkDescription(), bare.evalDescription()} {
+		require.NotContains(t, desc, "editor")
+		require.NotContains(t, desc, "`me`")
+		require.NotContains(t, desc, "tool object")
+	}
+
+	// dagger mcp: no conversation, so no `chat`.
+	m := newMCP().Standalone()
+	m.ownerAgent = ""
+	doc := m.dangBindingsDoc()
+	require.Equal(t, dangBindingsDoc{}, doc)
+	require.NotContains(t, doc.checkDescription(), "Every scope binds")
+	require.NotContains(t, doc.evalDescription(), "Assignment is the write")
+
+	owned := newMCP()
+	owned.ownerAgent = "agent-1"
+	require.Equal(t, dangBindingsDoc{chat: true, me: true}, owned.dangBindingsDoc())
+}
+
+// A DangEval call whose snippet reassigns `chat` is scheduled as a
+// continuation, directly or wrapped in Timeout; any other isn't.
+func TestDangEvalContinuationCall(t *testing.T) {
+	t.Parallel()
+	tools := []LLMTool{
+		{Name: dangEvalToolName, Continues: func(args []byte) bool { return strings.Contains(string(args), "chat =") }},
+		{Name: timeoutToolName},
+	}
+	m := newMCP()
+	call := func(name, args string) *LLMToolCall {
+		return &LLMToolCall{Name: name, Arguments: JSON(args)}
+	}
+	require.True(t, m.isContinuationCall(call(dangEvalToolName, `{"source":"chat = chat"}`), tools))
+	require.False(t, m.isContinuationCall(call(dangEvalToolName, `{"source":"ws = ws"}`), tools))
+	require.True(t, m.isContinuationCall(call(timeoutToolName, `{"tool":"DangEval","duration":"1m","arguments":{"source":"chat = chat"}}`), tools))
+	require.False(t, m.isContinuationCall(call(timeoutToolName, `{"tool":"DangEval","duration":"1m","arguments":{"source":"1"}}`), tools))
+}
+
 // dangToolCallCtx is a context in a conversation's tool call, with its span,
 // as a Dang tool's call runs in.
 func dangToolCallCtx(t *testing.T, spanID string) context.Context {

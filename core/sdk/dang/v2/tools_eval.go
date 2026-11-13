@@ -84,8 +84,9 @@ type dangWriter func(context.Context, []dangWrite) (string, error)
 // from both.
 //
 // Assignment is the write: when source succeeds, the scope's bound values
-// (`ws`, the bound tool objects) it reassigned are handed to write with
-// their final values. A snippet that fails writes nothing.
+// (`ws`, `chat`, the bound tool objects) it reassigned are handed to write
+// with their final values. A snippet that fails writes nothing, and one that
+// reassigns `me`, or `chat` beside another value, doesn't run.
 func evalDang(ctx context.Context, sc *dangScope, source string, client graphql.Client, output io.Writer, write dangWriter) (core.DangReport, error) {
 	start := time.Now()
 	var r dangReport
@@ -113,7 +114,10 @@ func evalDang(ctx context.Context, sc *dangScope, source string, client graphql.
 	if err != nil {
 		return core.DangReport{}, err
 	}
-	if diags := a.Diagnostics(); hasErrors(diags) {
+	// The bound values the snippet reassigns, by resolution: what it writes,
+	// unless it reassigns one it can't (see bindingWriteDiagnostics).
+	assigned := boundAssignments(a, sc, snippet)
+	if diags := slices.Concat(a.Diagnostics(), bindingWriteDiagnostics(assigned)); hasErrors(diags) {
 		r.diagnostics(sc, diags)
 		r.linef("%s · %s · nothing ran", r.counts(), sc.label)
 		return done(true), nil
@@ -175,14 +179,14 @@ func evalDang(ctx context.Context, sc *dangScope, source string, client graphql.
 	if err != nil {
 		return fail(err, false), nil
 	}
-	writes, err := finalWrites(ctx, session, mod.Version, sc.bound, source)
+	writes, err := finalWrites(ctx, session, sc.bound, assignedNames(assigned))
 	if err != nil {
 		return fail(err, false), nil
 	}
 
 	writeOutput()
-	wroteWS := slices.ContainsFunc(writes, func(w dangWrite) bool { return w.name == "ws" })
-	unwritten := reportEvalResult(ctx, &r, calls, val, ran.Type, wroteWS)
+	wroteWS := slices.ContainsFunc(writes, func(w dangWrite) bool { return w.name == core.DangWorkspaceBinding })
+	unwritten := reportEvalResult(ctx, &r, calls, val, ran.Type, wroteWS, endsWithWrite(a, snippet, assigned))
 	r.linef("%s", footer("ok"))
 	switch {
 	case len(writes) > 0 && write != nil:
@@ -199,15 +203,15 @@ func evalDang(ctx context.Context, sc *dangScope, source string, client graphql.
 	return done(false), nil
 }
 
-// finalWrites returns the bound values source reassigns, with their values
-// as the session holds them after it ran. A value is written by assigning
-// it (`ws = ws.withChanges(…)`, `editor = editor.todoWrite(…)`); calling a
-// method on it, or returning a new one, writes nothing.
-func finalWrites(ctx context.Context, session *dang.Session, version dang.Version, bound []dangValue, source string) ([]dangWrite, error) {
-	assigned := reassignedNames(source, version)
+// finalWrites returns the bound values assigned names, with their values as
+// the session holds them after it ran. A value is written by assigning it
+// (`ws = ws.withChanges(…)`, `editor = editor.todoWrite(…)`); calling a
+// method on it, or returning a new one, writes nothing. A read-only value is
+// never written.
+func finalWrites(ctx context.Context, session *dang.Session, bound []dangValue, assigned map[string]bool) ([]dangWrite, error) {
 	var writes []dangWrite
 	for _, v := range bound {
-		if !assigned[v.name] {
+		if !assigned[v.name] || v.readOnly {
 			continue
 		}
 		read, err := session.Check(ctx, "<"+v.name+">", v.name)
@@ -231,7 +235,9 @@ func finalWrites(ctx context.Context, session *dang.Session, version dang.Versio
 	return writes, nil
 }
 
-// reassignedNames are the names source assigns with `=`, anywhere in it.
+// reassignedNames are the names source assigns with `=`, anywhere in it, by
+// its syntax alone: a local shadowing a bound value isn't told apart (see
+// boundAssignments for what a snippet writes).
 func reassignedNames(source string, version dang.Version) map[string]bool {
 	names := map[string]bool{}
 	parsed, err := dang.Parse(dangEvalName, []byte(source), dang.WithVersion(version))
@@ -256,11 +262,33 @@ func reassignedNames(source string, version dang.Version) map[string]bool {
 	return names
 }
 
+// endsWithWrite reports whether the snippet at snippet ends by assigning one
+// of the bound values it writes, so its result is the value written.
+func endsWithWrite(a *analysis.Analysis, snippet string, assigned []boundAssignment) bool {
+	f := a.File(snippet)
+	if f == nil || f.Block == nil || len(f.Block.Forms) == 0 {
+		return false
+	}
+	re, ok := f.Block.Forms[len(f.Block.Forms)-1].(*dang.Reassignment)
+	if !ok {
+		return false
+	}
+	sym := assignedSymbol(re.Target)
+	if sym == nil || sym.Loc == nil {
+		return false
+	}
+	return slices.ContainsFunc(assigned, func(as boundAssignment) bool {
+		return as.path == snippet && as.pos == analysis.Pos{Line: sym.Loc.Line, Column: sym.Loc.Column} && !as.value.readOnly
+	})
+}
+
 // reportEvalResult reports a snippet's result: its value and, for an object,
 // its members. A result is described, never applied: writing is assigning (see
 // finalWrites), so a Workspace or Changeset the snippet only returns says
-// how to write it; reportEvalResult reports whether it was one.
-func reportEvalResult(ctx context.Context, r *dangReport, calls *countingClient, val dang.Value, typ hm.Type, wroteWS bool) (unwritten bool) {
+// how to write it; reportEvalResult reports whether it was one. A result that
+// is the value the snippet just wrote (wroteResult) lists no members: the
+// write's summary says what came of it.
+func reportEvalResult(ctx context.Context, r *dangReport, calls *countingClient, val dang.Value, typ hm.Type, wroteWS, wroteResult bool) (unwritten bool) {
 	r.linef("%s", calls.secrets.scrub(describeResult(ctx, val, typ)))
 	if typ == nil {
 		return false
@@ -276,7 +304,7 @@ func reportEvalResult(ctx context.Context, r *dangReport, calls *countingClient,
 		}
 	}
 	// Only an object's members are worth listing: what to do with it next.
-	if _, isNull := val.(dang.NullValue); isNull || val == nil || !hasMemberListing(typ) {
+	if _, isNull := val.(dang.NullValue); isNull || val == nil || wroteResult || !hasMemberListing(typ) {
 		return unwritten
 	}
 	members := analysis.TypeMembers(typ)

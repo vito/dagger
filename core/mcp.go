@@ -68,6 +68,11 @@ type LLMTool struct {
 	// CallBatch runs these after every other call in the turn, so the
 	// conversation they receive already reflects the turn's effects.
 	ReturnsLLM bool `json:"-"`
+	// Continues, if set, reports whether a call with these arguments acts as
+	// a continuation, for a tool that only sometimes does: DangEval, when its
+	// snippet reassigns `chat`. CallBatch schedules such a call as it does a
+	// ReturnsLLM tool's.
+	Continues func(arguments []byte) bool `json:"-"`
 	// GraphQL API field that this tool corresponds to
 	Field *ast.FieldDefinition `json:"-"`
 	// Function implementing the tool.
@@ -2462,10 +2467,31 @@ func (m *MCP) CallBatch(ctx context.Context, tools []LLMTool, toolCalls []*LLMTo
 }
 
 // isContinuationCall reports whether call is to a tool that returns an LLM — a
-// continuation (see adoptLLM) — directly or wrapped in the Timeout builtin.
+// continuation (see adoptLLM) — or, for a tool that only sometimes is one
+// (LLMTool.Continues), whether this call is, directly or wrapped in the
+// Timeout builtin.
 func (m *MCP) isContinuationCall(call *LLMToolCall, tools []LLMTool) bool {
 	tool, err := m.planningTool(call, tools)
-	return err == nil && tool.ReturnsLLM
+	if err != nil {
+		return false
+	}
+	if tool.ReturnsLLM {
+		return true
+	}
+	if tool.Continues == nil {
+		return false
+	}
+	args := []byte(call.Arguments)
+	if call.Name == timeoutToolName && tool.Name != timeoutToolName {
+		var timeout struct {
+			Arguments json.RawMessage `json:"arguments"`
+		}
+		if json.Unmarshal(args, &timeout) != nil {
+			return false
+		}
+		args = timeout.Arguments
+	}
+	return tool.Continues(args)
 }
 
 // annotateMCPSyncFailure rewrites the results of an MCP server's calls after

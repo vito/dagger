@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"path"
 	"regexp"
@@ -25,6 +26,7 @@ import (
 	dangshared "github.com/dagger/dagger/core/sdk/dang/shared"
 	"github.com/dagger/dagger/core/workspace"
 	"github.com/dagger/dagger/dagql"
+	"github.com/dagger/dagger/dagql/call"
 )
 
 // This file connects the DangCheck and DangEval builtins (see
@@ -119,6 +121,12 @@ func (dangTools) Eval(ctx context.Context, env core.DangToolEnv, args core.DangE
 	return rep, err
 }
 
+// Reassigned names what source reassigns, by its syntax alone (see
+// reassignedNames), for scheduling a DangEval call.
+func (dangTools) Reassigned(source string) []string {
+	return slices.Sorted(maps.Keys(reassignedNames(source, dang.CurrentVersion)))
+}
+
 // logDangReport logs a Dang tool's report to the tool call's span, as a
 // module function's prints go to its call's.
 func logDangReport(ctx context.Context, report string) {
@@ -189,8 +197,9 @@ func withDangScope(
 	allowPosition bool,
 	fn func(context.Context, *dangScope, dangRuntime) error,
 ) error {
-	// Every scope binds `ws` and the bound tool objects: the default scope's
-	// API has their types, and a module's scope gets them added.
+	// Every scope binds `ws`, `chat`, `me` and the bound tool objects: the
+	// default scope's API has their types, and a module's scope gets them
+	// added.
 	scope, defaultSchema, err := workspaceDangScope(ctx, env)
 	if err != nil {
 		return err
@@ -308,22 +317,38 @@ func withDangScope(
 	return err
 }
 
-// bindDangValues binds `ws` and the bound tool objects in sc, but not a name
-// its own files declare at their top level: a module's own `ws` (or `editor`)
-// is the module's, as any other of its declarations would shadow an import,
-// so it is not bound, and assigning it writes nothing.
+// bindDangValues binds `ws`, `chat`, `me` and the bound tool objects in sc,
+// but not a name its own files declare at their top level: a module's own
+// `ws` (or `editor`) is the module's, as any other of its declarations would
+// shadow an import, so it is not bound, and assigning it writes nothing.
+// `me` is bound whenever the schema has agents: the conversation's agent, or
+// null without one.
 func bindDangValues(env core.DangToolEnv, scope *core.DangScope, sc *dangScope, declared map[string]bool) error {
 	var values []dangValue
-	if ws := env.Workspace; ws.Self() != nil && !declared["ws"] {
-		id, err := ws.ID()
+	if ws := env.Workspace; ws.Self() != nil && !declared[core.DangWorkspaceBinding] {
+		encoded, err := encodedID(ws.ID)
 		if err != nil {
 			return err
 		}
-		encoded, err := id.Encode()
+		values = append(values, dangValue{name: core.DangWorkspaceBinding, typeName: "Workspace", id: encoded})
+	}
+	if chat := env.Chat; chat.Self() != nil && !declared[core.DangChatBinding] && sc.schema.Types.Get("LLM") != nil {
+		encoded, err := encodedID(chat.ID)
 		if err != nil {
 			return err
 		}
-		values = append(values, dangValue{name: "ws", typeName: "Workspace", id: encoded})
+		values = append(values, dangValue{name: core.DangChatBinding, typeName: "LLM", id: encoded})
+	}
+	if !declared[core.DangAgentBinding] && sc.schema.Types.Get("Agent") != nil {
+		me := dangValue{name: core.DangAgentBinding, typeName: "Agent", readOnly: true}
+		if agent := env.Agent; agent.Self() != nil {
+			encoded, err := encodedID(agent.ID)
+			if err != nil {
+				return err
+			}
+			me.id = encoded
+		}
+		values = append(values, me)
 	}
 	for _, b := range scope.Bindings {
 		if declared[b.Name] || sc.schema.Types.Get(b.TypeName) == nil {
@@ -334,6 +359,15 @@ func bindDangValues(env core.DangToolEnv, scope *core.DangScope, sc *dangScope, 
 	sc.values = valueDeclarations(values)
 	sc.bound = values
 	return nil
+}
+
+// encodedID encodes the ID id returns.
+func encodedID(id func() (*call.ID, error)) (string, error) {
+	i, err := id()
+	if err != nil {
+		return "", err
+	}
+	return i.Encode()
 }
 
 // declaredNames are the names dir's .dang files declare at their top level.

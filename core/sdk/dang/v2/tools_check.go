@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"path"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -81,12 +82,12 @@ type dangScope struct {
 	// out of it because they failed to load (see unloadedNote).
 	unloaded string
 
-	// values, for the workspace scope, declares `ws` and the bound tool
-	// objects (see valueDeclarations).
+	// values declares the scope's bound values: `ws`, `chat`, `me` and the
+	// bound tool objects (see valueDeclarations).
 	values string
 
 	// bound are the values values declares, which a DangEval snippet
-	// writes by reassigning them.
+	// writes by reassigning them (but for read-only ones).
 	bound []dangValue
 
 	// schema is the API the Dagger import (auto-imported) exposes.
@@ -136,19 +137,41 @@ func (sc *dangScope) display(p string) string {
 }
 
 // dangValue is a value the workspace scope binds by name, loaded from its ID:
-// the workspace as `ws`, and each bound tool object.
+// the workspace as `ws`, the conversation as `chat`, its agent as `me`, and
+// each bound tool object.
 type dangValue struct {
+	// id is empty for a value bound as null: `me` without an agent.
 	name, typeName, id string
+	// readOnly values can't be reassigned (see bindingWriteDiagnostics).
+	readOnly bool
+}
+
+// what says what v is, for a message about it.
+func (v dangValue) what() string {
+	switch v.name {
+	case core.DangWorkspaceBinding:
+		return "the conversation's workspace"
+	case core.DangChatBinding:
+		return "the conversation"
+	case core.DangAgentBinding:
+		return "the conversation's agent"
+	}
+	return "bound tool object"
 }
 
 // valueDeclarations is the source binding each value by name, as a module
-// function's `ws: Workspace!` argument is bound. Each is lazy: a value a
-// snippet never reads is never loaded. Types are qualified, since a module's
-// own type of the same name (the bound object of its own main type, in its
-// scope) is not the API's.
+// function's `ws: Workspace!` argument is bound, one line each. Each is lazy:
+// a value a snippet never reads is never loaded. Types are qualified, since a
+// module's own type of the same name (the bound object of its own main type,
+// in its scope) is not the API's. A value without an ID is null, of the
+// nullable type.
 func valueDeclarations(values []dangValue) string {
 	var b strings.Builder
 	for _, v := range values {
+		if v.id == "" {
+			fmt.Fprintf(&b, "let %s: Dagger.%s = null\n", v.name, v.typeName)
+			continue
+		}
 		fmt.Fprintf(&b, "let %s: Dagger.%s! = Dagger.node(id: %q).{{... on Dagger.%s!}}\n", v.name, v.typeName, v.id, v.typeName)
 	}
 	return b.String()
@@ -168,14 +191,166 @@ func (sc *dangScope) attributeBindingFailures(diags []analysis.Diagnostic) {
 			continue
 		}
 		v := sc.bound[line-1]
-		what := "bound tool object"
-		if v.name == "ws" {
-			what = "the conversation's workspace"
-		}
 		diags[i].Path = ""
 		diags[i].Range = analysis.Range{}
-		diags[i].Message = fmt.Sprintf("`%s` (%s) failed to load: %s", v.name, what, d.Message)
+		diags[i].Message = fmt.Sprintf("`%s` (%s) failed to load: %s", v.name, v.what(), d.Message)
 	}
+}
+
+// boundAssignment is a reassignment of one of the scope's bound values.
+type boundAssignment struct {
+	value dangValue
+	path  string
+	pos   analysis.Pos
+}
+
+// boundAssignments finds the reassignments of sc's bound values in the files
+// a analyzed (only the one at onlyPath, if set): `name = …` (or a path
+// through it, `name.x = …`) where name resolves to the value's declaration,
+// not to a local shadowing it.
+func boundAssignments(a *analysis.Analysis, sc *dangScope, onlyPath string) []boundAssignment {
+	bound := map[string]dangValue{}
+	for _, v := range sc.bound {
+		bound[v.name] = v
+	}
+	if a == nil || len(bound) == 0 {
+		return nil
+	}
+	var found []boundAssignment
+	for _, f := range a.Files {
+		if f.Block == nil || path.Base(f.Path) == dangWorkspaceFile || (onlyPath != "" && f.Path != onlyPath) {
+			continue
+		}
+		f.Block.Walk(func(n dang.Node) bool {
+			if n == nil {
+				return false
+			}
+			re, ok := n.(*dang.Reassignment)
+			if !ok {
+				return true
+			}
+			sym := assignedSymbol(re.Target)
+			if sym == nil || sym.Loc == nil {
+				return true
+			}
+			v, ok := bound[sym.Name]
+			if !ok {
+				return true
+			}
+			pos := analysis.Pos{Line: sym.Loc.Line, Column: sym.Loc.Column}
+			resolved, err := a.Inspect(f.Path, pos)
+			if err != nil || resolved.Definition == nil || path.Base(resolved.Definition.Path) != dangWorkspaceFile {
+				return true
+			}
+			found = append(found, boundAssignment{value: v, path: f.Path, pos: pos})
+			return true
+		})
+	}
+	return found
+}
+
+// snippetBoundAssignments finds the reassignments of sc's bound values in a
+// snippet checked at a position, which no analysis resolves: by name, unless
+// the snippet itself declares the name. A local of the position's scope
+// shadowing a bound value isn't told apart.
+func snippetBoundAssignments(forms []dang.Node, sc *dangScope) []boundAssignment {
+	bound := map[string]dangValue{}
+	for _, v := range sc.bound {
+		bound[v.name] = v
+	}
+	declared := map[string]bool{}
+	for _, form := range forms {
+		for _, name := range form.DeclaredSymbols() {
+			declared[name] = true
+		}
+	}
+	var found []boundAssignment
+	for _, form := range forms {
+		form.Walk(func(n dang.Node) bool {
+			if n == nil {
+				return false
+			}
+			re, ok := n.(*dang.Reassignment)
+			if !ok {
+				return true
+			}
+			sym := assignedSymbol(re.Target)
+			if sym == nil || sym.Loc == nil || declared[sym.Name] {
+				return true
+			}
+			if v, ok := bound[sym.Name]; ok {
+				found = append(found, boundAssignment{value: v, path: sym.Loc.Filename, pos: analysis.Pos{Line: sym.Loc.Line, Column: sym.Loc.Column}})
+			}
+			return true
+		})
+	}
+	return found
+}
+
+// assignedSymbol is the name an assignment's target writes: the target, or
+// the root of a path through it.
+func assignedSymbol(target dang.Node) *dang.Symbol {
+	for {
+		switch t := target.(type) {
+		case *dang.Symbol:
+			return t
+		case *dang.Select:
+			if t.Receiver == nil {
+				return nil
+			}
+			target = t.Receiver
+		default:
+			return nil
+		}
+	}
+}
+
+// assignedNames are the names of the values assigned.
+func assignedNames(assigned []boundAssignment) map[string]bool {
+	names := map[string]bool{}
+	for _, as := range assigned {
+		names[as.value.name] = true
+	}
+	return names
+}
+
+// bindingWriteDiagnostics reports the reassignments of bound values a
+// snippet can't make, where it makes them: a read-only value's (`me`), and
+// `chat`'s beside any other value's, since the LLM it assigns carries its own
+// workspace and tool objects.
+func bindingWriteDiagnostics(assigned []boundAssignment) []analysis.Diagnostic {
+	var diags []analysis.Diagnostic
+	diag := func(as boundAssignment, msg string) {
+		diags = append(diags, analysis.Diagnostic{
+			Severity: analysis.SeverityError,
+			Code:     analysis.CodeType,
+			Path:     as.path,
+			Range:    analysis.Range{Start: as.pos, End: analysis.Pos{Line: as.pos.Line, Column: as.pos.Column + len(as.value.name)}},
+			Message:  msg,
+		})
+	}
+	var others []string
+	seen := map[string]bool{}
+	for _, as := range assigned {
+		if as.value.readOnly {
+			diag(as, fmt.Sprintf("cannot assign to `%s`: it is %s, bound read-only", as.value.name, as.value.what()))
+			continue
+		}
+		if as.value.name != core.DangChatBinding && !seen[as.value.name] {
+			seen[as.value.name] = true
+			others = append(others, "`"+as.value.name+"`")
+		}
+	}
+	if len(others) == 0 {
+		return diags
+	}
+	for _, as := range assigned {
+		if as.value.name == core.DangChatBinding {
+			diag(as, fmt.Sprintf("cannot assign to `chat` and %s in one snippet: %s", strings.Join(others, " and "), core.DangChatAloneMessage))
+			break
+		}
+	}
+	return diags
 }
 
 // dangReport accumulates a tool's text output.
@@ -280,7 +455,7 @@ func checkDang(ctx context.Context, sc *dangScope, source, search string) (core.
 		}
 		files = countFiles(a)
 		if sc.module {
-			diags := a.Diagnostics()
+			diags := slices.Concat(a.Diagnostics(), bindingWriteDiagnostics(boundAssignments(a, sc, "")))
 			if files == 0 {
 				// Nothing to diagnose: say why, as a diagnostic.
 				diags = []analysis.Diagnostic{{Severity: analysis.SeverityError, Message: noDangFilesMessage(sc)}}
@@ -308,6 +483,7 @@ func checkDang(ctx context.Context, sc *dangScope, source, search string) (core.
 			break
 		}
 		forms, diags := checkInScope(ctx, scope, source)
+		diags = append(diags, bindingWriteDiagnostics(snippetBoundAssignments(forms, sc))...)
 		describeSnippet(ctx, &r, sc, nil, scope, source, forms, diags)
 	default:
 		// A snippet as one more file of the scope.
@@ -328,7 +504,7 @@ func checkDang(ctx context.Context, sc *dangScope, source, search string) (core.
 		if f := a.File(snippet); f != nil && f.Block != nil {
 			forms = f.Block.Forms
 		}
-		describeSnippet(ctx, &r, sc, a, scope, source, forms, a.Diagnostics())
+		describeSnippet(ctx, &r, sc, a, scope, source, forms, slices.Concat(a.Diagnostics(), bindingWriteDiagnostics(boundAssignments(a, sc, snippet))))
 	}
 
 	if search != "" {

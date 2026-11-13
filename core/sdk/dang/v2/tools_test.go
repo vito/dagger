@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -53,6 +54,10 @@ type Container implements Node {
   Forces evaluation of the pipeline.
   """
   sync: Container!
+  """
+  Gives a conversation a module's tools.
+  """
+  install(llm: ID!, ref: String!): LLM!
 }
 
 type Directory implements Node {
@@ -78,12 +83,38 @@ type Secret implements Node {
   id: ID!
   plaintext: String!
 }
+
+type LLM implements Node {
+  id: ID!
+  withPrompt(prompt: String!): LLM!
+}
+
+type Agent implements Node {
+  id: ID!
+  handle: String!
+}
 `
 
 func dangToolsTestSchema(t *testing.T) *introspection.Schema {
 	t.Helper()
 	schema, err := dang.SchemaFromSDL(dangToolsTestSDL, "test.graphqls")
 	require.NoError(t, err)
+	// An object is passed for an ID argument the API expects one of, as the
+	// engine's schema says with @expectedType, which SDL doesn't carry.
+	for _, field := range schema.Types.Get("Container").Fields {
+		if field.Name != "install" {
+			continue
+		}
+		for i, arg := range field.Args {
+			if arg.Name == "llm" {
+				name := `"LLM"`
+				field.Args[i].Directives = introspection.Directives{{
+					Name: "expectedType",
+					Args: []*introspection.DirectiveArg{{Name: "name", Value: &name}},
+				}}
+			}
+		}
+	}
 	return schema
 }
 
@@ -346,14 +377,14 @@ func TestDangEval(t *testing.T) {
 		}
 		out, err := evalTest(t, sc, `container`, nil)
 		require.NoError(t, err)
-		require.Contains(t, out, "members: id stdout sync withExec\n")
+		require.Contains(t, out, "members: id install stdout sync withExec\n")
 	})
 
 	t.Run("objects stay lazy", func(t *testing.T) {
 		out, err := evalTest(t, sc, `container.withExec(["echo", "hi"])`, nil)
 		require.NoError(t, err)
 		require.Contains(t, out, "Container! = <Container: container.withExec(args: …)>\n(not evaluated; select a field such as .sync or .stdout to run it)\n")
-		require.Contains(t, out, "members: id stdout sync withExec\n")
+		require.Contains(t, out, "members: id install stdout sync withExec\n")
 		require.Contains(t, out, " · 0 engine calls · ")
 	})
 
@@ -703,6 +734,171 @@ func TestDangEvalWrites(t *testing.T) {
 		require.Equal(t, []dangWrite{{name: "ws", typeName: "Workspace", id: "ws-2"}}, got)
 		require.Contains(t, out, " · module mod (mod)\n")
 	})
+}
+
+// conversationBound are bound values of a conversation's scope: its
+// workspace, the conversation, its agent and a tool object.
+var conversationBound = []dangValue{
+	{name: "ws", typeName: "Workspace", id: "ws-id"},
+	{name: "chat", typeName: "LLM", id: "chat-id"},
+	{name: "me", typeName: "Agent", id: "me-id", readOnly: true},
+	{name: "box", typeName: "Container", id: "box-id"},
+}
+
+// conversationScope is sc binding bound.
+func conversationScope(sc *dangScope, bound []dangValue) *dangScope {
+	sc.values = valueDeclarations(bound)
+	sc.bound = bound
+	return sc
+}
+
+// conversationAPI answers the queries of snippets over conversationBound:
+// each new value's ID is its call's name.
+func conversationAPI() *fakeAPI {
+	return &fakeAPI{answer: func(q string) string {
+		switch {
+		case strings.Contains(q, "__typename") && strings.Contains(q, "chat-id"):
+			return `{"node":{"__typename":"LLM"}}`
+		case strings.Contains(q, "__typename") && strings.Contains(q, "me-id"):
+			return `{"node":{"__typename":"Agent"}}`
+		case strings.Contains(q, "__typename") && strings.Contains(q, "ws-id"):
+			return `{"node":{"__typename":"Workspace"}}`
+		case strings.Contains(q, "__typename"):
+			return `{"node":{"__typename":"Container"}}`
+		case strings.Contains(q, "install"):
+			return `{"node":{"install":{"id":"chat-2"}}}`
+		case strings.Contains(q, "withPrompt"):
+			return `{"node":{"withPrompt":{"id":"chat-3"}}}`
+		case strings.Contains(q, "handle"):
+			return `{"node":{"handle":"agent-handle"}}`
+		case strings.Contains(q, "withNewFile"):
+			return `{"node":{"withNewFile":{"id":"ws-2"}}}`
+		case strings.Contains(q, "withExec"):
+			return `{"node":{"withExec":{"id":"box-2"}}}`
+		}
+		return `{}`
+	}}
+}
+
+// `chat` is written as any other binding is, but alone: the LLM it assigns
+// carries its own workspace and tool objects. `me` is read-only.
+func TestDangEvalConversationWrites(t *testing.T) {
+	t.Parallel()
+	eval := func(t *testing.T, sc *dangScope, source string) (core.DangReport, []dangWrite, int, *fakeAPI) {
+		t.Helper()
+		var got []dangWrite
+		var calls int
+		api := conversationAPI()
+		rep, err := evalDang(context.Background(), sc, source, api, nil, recordWrites(&got, &calls))
+		require.NoError(t, err)
+		return rep, got, calls, api
+	}
+	scope := func(t *testing.T) *dangScope {
+		return conversationScope(workspaceTestScope(t), conversationBound)
+	}
+
+	t.Run("assigning chat writes it", func(t *testing.T) {
+		rep, got, _, _ := eval(t, scope(t), `chat = chat.withPrompt(prompt: "hi")`)
+		require.Equal(t, []dangWrite{{name: "chat", typeName: "LLM", id: "chat-3"}}, got, rep.Text)
+		require.True(t, strings.HasSuffix(rep.Text, "\nchat written\n"), rep.Text)
+		require.NotContains(t, rep.Text, "members:", "the write's summary says what came of it")
+	})
+
+	t.Run("a tool object read to make chat isn't written", func(t *testing.T) {
+		rep, got, _, _ := eval(t, scope(t), `chat = box.install(llm: chat, ref: "github.com/x/y")`)
+		require.Equal(t, []dangWrite{{name: "chat", typeName: "LLM", id: "chat-2"}}, got, rep.Text)
+	})
+
+	for _, tc := range []struct{ name, source, other string }{
+		{"chat and ws", "ws = ws.withNewFile(path: \"a\", contents: \"b\")\nchat = chat.withPrompt(prompt: \"hi\")", "`ws`"},
+		{"chat and a tool object", "box = box.withExec(args: [\"x\"])\nchat = box.install(llm: chat, ref: \"r\")", "`box`"},
+	} {
+		t.Run(tc.name+" together run nothing", func(t *testing.T) {
+			rep, got, calls, api := eval(t, scope(t), tc.source)
+			require.Empty(t, got)
+			require.Zero(t, calls)
+			require.Empty(t, api.queries, "nothing ran")
+			require.True(t, rep.Rejected)
+			require.Contains(t, rep.Text, "error: cannot assign to `chat` and "+tc.other+" in one snippet: "+core.DangChatAloneMessage)
+			require.Contains(t, rep.Text, "1 error · workspace scope · nothing ran")
+		})
+	}
+
+	t.Run("me is read-only", func(t *testing.T) {
+		rep, got, calls, api := eval(t, scope(t), "me = null\n1")
+		require.Empty(t, got)
+		require.Zero(t, calls)
+		require.Empty(t, api.queries, "nothing ran")
+		require.Contains(t, rep.Text, "<check>:1:1: error: cannot assign to `me`: it is the conversation's agent, bound read-only")
+	})
+
+	t.Run("me reads the agent", func(t *testing.T) {
+		rep, got, _, _ := eval(t, scope(t), `me.handle`)
+		require.Empty(t, got)
+		require.Contains(t, rep.Text, `String! = "agent-handle"`)
+	})
+
+	t.Run("me is null without an agent", func(t *testing.T) {
+		bound := slices.Clone(conversationBound)
+		bound[2].id = ""
+		sc := conversationScope(workspaceTestScope(t), bound)
+		rep, _, _, _ := eval(t, sc, `me == null`)
+		require.Contains(t, rep.Text, "Boolean! = true")
+		require.Contains(t, checkTest(t, sc, "me", ""), "me: Dagger.Agent\n")
+	})
+
+	t.Run("a local shadowing a binding isn't it", func(t *testing.T) {
+		rep, got, calls, _ := eval(t, scope(t), "[1].map { x =>\n  let me = x\n  let chat = x\n  me = 2\n  chat = 3\n  ws = ws.withNewFile(path: \"a\", contents: \"b\")\n  me + chat\n}")
+		require.False(t, rep.Rejected, rep.Text)
+		require.Equal(t, []dangWrite{{name: "ws", typeName: "Workspace", id: "ws-2"}}, got, rep.Text)
+		require.Equal(t, 1, calls)
+	})
+
+	t.Run("in a module's scope", func(t *testing.T) {
+		sc := conversationScope(moduleTestScope(t, map[string]string{"main.dang": testModuleMain}), conversationBound)
+		rep, got, _, _ := eval(t, sc, "ws = ws.withNewFile(path: \"a\", contents: greet(\"x\"))\nchat = chat.withPrompt(prompt: \"hi\")")
+		require.Empty(t, got)
+		require.Contains(t, rep.Text, core.DangChatAloneMessage)
+	})
+}
+
+// DangCheck reports the writes DangEval refuses, where they are.
+func TestDangCheckConversationWrites(t *testing.T) {
+	t.Parallel()
+	sc := conversationScope(workspaceTestScope(t), conversationBound)
+
+	out := checkTest(t, sc, "me = null", "")
+	require.Contains(t, out, "<check>:1:1: error: cannot assign to `me`: it is the conversation's agent, bound read-only")
+
+	out = checkTest(t, sc, "ws = ws.withNewFile(path: \"a\", contents: \"b\")\nchat = chat.withPrompt(prompt: \"hi\")", "")
+	require.Contains(t, out, "<check>:2:1: error: cannot assign to `chat` and `ws` in one snippet: ")
+
+	out = checkTest(t, sc, `chat = box.install(llm: chat, ref: "r")`, "")
+	require.NotContains(t, out, "error")
+	require.Contains(t, checkTest(t, sc, "chat", ""), "chat: Dagger.LLM!\n")
+	require.Contains(t, checkTest(t, sc, "me", ""), "me: Dagger.Agent!\n")
+
+	t.Run("at a position", func(t *testing.T) {
+		sc := conversationScope(moduleTestScope(t, map[string]string{"main.dang": testModuleMain}), conversationBound)
+		sc.file, sc.pos = "mod/main.dang", &analysis.Pos{Line: 1, Column: 1}
+		require.Contains(t, checkTest(t, sc, "me = null", ""), "error: cannot assign to `me`")
+	})
+
+	t.Run("a module's own files", func(t *testing.T) {
+		sc := conversationScope(moduleTestScope(t, map[string]string{"main.dang": testModuleMain + "\nme = null\n"}), conversationBound)
+		require.Contains(t, checkTest(t, sc, "", ""), "mod/main.dang:")
+		require.Contains(t, checkTest(t, sc, "", ""), "cannot assign to `me`")
+	})
+}
+
+// A DangEval call is scheduled as a continuation when its snippet may
+// reassign `chat`, by its syntax.
+func TestDangReassigned(t *testing.T) {
+	t.Parallel()
+	require.Equal(t, []string{"chat"}, dangTools{}.Reassigned(`chat = editor.install(llm: chat, ref: "x")`))
+	require.Equal(t, []string{"chat", "ws"}, dangTools{}.Reassigned("ws = ws\nchat = chat"))
+	require.Empty(t, dangTools{}.Reassigned(`editor.install(llm: chat, ref: "x")`))
+	require.Empty(t, dangTools{}.Reassigned(`chat = `))
 }
 
 func TestDeclaredNames(t *testing.T) {
