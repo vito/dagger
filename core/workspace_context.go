@@ -159,14 +159,26 @@ func workspaceHostRoutingContext(ctx context.Context, ws *Workspace) (context.Co
 	return engine.ContextWithClientMetadata(ctx, clientMetadata), nil
 }
 
+// InstalledWorkspaceModules are the modules installed in a workspace, as
+// LoadWorkspaceModules loads them.
+type InstalledWorkspaceModules struct {
+	// Loaded are the modules that loaded.
+	Loaded []dagql.ObjectResult[*Module]
+	// Failures are the modules that failed to load, and why.
+	Failures []ModuleLoadFailure
+	// Removed names, by LatestNamer.CLIName, the modules a live workspace's
+	// session serves that its pending dagger.toml edits uninstall.
+	Removed []string
+}
+
 // workspaceModulesLoader loads the modules installed in a workspace; see
 // LoadWorkspaceModules. The schema package, which owns workspace module
 // loading, sets it.
-var workspaceModulesLoader func(context.Context, dagql.ObjectResult[*Workspace]) ([]dagql.ObjectResult[*Module], []ModuleLoadFailure, error)
+var workspaceModulesLoader func(context.Context, dagql.ObjectResult[*Workspace]) (*InstalledWorkspaceModules, error)
 
 // SetWorkspaceModulesLoader installs the implementation of
 // LoadWorkspaceModules.
-func SetWorkspaceModulesLoader(loader func(context.Context, dagql.ObjectResult[*Workspace]) ([]dagql.ObjectResult[*Module], []ModuleLoadFailure, error)) {
+func SetWorkspaceModulesLoader(loader func(context.Context, dagql.ObjectResult[*Workspace]) (*InstalledWorkspaceModules, error)) {
 	workspaceModulesLoader = loader
 }
 
@@ -176,9 +188,9 @@ func SetWorkspaceModulesLoader(loader func(context.Context, dagql.ObjectResult[*
 // value workspace's from its own tree, pinned by its own lock, never the
 // caller's. A module that fails to load is left out and returned as a
 // failure. ctx must have the dagql server to load them with.
-func LoadWorkspaceModules(ctx context.Context, ws dagql.ObjectResult[*Workspace]) ([]dagql.ObjectResult[*Module], []ModuleLoadFailure, error) {
+func LoadWorkspaceModules(ctx context.Context, ws dagql.ObjectResult[*Workspace]) (*InstalledWorkspaceModules, error) {
 	if workspaceModulesLoader == nil {
-		return nil, nil, errors.New("no workspace module loader")
+		return nil, errors.New("no workspace module loader")
 	}
 	return workspaceModulesLoader(ctx, ws)
 }

@@ -231,35 +231,46 @@ func (m *MCP) loadDangTools(srv *dagql.Server, allTools *LLMToolSet) {
 // The API has the modules installed in ws, the conversation's workspace as
 // the call begins, loaded from ws itself (see LoadWorkspaceModules): a value
 // workspace's from its own tree, which baseServer leaves out, and a module
-// an earlier snippet installed (`ws = ws.withModule(…)`) as soon as it is.
-// Loads are cached, so an unchanged workspace costs little after the first.
+// an earlier snippet installed (`ws = ws.withModule(…)`) as soon as it is,
+// one it uninstalled no longer. Successful loads are cached, so an unchanged
+// workspace costs little after the first call; like Workspace.artifacts,
+// a module that fails to load is tried again on each call.
 //
 // Only module objects are bound: a core type's name would shadow a core
-// field (`container`), and `ws` is the workspace already. An object whose
-// module can't join the API is skipped rather than failing the call.
+// field (`container`), and `ws` is the workspace already. A bound object's
+// types are its own module's, even where the workspace installs a module of
+// the same name that differs (one whose source the agent is editing). An
+// object whose module can't join the API is skipped rather than failing the
+// call, and so are installed modules that can't.
 func (m *MCP) dangScope(ctx context.Context, srv *dagql.Server, ws dagql.ObjectResult[*Workspace]) (*DangScope, error) {
 	ctx, served, err := m.baseDeps(ctx)
 	if err != nil {
 		return nil, err
 	}
-	base := served
 	scope := &DangScope{}
-	if ws.Self() != nil {
-		scope.Installed, scope.LoadFailures, scope.InstalledErr = LoadWorkspaceModules(dagql.ContextWithServer(ctx, srv.Canonical()), ws)
-		if scope.InstalledErr == nil {
-			mods := make([]Mod, len(scope.Installed))
-			for i, mod := range scope.Installed {
-				mods[i] = NewUserMod(mod)
-			}
-			base = base.WithPrimaryMods(mods)
-		}
+	boundByName, err := m.dangBindings(scope)
+	if err != nil {
+		return nil, err
 	}
+	base := served
+	if ws.Self() != nil {
+		base = scope.withInstalled(dagql.ContextWithServer(ctx, srv.Canonical()), ws, served, boundByName)
+	}
+	if err := scope.serve(ctx, base, served); err != nil {
+		return nil, err
+	}
+	return scope, nil
+}
+
+// dangBindings adds the conversation's bound tool objects to scope, with
+// their modules, and returns those modules by name.
+func (m *MCP) dangBindings(scope *DangScope) (map[string]Mod, error) {
 	m.mu.Lock()
 	bound := slices.Clone(m.boundTools)
 	m.mu.Unlock()
 
-	scope.Deps = base
 	seen := map[string]bool{"ws": true}
+	boundByName := map[string]Mod{}
 	for _, b := range bound {
 		typeName := b.typeName()
 		objType := b.objType
@@ -278,6 +289,7 @@ func (m *MCP) dangScope(ctx context.Context, srv *dagql.Server, ws dagql.ObjectR
 		}
 		id := b.id
 		if id == nil && b.object != nil {
+			var err error
 			if id, err = b.object.ID(); err != nil {
 				return nil, err
 			}
@@ -302,30 +314,87 @@ func (m *MCP) dangScope(ctx context.Context, srv *dagql.Server, ws dagql.ObjectR
 			}
 		}
 		for _, bm := range boundMods {
-			scope.Deps = scope.Deps.With(bm, InstallOpts{SkipConstructor: true})
+			if _, ok := boundByName[bm.Name()]; !ok {
+				boundByName[bm.Name()] = bm
+			}
 		}
 		scope.BoundMods = append(scope.BoundMods, boundMods...)
 	}
+	return boundByName, nil
+}
 
-	scope.SchemaFile, err = scope.Deps.SchemaIntrospectionJSONFileForModule(ctx)
-	if err != nil && len(scope.Bindings) > 0 {
-		// The bound modules don't fit beside the API: go without them.
-		for _, b := range scope.Bindings {
-			scope.Skipped = append(scope.Skipped, fmt.Sprintf("%s: %v", b.TypeName, err))
-		}
-		scope.Bindings, scope.BoundMods, scope.Deps = nil, nil, base
-		scope.SchemaFile, err = base.SchemaIntrospectionJSONFileForModule(ctx)
-	}
-	if err != nil && base != served {
-		// The installed modules don't fit beside the API: go without them.
-		scope.Installed, scope.InstalledErr = nil, fmt.Errorf("serve the installed modules: %w", err)
-		scope.Bindings, scope.BoundMods, scope.Deps = nil, nil, served
-		scope.SchemaFile, err = served.SchemaIntrospectionJSONFileForModule(ctx)
-	}
+// withInstalled loads the modules installed in ws into scope, and returns
+// served with them, but for any whose name a bound object's module of
+// another revision takes.
+func (scope *DangScope) withInstalled(ctx context.Context, ws dagql.ObjectResult[*Workspace], served *SchemaBuilder, boundByName map[string]Mod) *SchemaBuilder {
+	installed, err := LoadWorkspaceModules(ctx, ws)
 	if err != nil {
-		return nil, err
+		scope.InstalledErr = err
+		return served
 	}
-	return scope, nil
+	scope.LoadFailures = installed.Failures
+	var mods []Mod
+	for _, mod := range installed.Loaded {
+		userMod := NewUserMod(mod)
+		if boundMod, ok := boundByName[userMod.Name()]; ok {
+			if same, err := boundMod.Same(userMod); err != nil || !same {
+				continue
+			}
+		}
+		scope.Installed = append(scope.Installed, mod)
+		mods = append(mods, userMod)
+	}
+	return served.WithPrimaryMods(mods, installed.Removed)
+}
+
+// serve sets scope's API: base (served with the installed modules) and the
+// bound objects' modules, else as many of them as fit beside served, the
+// bound objects', which worked before the installed modules joined it,
+// first.
+func (scope *DangScope) serve(ctx context.Context, base, served *SchemaBuilder) error {
+	withBound := func(deps *SchemaBuilder) *SchemaBuilder {
+		for _, bm := range scope.BoundMods {
+			deps = deps.With(bm, InstallOpts{SkipConstructor: true})
+		}
+		return deps
+	}
+	type candidate struct {
+		deps                *SchemaBuilder
+		installed, bindings bool
+	}
+	candidates := []candidate{{withBound(base), true, true}}
+	if base != served {
+		candidates = append(candidates, candidate{withBound(served), false, true})
+	}
+	if len(scope.Bindings) > 0 {
+		candidates = append(candidates, candidate{base, true, false})
+		if base != served {
+			candidates = append(candidates, candidate{served, false, false})
+		}
+	}
+	var firstErr error
+	for _, c := range candidates {
+		file, err := c.deps.SchemaIntrospectionJSONFileForModule(ctx)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		scope.Deps, scope.SchemaFile = c.deps, file
+		if !c.installed {
+			scope.Installed = nil
+			scope.InstalledErr = fmt.Errorf("serve the installed modules: %w", firstErr)
+		}
+		if !c.bindings {
+			for _, b := range scope.Bindings {
+				scope.Skipped = append(scope.Skipped, fmt.Sprintf("%s: %v", b.TypeName, firstErr))
+			}
+			scope.Bindings, scope.BoundMods = nil, nil
+		}
+		return nil
+	}
+	return firstErr
 }
 
 // applyDangWrites applies what a DangEval snippet wrote: assignment is the

@@ -185,8 +185,9 @@ func TestSchemaBuilderWithCoreMod(t *testing.T) {
 }
 
 // A conversation's Dang scope serves the modules its workspace installs as of
-// the call: a module installed since is added, a changed one replaced, and an
-// unchanged one kept as it was, so the schema built for it is reused.
+// the call: a module installed since is added, a changed one replaced, an
+// uninstalled one dropped, and an unchanged one kept as it was, so the schema
+// built for it is reused.
 func TestSchemaBuilderWithPrimaryMods(t *testing.T) {
 	core := &memoTestMod{name: ModuleName}
 	served := &memoTestMod{name: "served"}
@@ -203,7 +204,7 @@ func TestSchemaBuilderWithPrimaryMods(t *testing.T) {
 	sameServed := &memoTestMod{name: "served", same: served}
 	promotedAgain := &memoTestMod{name: "promoted", same: promoted}
 	installed := &memoTestMod{name: "installed"}
-	got := base.WithPrimaryMods([]Mod{installed, sameServed, promotedAgain})
+	got := base.WithPrimaryMods([]Mod{installed, sameServed, promotedAgain}, nil)
 
 	require.Same(t, root, got.root)
 	require.Equal(t, []Mod{core, served, other, typesOnly, promoted, installed}, got.Mods(),
@@ -217,9 +218,14 @@ func TestSchemaBuilderWithPrimaryMods(t *testing.T) {
 	require.Len(t, base.Mods(), 5, "the builder itself is unchanged")
 
 	changed := &memoTestMod{name: "served"}
-	replaced := base.WithPrimaryMods([]Mod{changed})
+	replaced := base.WithPrimaryMods([]Mod{changed}, nil)
 	require.Same(t, changed, replaced.Mods()[1], "a different module of the same name replaces the served one")
 	opts, _ = replaced.InstallOpts("served")
 	require.True(t, opts.Main, "a replaced entry keeps its install options")
-	require.Equal(t, base.Mods(), base.WithPrimaryMods(nil).Mods())
+	require.Equal(t, base.Mods(), base.WithPrimaryMods(nil, nil).Mods())
+
+	// A module the workspace uninstalled is dropped; a module served only
+	// for its types, which no workspace installs, is kept.
+	require.Equal(t, []Mod{core, served, typesOnly, promoted},
+		base.WithPrimaryMods(nil, []string{"other", "types-only"}).Mods())
 }

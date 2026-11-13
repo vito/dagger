@@ -265,28 +265,36 @@ func (b *SchemaBuilder) With(mod Mod, opts InstallOpts) *SchemaBuilder {
 	return cp
 }
 
-// WithPrimaryMods returns b serving mods with their constructors. An entry
+// WithPrimaryMods returns b serving mods with their constructors, and without
+// the primary entries named in removed (by LatestNamer.CLIName). An entry
 // named as a module of mods serves that module instead, with its install
 // options and its constructor; the rest of mods are appended. An entry whose
 // module is the same as its replacement is kept as it is, so the result
 // builds the same schema.
-func (b *SchemaBuilder) WithPrimaryMods(mods []Mod) *SchemaBuilder {
+func (b *SchemaBuilder) WithPrimaryMods(mods []Mod, removed []string) *SchemaBuilder {
 	cp := b.Clone()
 	byName := make(map[string]Mod, len(mods))
 	for _, mod := range mods {
 		byName[mod.Name()] = mod
 	}
-	for i, e := range cp.entries {
-		mod, named := byName[e.mod.Name()]
-		if !named || e.mod.Name() == ModuleName {
+	entries := cp.entries[:0]
+	for _, e := range cp.entries {
+		name := e.mod.Name()
+		mod, named := byName[name]
+		switch {
+		case name == ModuleName:
+		case named:
+			if same, err := e.mod.Same(mod); err != nil || !same {
+				e.mod = mod
+			}
+			e.opts.SkipConstructor = false
+			delete(byName, name)
+		case !e.opts.SkipConstructor && slices.Contains(removed, LatestNamer.CLIName(name)):
 			continue
 		}
-		if same, err := e.mod.Same(mod); err != nil || !same {
-			cp.entries[i].mod = mod
-		}
-		cp.entries[i].opts.SkipConstructor = false
-		delete(byName, mod.Name())
+		entries = append(entries, e)
 	}
+	cp.entries = entries
 	for _, mod := range mods {
 		if _, ok := byName[mod.Name()]; ok {
 			cp.entries = append(cp.entries, modDepEntry{mod: mod})

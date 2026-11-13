@@ -3,7 +3,9 @@ package schema
 import (
 	"context"
 	"fmt"
+	"maps"
 	"path/filepath"
+	"slices"
 
 	"github.com/dagger/dagger/core"
 	"github.com/dagger/dagger/core/workspace"
@@ -17,12 +19,24 @@ func init() {
 // loadInstalledWorkspaceModules loads every module installed in ws as
 // Workspace.artifacts does (workspaceTargetModules), best effort; see
 // core.LoadWorkspaceModules.
-func loadInstalledWorkspaceModules(ctx context.Context, ws dagql.ObjectResult[*core.Workspace]) ([]dagql.ObjectResult[*core.Module], []core.ModuleLoadFailure, error) {
+func loadInstalledWorkspaceModules(ctx context.Context, ws dagql.ObjectResult[*core.Workspace]) (*core.InstalledWorkspaceModules, error) {
 	ctx, err := withWorkspaceClientContext(ctx, ws.Self())
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	return (&workspaceSchema{}).workspaceTargetModules(ctx, ws, nil, core.ModuleLoadBestEffort)
+	loaded, failures, err := (&workspaceSchema{}).workspaceTargetModules(ctx, ws, nil, core.ModuleLoadBestEffort)
+	if err != nil {
+		return nil, err
+	}
+	removed, err := workspaceRemovedModuleNames(ctx, ws.Self())
+	if err != nil {
+		return nil, err
+	}
+	return &core.InstalledWorkspaceModules{
+		Loaded:   loaded,
+		Failures: failures,
+		Removed:  slices.Sorted(maps.Keys(removed)),
+	}, nil
 }
 
 func (s *workspaceSchema) workspaceModules(
