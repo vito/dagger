@@ -387,24 +387,58 @@ func (m *MCP) loadBase(ctx context.Context) (context.Context, *mcpBase, error) {
 			}
 			mods[i] = boundMod
 		}
-		base.deps = served.WithPrimaryMods(mods, base.installed.Removed)
+		// A bound object's module that no longer loads (an edit broke its
+		// source) keeps serving the bound object's types: the session's
+		// copy for a live workspace, else the bound object's own.
+		var removed []string
+		for _, name := range base.installed.Removed {
+			if boundMod, ok := boundByCLIName(bound, name); ok {
+				if _, isServed := served.Lookup(boundMod.Name()); !isServed {
+					mods = append(mods, boundMod)
+				}
+				continue
+			}
+			removed = append(removed, name)
+		}
+		base.deps = served.WithPrimaryMods(mods, removed)
 	}
 	return ctx, base, nil
 }
 
-// boundModules are the modules of the bound tool objects, by name.
+// boundByCLIName finds the bound module named name in CLI case.
+func boundByCLIName(bound map[string]Mod, name string) (Mod, bool) {
+	for modName, mod := range bound {
+		if LatestNamer.CLIName(modName) == name {
+			return mod, true
+		}
+	}
+	return nil, false
+}
+
+// boundModules are the modules of the bound tool objects and their
+// dependencies, by name.
 func (m *MCP) boundModules() map[string]Mod {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	mods := map[string]Mod{}
+	add := func(mod Mod) {
+		if _, seen := mods[mod.Name()]; !seen && mod.Name() != ModuleName {
+			mods[mod.Name()] = mod
+		}
+	}
 	for _, b := range m.boundTools {
 		objType := b.objType
 		if b.object != nil {
 			objType = b.object.ObjectType()
 		}
-		if mod, ok := ModuleObjectTypeModule(objType); ok {
-			if _, seen := mods[mod.Self().Name()]; !seen {
-				mods[mod.Self().Name()] = NewUserMod(mod)
+		mod, ok := ModuleObjectTypeModule(objType)
+		if !ok {
+			continue
+		}
+		add(NewUserMod(mod))
+		if deps := mod.Self().Deps; deps != nil {
+			for _, dep := range deps.Mods() {
+				add(dep)
 			}
 		}
 	}
