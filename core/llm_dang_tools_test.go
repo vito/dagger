@@ -142,7 +142,9 @@ func TestDangToolResultSkillNudge(t *testing.T) {
 	require.NoError(t, err)
 	require.NotContains(t, m.dangToolResult(ctx, typeError), "skill")
 	require.NotContains(t, m.dangToolResult(ctx, parseError), "skill")
-	require.NotContains(t, m.Clone().dangToolResult(ctx, typeError), "skill", "a clone carries what was read")
+	// A step's reads are its own: later steps read the conversation's
+	// record, which a bare clone doesn't have.
+	require.Contains(t, m.Clone().dangToolResult(ctx, typeError), dangSkillNudge)
 }
 
 // A conversation has read a skill when its record holds a ReadSkill call

@@ -107,8 +107,9 @@ type MCP struct {
 	// workspace-discovered skills.
 	skillDirs []ownedSkillDirectory
 	// readSkills are the skills ReadSkill read on this MCP, by name (see
-	// hasReadSkill). A step's ReadSkill calls are on the conversation's
-	// record only once the step ends; this sees them sooner.
+	// hasReadSkill): a step's reads, before they are on the conversation's
+	// record, or a standalone server's (dagger mcp), which has no record.
+	// Transient: cleared by Clone; across steps, the record says.
 	readSkills map[string]bool
 	// selfLLM is the conversation dispatching the current step's tool calls —
 	// inst + withResponse, i.e. up to and including the in-flight tool call.
@@ -191,7 +192,6 @@ func (m *MCP) Clone() *MCP {
 	cp := *m
 	cp.boundTools = slices.Clone(cp.boundTools)
 	cp.skillDirs = slices.Clone(cp.skillDirs)
-	cp.readSkills = maps.Clone(cp.readSkills)
 	cp.mcpServers = maps.Clone(cp.mcpServers)
 	cp.returned = false
 	// Per-step scratch state: the dispatching conversation and any continuation
@@ -199,6 +199,7 @@ func (m *MCP) Clone() *MCP {
 	cp.selfLLM = dagql.ObjectResult[*LLM]{}
 	cp.continuation = dagql.ObjectResult[*LLM]{}
 	cp.stateChanged = false
+	cp.readSkills = nil
 	cp.mu = &sync.Mutex{}
 	return &cp
 }
