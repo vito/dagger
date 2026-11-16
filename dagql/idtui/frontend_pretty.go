@@ -4175,14 +4175,20 @@ func (fe *frontendPretty) renderZoomedCheckTests(ctx tuist.Context, span *dagui.
 		RequestLogs:     fe.requestLogsOnRender,
 		SummaryIndent:   2,
 		SummaryLogLines: -1,
-		TraceID:         fe.traceID,
+		// On screen, and in a rollup a shell's transcript frames, its log
+		// windows fit the width they're given.
+		FitWidth: fe.framesRollups(),
+		TraceID:  fe.traceID,
 	}
 	width := ctx.Width
 	if width <= 0 {
 		width = finalRenderTestsWidth
 	}
+	if !tv.FitWidth {
+		width = max(width, finalRenderTestsWidth)
+	}
 	out := NewOutput(new(strings.Builder), termenv.WithProfile(fe.profile))
-	lines := tv.renderTestSummaryLines(out, view, max(width, finalRenderTestsWidth), finalTestViewHeight(tv))
+	lines := tv.renderTestSummaryLines(out, view, width, finalTestViewHeight(tv))
 	if len(lines) == 0 {
 		return nil
 	}
