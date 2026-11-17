@@ -163,8 +163,9 @@ type ClientScope struct {
 	inertAttachables bool
 	// callerAgent is ClientMetadata.CallerAgent, also off the wire: shared,
 	// not copied, as the agent result is immutable.
-	callerAgent any
-	lease       *ClientLifecycleLease
+	callerAgent  any
+	lease        *ClientLifecycleLease
+	lineageAgent string
 }
 
 // NewClientScope snapshots metadata so later bootstrap mutations cannot change
@@ -191,6 +192,7 @@ func NewClientScope(metadata *ClientMetadata, lease *ClientLifecycleLease) (Clie
 		sdkEntrypoint:         metadata.SDKEntrypoint,
 		inertAttachables:      metadata.InertAttachables,
 		callerAgent:           metadata.CallerAgent,
+		lineageAgent:          metadata.LineageAgent,
 		lease:                 lease,
 	}, nil
 }
@@ -219,6 +221,7 @@ func (scope ClientScope) Metadata() (*ClientMetadata, error) {
 	metadata.SDKEntrypoint = scope.sdkEntrypoint
 	metadata.InertAttachables = scope.inertAttachables
 	metadata.CallerAgent = scope.callerAgent
+	metadata.LineageAgent = scope.lineageAgent
 	return &metadata, nil
 }
 
@@ -242,6 +245,7 @@ func (scope ClientScope) Clone(kind ClientLeaseKind, ownerID string) (ClientScop
 		sdkEntrypoint:         scope.sdkEntrypoint,
 		inertAttachables:      scope.inertAttachables,
 		callerAgent:           scope.callerAgent,
+		lineageAgent:          scope.lineageAgent,
 		lease:                 lease,
 	}, nil
 }
@@ -271,6 +275,7 @@ func (scope ClientScope) Delegate(kind ClientLeaseKind, ownerID string) (ClientS
 		sdkEntrypoint:         scope.sdkEntrypoint,
 		inertAttachables:      scope.inertAttachables,
 		callerAgent:           scope.callerAgent,
+		lineageAgent:          scope.lineageAgent,
 		lease:                 lease,
 	}, nil
 }
