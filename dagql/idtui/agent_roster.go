@@ -27,6 +27,8 @@ type AgentRosterEntry struct {
 	// advertised a call digest for it, or the handle failed to rebuild from
 	// the trace. Such an entry can be watched, not spoken to, and says so.
 	ReadOnly bool
+	// AwaitingApproval marks an agent blocked on an unanswered access request.
+	AwaitingApproval bool
 	// Waiting and Failed count the agents beneath this one, with no tab of
 	// their own, that are WAITING_INPUT or FAILED: the strip only shows part
 	// of a deep roster, and what needs the user must not be in the part it
@@ -170,6 +172,10 @@ func (r *AgentRoster) layout(width int) (line string, tabStart, tabEnd int) {
 	col := 0
 	for i, entry := range entries {
 		label, labelColor := agentStateDisplay(entry.State)
+		if entry.AwaitingApproval {
+			// Blocked on the user: says so in place of the run state.
+			label, labelColor = IconApproval+" approval", termenv.ANSIYellow
+		}
 
 		// Jump numbers only where a jump key exists (ctrl+1…9 from the
 		// prompt, 1…9 in nav mode); beyond that the entry is still listed,
@@ -403,7 +409,7 @@ func buildAgentRosterModel(agents []*dagui.AgentNode, focused string, keep map[s
 	waiting := make([]int, n)
 	failed := make([]int, n)
 	for i, agent := range agents {
-		if tab[i] || (agent.State != "WAITING_INPUT" && agent.State != "FAILED") {
+		if tab[i] || (agent.State != "WAITING_INPUT" && agent.State != "FAILED" && !entries[i].AwaitingApproval) {
 			continue
 		}
 		at := i
@@ -411,7 +417,7 @@ func buildAgentRosterModel(agents []*dagui.AgentNode, focused string, keep map[s
 			at = parent[at]
 		}
 		tab[at] = true
-		if agent.State == "WAITING_INPUT" {
+		if agent.State == "WAITING_INPUT" || entries[i].AwaitingApproval {
 			waiting[at]++
 		} else {
 			failed[at]++
