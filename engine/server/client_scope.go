@@ -350,6 +350,7 @@ func cloneClientMetadata(metadata *engine.ClientMetadata) (*engine.ClientMetadat
 	}
 	cloned.UseRecipeIDsByDefault = metadata.UseRecipeIDsByDefault
 	cloned.SDKEntrypoint = metadata.SDKEntrypoint
+	cloned.LineageAgent = metadata.LineageAgent
 	cloned.ClientVersionDeclared = metadata.ClientVersionDeclared
 	// Shared, not copied: the schema is immutable once built.
 	cloned.ServedDeps = metadata.ServedDeps
