@@ -5782,7 +5782,8 @@ func (fe *frontendPretty) focusAgentThen(entry AgentRosterEntry, onMoved func())
 			if fe.focusedAgentID() != from {
 				return
 			}
-			for _, retry := range fe.agentRosterEntries() {
+			// The requested agent may be outside the visible tabs.
+			for _, retry := range fe.agentRosterOrder() {
 				if retry.ID == entry.ID {
 					if _, moved := fe.focusAgentThen(retry, onMoved); moved && onMoved != nil {
 						onMoved()
